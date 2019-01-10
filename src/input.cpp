@@ -2,24 +2,15 @@
 #include "config.h"
 
 #include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <termios.h>
-#include <unistd.h>
 #include <wchar.h>
 #include <wctype.h>
-#if HAVE_NCURSES_H
-#include <ncurses.h>
-#elif HAVE_NCURSES_CURSES_H
-#include <ncurses/curses.h>
-#else
-#include <curses.h>
-#endif
 #if HAVE_TERM_H
+#include <curses.h>
 #include <term.h>
 #elif HAVE_NCURSES_TERM_H
 #include <ncurses/term.h>
 #endif
+#include <termios.h>
 
 #include <algorithm>
 #include <memory>
@@ -33,14 +24,12 @@
 #include "input.h"
 #include "input_common.h"
 #include "io.h"
-#include "output.h"
 #include "parser.h"
 #include "proc.h"
 #include "reader.h"
 #include "signal.h"  // IWYU pragma: keep
 #include "wutil.h"   // IWYU pragma: keep
 
-#define DEFAULT_TERM L"ansi"
 #define MAX_INPUT_FUNCTION_ARGS 20
 
 /// Struct representing a keybinding. Returned by input_get_mappings.
@@ -56,9 +45,9 @@ struct input_mapping_t {
     /// New mode that should be switched to after command evaluation.
     wcstring sets_mode;
 
-    input_mapping_t(const wcstring &s, const std::vector<wcstring> &c, const wcstring &m,
-                    const wcstring &sm)
-        : seq(s), commands(c), mode(m), sets_mode(sm) {
+    input_mapping_t(wcstring s, std::vector<wcstring> c, wcstring m,
+                    wcstring sm)
+        : seq(std::move(s)), commands(std::move(c)), mode(std::move(m)), sets_mode(std::move(sm)) {
         static unsigned int s_last_input_map_spec_order = 0;
         specification_order = ++s_last_input_map_spec_order;
     }
@@ -70,127 +59,90 @@ struct terminfo_mapping_t {
     const char *seq;      // character sequence generated on keypress
 };
 
-/// Names of all the input functions supported.
-static const wchar_t *const name_arr[] = {L"beginning-of-line",
-                                          L"end-of-line",
-                                          L"forward-char",
-                                          L"backward-char",
-                                          L"forward-word",
-                                          L"backward-word",
-                                          L"forward-bigword",
-                                          L"backward-bigword",
-                                          L"history-search-backward",
-                                          L"history-search-forward",
-                                          L"delete-char",
-                                          L"backward-delete-char",
-                                          L"kill-line",
-                                          L"yank",
-                                          L"yank-pop",
-                                          L"complete",
-                                          L"complete-and-search",
-                                          L"beginning-of-history",
-                                          L"end-of-history",
-                                          L"backward-kill-line",
-                                          L"kill-whole-line",
-                                          L"kill-word",
-                                          L"kill-bigword",
-                                          L"backward-kill-word",
-                                          L"backward-kill-path-component",
-                                          L"backward-kill-bigword",
-                                          L"history-token-search-backward",
-                                          L"history-token-search-forward",
-                                          L"self-insert",
-                                          L"transpose-chars",
-                                          L"transpose-words",
-                                          L"upcase-word",
-                                          L"downcase-word",
-                                          L"capitalize-word",
-                                          L"vi-arg-digit",
-                                          L"vi-delete-to",
-                                          L"execute",
-                                          L"beginning-of-buffer",
-                                          L"end-of-buffer",
-                                          L"repaint",
-                                          L"force-repaint",
-                                          L"up-line",
-                                          L"down-line",
-                                          L"suppress-autosuggestion",
-                                          L"accept-autosuggestion",
-                                          L"begin-selection",
-                                          L"swap-selection-start-stop",
-                                          L"end-selection",
-                                          L"kill-selection",
-                                          L"forward-jump",
-                                          L"backward-jump",
-                                          L"and",
-                                          L"cancel"};
+static constexpr size_t input_function_count = R_END_INPUT_FUNCTIONS - R_BEGIN_INPUT_FUNCTIONS;
+
+/// Input function metadata. This list should be kept in sync with the key code list in
+/// input_common.h.
+struct input_function_metadata_t {
+    wchar_t code;
+    const wchar_t *name;
+};
+static const input_function_metadata_t input_function_metadata[] = {
+    {R_BEGINNING_OF_LINE, L"beginning-of-line"},
+    {R_END_OF_LINE, L"end-of-line"},
+    {R_FORWARD_CHAR, L"forward-char"},
+    {R_BACKWARD_CHAR, L"backward-char"},
+    {R_FORWARD_WORD, L"forward-word"},
+    {R_BACKWARD_WORD, L"backward-word"},
+    {R_FORWARD_BIGWORD, L"forward-bigword"},
+    {R_BACKWARD_BIGWORD, L"backward-bigword"},
+    {R_HISTORY_SEARCH_BACKWARD, L"history-search-backward"},
+    {R_HISTORY_SEARCH_FORWARD, L"history-search-forward"},
+    {R_DELETE_CHAR, L"delete-char"},
+    {R_BACKWARD_DELETE_CHAR, L"backward-delete-char"},
+    {R_KILL_LINE, L"kill-line"},
+    {R_YANK, L"yank"},
+    {R_YANK_POP, L"yank-pop"},
+    {R_COMPLETE, L"complete"},
+    {R_COMPLETE_AND_SEARCH, L"complete-and-search"},
+    {R_PAGER_TOGGLE_SEARCH, L"pager-toggle-search"},
+    {R_BEGINNING_OF_HISTORY, L"beginning-of-history"},
+    {R_END_OF_HISTORY, L"end-of-history"},
+    {R_BACKWARD_KILL_LINE, L"backward-kill-line"},
+    {R_KILL_WHOLE_LINE, L"kill-whole-line"},
+    {R_KILL_WORD, L"kill-word"},
+    {R_KILL_BIGWORD, L"kill-bigword"},
+    {R_BACKWARD_KILL_WORD, L"backward-kill-word"},
+    {R_BACKWARD_KILL_PATH_COMPONENT, L"backward-kill-path-component"},
+    {R_BACKWARD_KILL_BIGWORD, L"backward-kill-bigword"},
+    {R_HISTORY_TOKEN_SEARCH_BACKWARD, L"history-token-search-backward"},
+    {R_HISTORY_TOKEN_SEARCH_FORWARD, L"history-token-search-forward"},
+    {R_SELF_INSERT, L"self-insert"},
+    {R_TRANSPOSE_CHARS, L"transpose-chars"},
+    {R_TRANSPOSE_WORDS, L"transpose-words"},
+    {R_UPCASE_WORD, L"upcase-word"},
+    {R_DOWNCASE_WORD, L"downcase-word"},
+    {R_CAPITALIZE_WORD, L"capitalize-word"},
+    {R_VI_ARG_DIGIT, L"vi-arg-digit"},
+    {R_VI_DELETE_TO, L"vi-delete-to"},
+    {R_EXECUTE, L"execute"},
+    {R_BEGINNING_OF_BUFFER, L"beginning-of-buffer"},
+    {R_END_OF_BUFFER, L"end-of-buffer"},
+    {R_REPAINT, L"repaint"},
+    {R_FORCE_REPAINT, L"force-repaint"},
+    {R_UP_LINE, L"up-line"},
+    {R_DOWN_LINE, L"down-line"},
+    {R_SUPPRESS_AUTOSUGGESTION, L"suppress-autosuggestion"},
+    {R_ACCEPT_AUTOSUGGESTION, L"accept-autosuggestion"},
+    {R_BEGIN_SELECTION, L"begin-selection"},
+    {R_SWAP_SELECTION_START_STOP, L"swap-selection-start-stop"},
+    {R_END_SELECTION, L"end-selection"},
+    {R_KILL_SELECTION, L"kill-selection"},
+    {R_FORWARD_JUMP, L"forward-jump"},
+    {R_BACKWARD_JUMP, L"backward-jump"},
+    {R_FORWARD_JUMP_TILL, L"forward-jump-till"},
+    {R_BACKWARD_JUMP_TILL, L"backward-jump-till"},
+    {R_REPEAT_JUMP, L"repeat-jump"},
+    {R_REVERSE_REPEAT_JUMP, L"repeat-jump-reverse"},
+    {R_AND, L"and"},
+    {R_CANCEL, L"cancel"}};
+
+static_assert(sizeof(input_function_metadata) / sizeof(input_function_metadata[0]) ==
+                  input_function_count,
+              "input_function_metadata size mismatch with input_common. Did you forget to update "
+              "input_function_metadata?");
 
 wcstring describe_char(wint_t c) {
-    wint_t initial_cmd_char = R_BEGINNING_OF_LINE;
-    long name_count = sizeof(name_arr) / sizeof(*name_arr);
-    if (c >= initial_cmd_char && c < initial_cmd_char + name_count) {
-        return format_string(L"%02x (%ls)", c, name_arr[c - initial_cmd_char]);
+    if (c >= R_BEGIN_INPUT_FUNCTIONS && c < R_END_INPUT_FUNCTIONS) {
+        size_t idx = c - R_BEGIN_INPUT_FUNCTIONS;
+        return format_string(L"%02x (%ls)", c, input_function_metadata[idx].name);
     }
     return format_string(L"%02x", c);
 }
 
-/// Internal code for each supported input function.
-static const wchar_t code_arr[] = {R_BEGINNING_OF_LINE,
-                                   R_END_OF_LINE,
-                                   R_FORWARD_CHAR,
-                                   R_BACKWARD_CHAR,
-                                   R_FORWARD_WORD,
-                                   R_BACKWARD_WORD,
-                                   R_FORWARD_BIGWORD,
-                                   R_BACKWARD_BIGWORD,
-                                   R_HISTORY_SEARCH_BACKWARD,
-                                   R_HISTORY_SEARCH_FORWARD,
-                                   R_DELETE_CHAR,
-                                   R_BACKWARD_DELETE_CHAR,
-                                   R_KILL_LINE,
-                                   R_YANK,
-                                   R_YANK_POP,
-                                   R_COMPLETE,
-                                   R_COMPLETE_AND_SEARCH,
-                                   R_BEGINNING_OF_HISTORY,
-                                   R_END_OF_HISTORY,
-                                   R_BACKWARD_KILL_LINE,
-                                   R_KILL_WHOLE_LINE,
-                                   R_KILL_WORD,
-                                   R_KILL_BIGWORD,
-                                   R_BACKWARD_KILL_WORD,
-                                   R_BACKWARD_KILL_PATH_COMPONENT,
-                                   R_BACKWARD_KILL_BIGWORD,
-                                   R_HISTORY_TOKEN_SEARCH_BACKWARD,
-                                   R_HISTORY_TOKEN_SEARCH_FORWARD,
-                                   R_SELF_INSERT,
-                                   R_TRANSPOSE_CHARS,
-                                   R_TRANSPOSE_WORDS,
-                                   R_UPCASE_WORD,
-                                   R_DOWNCASE_WORD,
-                                   R_CAPITALIZE_WORD,
-                                   R_VI_ARG_DIGIT,
-                                   R_VI_DELETE_TO,
-                                   R_EXECUTE,
-                                   R_BEGINNING_OF_BUFFER,
-                                   R_END_OF_BUFFER,
-                                   R_REPAINT,
-                                   R_FORCE_REPAINT,
-                                   R_UP_LINE,
-                                   R_DOWN_LINE,
-                                   R_SUPPRESS_AUTOSUGGESTION,
-                                   R_ACCEPT_AUTOSUGGESTION,
-                                   R_BEGIN_SELECTION,
-                                   R_SWAP_SELECTION_START_STOP,
-                                   R_END_SELECTION,
-                                   R_KILL_SELECTION,
-                                   R_FORWARD_JUMP,
-                                   R_BACKWARD_JUMP,
-                                   R_AND,
-                                   R_CANCEL};
-
 /// Mappings for the current input mode.
 static std::vector<input_mapping_t> mapping_list;
+static std::vector<input_mapping_t> preset_mapping_list;
 
 /// Terminfo map list.
 static std::vector<terminfo_mapping_t> terminfo_mappings;
@@ -201,11 +153,11 @@ static std::vector<terminfo_mapping_t> terminfo_mappings;
 /// List of all terminfo mappings.
 static std::vector<terminfo_mapping_t> mappings;
 
-/// Set to one when the input subsytem has been initialized.
-static bool is_init = false;
+/// Set to true when the input subsystem has been initialized.
+bool input_initialized = false;
 
 /// Initialize terminfo.
-static void input_terminfo_init();
+static void init_input_terminfo();
 
 static wchar_t input_function_args[MAX_INPUT_FUNCTION_ARGS];
 static bool input_function_status;
@@ -213,8 +165,8 @@ static int input_function_args_index = 0;
 
 /// Return the current bind mode.
 wcstring input_get_bind_mode() {
-    env_var_t mode = env_get_string(FISH_BIND_MODE_VAR);
-    return mode.missing() ? DEFAULT_BIND_MODE : mode;
+    auto mode = env_get(FISH_BIND_MODE_VAR);
+    return mode ? mode->as_string() : DEFAULT_BIND_MODE;
 }
 
 /// Set the current bind mode.
@@ -223,13 +175,21 @@ void input_set_bind_mode(const wcstring &bm) {
     // modes may not be empty - empty is a sentinel value meaning to not change the mode
     assert(!bm.empty());
     if (input_get_bind_mode() != bm.c_str()) {
-        env_set(FISH_BIND_MODE_VAR, bm.c_str(), ENV_GLOBAL);
+        env_set_one(FISH_BIND_MODE_VAR, ENV_GLOBAL, bm);
     }
 }
 
 /// Returns the arity of a given input function.
 static int input_function_arity(int function) {
-    return (function == R_FORWARD_JUMP || function == R_BACKWARD_JUMP) ? 1 : 0;
+    switch (function) {
+        case R_FORWARD_JUMP:
+        case R_BACKWARD_JUMP:
+        case R_FORWARD_JUMP_TILL:
+        case R_BACKWARD_JUMP_TILL:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 /// Sets the return status of the most recently executed input function.
@@ -246,28 +206,33 @@ static bool specification_order_is_less_than(const input_mapping_t &m1, const in
 
 /// Inserts an input mapping at the correct position. We sort them in descending order by length, so
 /// that we test longer sequences first.
-static void input_mapping_insert_sorted(const input_mapping_t &new_mapping) {
+static void input_mapping_insert_sorted(const input_mapping_t &new_mapping, bool user = true) {
+    auto& ml = user ? mapping_list : preset_mapping_list;
+
     std::vector<input_mapping_t>::iterator loc = std::lower_bound(
-        mapping_list.begin(), mapping_list.end(), new_mapping, length_is_greater_than);
-    mapping_list.insert(loc, new_mapping);
+        ml.begin(), ml.end(), new_mapping, length_is_greater_than);
+    ml.insert(loc, new_mapping);
 }
 
 /// Adds an input mapping.
 void input_mapping_add(const wchar_t *sequence, const wchar_t *const *commands, size_t commands_len,
-                       const wchar_t *mode, const wchar_t *sets_mode) {
+                       const wchar_t *mode, const wchar_t *sets_mode, bool user) {
     CHECK(sequence, );
     CHECK(commands, );
     CHECK(mode, );
     CHECK(sets_mode, );
 
-    // debug( 0, L"Add mapping from %ls to %ls in mode %ls", escape(sequence, ESCAPE_ALL).c_str(),
-    // escape(command, ESCAPE_ALL).c_str(), mode);
+    // debug( 0, L"Add mapping from %ls to %ls in mode %ls", escape_string(sequence,
+    // ESCAPE_ALL).c_str(),
+    // escape_string(command, ESCAPE_ALL).c_str(), mode);
 
     // Remove existing mappings with this sequence.
     const wcstring_list_t commands_vector(commands, commands + commands_len);
 
-    for (size_t i = 0; i < mapping_list.size(); i++) {
-        input_mapping_t &m = mapping_list.at(i);
+    auto& ml = user ? mapping_list : preset_mapping_list;
+
+    for (size_t i = 0; i < ml.size(); i++) {
+        input_mapping_t &m = ml.at(i);
         if (m.seq == sequence && m.mode == mode) {
             m.commands = commands_vector;
             m.sets_mode = sets_mode;
@@ -277,12 +242,12 @@ void input_mapping_add(const wchar_t *sequence, const wchar_t *const *commands, 
 
     // Add a new mapping, using the next order.
     const input_mapping_t new_mapping = input_mapping_t(sequence, commands_vector, mode, sets_mode);
-    input_mapping_insert_sorted(new_mapping);
+    input_mapping_insert_sorted(new_mapping, user);
 }
 
 void input_mapping_add(const wchar_t *sequence, const wchar_t *command, const wchar_t *mode,
-                       const wchar_t *sets_mode) {
-    input_mapping_add(sequence, &command, 1, mode, sets_mode);
+                       const wchar_t *sets_mode, bool user) {
+    input_mapping_add(sequence, &command, 1, mode, sets_mode, user);
 }
 
 /// Handle interruptions to key reading by reaping finshed jobs and propagating the interrupt to the
@@ -291,7 +256,7 @@ static int interrupt_handler() {
     // Fire any pending events.
     event_fire(NULL);
     // Reap stray processes, including printing exit status messages.
-    if (job_reap(1)) reader_repaint_needed();
+    if (job_reap(true)) reader_repaint_needed();
     // Tell the reader an event occured.
     if (reader_reading_interrupted()) {
         return shell_modes.c_cc[VINTR];
@@ -300,110 +265,36 @@ static int interrupt_handler() {
     return R_NULL;
 }
 
-void update_fish_color_support(void) {
-    // Detect or infer term256 support. If fish_term256 is set, we respect it;
-    // otherwise infer it from the TERM variable or use terminfo.
-    env_var_t fish_term256 = env_get_string(L"fish_term256");
-    env_var_t term = env_get_string(L"TERM");
-    bool support_term256 = false;  // default to no support
-    if (!fish_term256.missing_or_empty()) {
-        support_term256 = from_string<bool>(fish_term256);
-        debug(2, L"256 color support determined by 'fish_term256'");
-    } else if (term.find(L"256color") != wcstring::npos) {
-        // TERM=*256color*: Explicitly supported.
-        support_term256 = true;
-        debug(2, L"256 color support enabled for '256color' in TERM");
-    } else if (term.find(L"xterm") != wcstring::npos) {
-        // Assume that all xterms are 256, except for OS X SnowLeopard
-        const env_var_t prog = env_get_string(L"TERM_PROGRAM");
-        const env_var_t progver = env_get_string(L"TERM_PROGRAM_VERSION");
-        if (prog == L"Apple_Terminal" && !progver.missing_or_empty()) {
-            // OS X Lion is version 300+, it has 256 color support
-            if (strtod(wcs2str(progver), NULL) > 300) {
-                support_term256 = true;
-                debug(2, L"256 color support enabled for TERM=xterm + modern Terminal.app");
-            }
-        } else {
-            support_term256 = true;
-            debug(2, L"256 color support enabled for TERM=xterm");
-        }
-    } else if (cur_term != NULL) {
-        // See if terminfo happens to identify 256 colors
-        support_term256 = (max_colors >= 256);
-        debug(2, L"256 color support: using %d colors per terminfo", max_colors);
-    } else {
-        debug(2, L"256 color support not enabled (yet)");
-    }
-
-    env_var_t fish_term24bit = env_get_string(L"fish_term24bit");
-    bool support_term24bit;
-    if (!fish_term24bit.missing_or_empty()) {
-        support_term24bit = from_string<bool>(fish_term24bit);
-        debug(2, L"'fish_term24bit' preference: 24-bit color %s",
-              support_term24bit ? L"enabled" : L"disabled");
-    } else {
-        // We don't attempt to infer term24 bit support yet.
-        support_term24bit = false;
-    }
-
-    color_support_t support = (support_term256 ? color_support_term256 : 0) |
-                              (support_term24bit ? color_support_term24bit : 0);
-    output_set_color_support(support);
-}
-
-int input_init() {
-    if (is_init) return 1;
-    is_init = true;
+/// Set up arrays used by readch to detect escape sequences for special keys and perform related
+/// initializations for our input subsystem.
+void init_input() {
     input_common_init(&interrupt_handler);
-
-    int err_ret;
-    if (setupterm(NULL, STDOUT_FILENO, &err_ret) == ERR) {
-        debug(0, _(L"Could not set up terminal"));
-        env_var_t term = env_get_string(L"TERM");
-        if (term.missing_or_empty()) {
-            debug(0, _(L"TERM environment variable not set"));
-        } else {
-            debug(0, _(L"TERM environment variable set to '%ls'"), term.c_str());
-            debug(0, _(L"Check that this terminal type is supported on this system"));
-        }
-
-        env_set(L"TERM", DEFAULT_TERM, ENV_GLOBAL | ENV_EXPORT);
-        if (setupterm(NULL, STDOUT_FILENO, &err_ret) == ERR) {
-            debug(0,
-                  _(L"Could not set up terminal using the fallback terminal type '%ls' - exiting"),
-                  DEFAULT_TERM);
-            exit_without_destructors(1);
-        } else {
-            debug(0, _(L"Using fallback terminal type '%ls'"), DEFAULT_TERM);
-        }
-        fputwc(L'\n', stderr);
-    }
-
-    input_terminfo_init();
-    update_fish_color_support();
+    init_input_terminfo();
 
     // If we have no keybindings, add a few simple defaults.
-    if (mapping_list.empty()) {
-        input_mapping_add(L"", L"self-insert");
-        input_mapping_add(L"\n", L"execute");
-        input_mapping_add(L"\r", L"execute");
-        input_mapping_add(L"\t", L"complete");
-        input_mapping_add(L"\x3", L"commandline \"\"");
-        input_mapping_add(L"\x4", L"exit");
-        input_mapping_add(L"\x5", L"bind");
+    if (preset_mapping_list.empty()) {
+        input_mapping_add(L"", L"self-insert", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\n", L"execute", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\r", L"execute", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\t", L"complete", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x3", L"commandline ''", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x4", L"exit", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x5", L"bind", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x7f", L"backward-delete-char", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        // Arrows - can't have functions, so *-or-search isn't available.
+        input_mapping_add(L"\x1B[A", L"up-line", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x1B[B", L"down-line", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x1B[C", L"forward-char", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
+        input_mapping_add(L"\x1B[D", L"backward-char", DEFAULT_BIND_MODE, DEFAULT_BIND_MODE, false);
     }
 
-    return 1;
+    input_initialized = true;
 }
 
 void input_destroy() {
-    if (!is_init) return;
-    is_init = false;
+    if (!input_initialized) return;
+    input_initialized = false;
     input_common_destroy();
-
-    if (del_curterm(cur_term) == ERR) {
-        debug(0, _(L"Error while closing terminfo"));
-    }
 }
 
 void input_function_push_arg(wchar_t arg) {
@@ -420,7 +311,8 @@ void input_function_push_args(int code) {
         wchar_t arg;
 
         // Skip and queue up any function codes. See issue #2357.
-        while ((arg = input_common_readch(0)) >= R_MIN && arg <= R_MAX) {
+        while ((arg = input_common_readch(0)) >= R_BEGIN_INPUT_FUNCTIONS &&
+               arg < R_END_INPUT_FUNCTIONS) {
             skipped.push_back(arg);
         }
 
@@ -441,9 +333,8 @@ static void input_mapping_execute(const input_mapping_t &m, bool allow_commands)
     // has_commands: there are shell commands that need to be evaluated
     bool has_commands = false, has_functions = false;
 
-    for (wcstring_list_t::const_iterator it = m.commands.begin(), end = m.commands.end(); it != end;
-         ++it) {
-        if (input_function_get_code(*it) != INPUT_CODE_NONE)
+    for (const wcstring &cmd : m.commands) {
+        if (input_function_get_code(cmd) != INPUT_CODE_NONE)
             has_functions = true;
         else
             has_commands = true;
@@ -478,9 +369,8 @@ static void input_mapping_execute(const input_mapping_t &m, bool allow_commands)
         // FIXME(snnw): if commands add stuff to input queue (e.g. commandline -f execute), we won't
         // see that until all other commands have also been run.
         int last_status = proc_get_last_status();
-        for (wcstring_list_t::const_iterator it = m.commands.begin(), end = m.commands.end();
-             it != end; ++it) {
-            parser_t::principal_parser().eval(it->c_str(), io_chain_t(), TOP);
+        for (const wcstring &cmd : m.commands) {
+            parser_t::principal_parser().eval(cmd.c_str(), io_chain_t(), TOP);
         }
         proc_set_last_status(last_status);
         input_common_next_ch(R_NULL);
@@ -496,35 +386,30 @@ static void input_mapping_execute(const input_mapping_t &m, bool allow_commands)
 
 /// Try reading the specified function mapping.
 static bool input_mapping_is_match(const input_mapping_t &m) {
-    wchar_t c = 0;
-    int j;
+    const wcstring &str = m.seq;
 
-    debug(2, L"trying to match mapping %ls", escape(m.seq.c_str(), ESCAPE_ALL).c_str());
-    const wchar_t *str = m.seq.c_str();
-    for (j = 0; str[j] != L'\0'; j++) {
-        bool timed = (j > 0 && iswcntrl(str[0]));
+    assert(str.size() > 0 && "zero-length input string passed to input_mapping_is_match!");
 
-        c = input_common_readch(timed);
-        if (str[j] != c) {
-            break;
+    bool timed = false;
+    for (size_t i = 0; i < str.size(); ++i) {
+        wchar_t read = input_common_readch(timed);
+
+        if (read != str[i]) {
+            // We didn't match the bind sequence/input mapping, (it timed out or they entered something else)
+            // Undo consumption of the read characters since we didn't match the bind sequence and abort.
+            input_common_next_ch(read);
+            while (i--) {
+                input_common_next_ch(str[i]);
+            }
+            return false;
         }
+
+        // If we just read an escape, we need to add a timeout for the next char,
+        // to distinguish between the actual escape key and an "alt"-modifier.
+        timed = (str[i] == L'\x1B');
     }
 
-    if (str[j] == L'\0') {
-        // debug(0, L"matched mapping %ls (%ls)\n", escape(m.seq.c_str(), ESCAPE_ALL).c_str(),
-        // m.command.c_str());
-        // We matched the entire sequence.
-        return true;
-    }
-
-    // Reinsert the chars we read to be read again since we didn't match the bind sequence (i.e.,
-    // the input mapping).
-    input_common_next_ch(c);
-    for (int k = j - 1; k >= 0; k--) {
-        input_common_next_ch(m.seq[k]);
-    }
-
-    return false;
+    return true;
 }
 
 void input_queue_ch(wint_t ch) { input_common_queue_ch(ch); }
@@ -534,20 +419,28 @@ static void input_mapping_execute_matching_or_generic(bool allow_commands) {
 
     const wcstring bind_mode = input_get_bind_mode();
 
-    for (size_t i = 0; i < mapping_list.size(); i++) {
-        const input_mapping_t &m = mapping_list.at(i);
-
-        // debug(0, L"trying mapping (%ls,%ls,%ls)\n", escape(m.seq.c_str(), ESCAPE_ALL).c_str(),
-        //           m.mode.c_str(), m.sets_mode.c_str());
-
+    for (auto& m : mapping_list) {
         if (m.mode != bind_mode) {
-            // debug(0, L"skipping mapping because mode %ls != %ls\n", m.mode.c_str(),
-            // input_get_bind_mode().c_str());
             continue;
         }
 
         if (m.seq.length() == 0) {
             generic = &m;
+        } else if (input_mapping_is_match(m)) {
+            input_mapping_execute(m, allow_commands);
+            return;
+        }
+    }
+
+    // HACK: This is ugly duplication.
+    for (auto& m : preset_mapping_list) {
+        if (m.mode != bind_mode) {
+            continue;
+        }
+
+        if (m.seq.length() == 0) {
+            // Only use this generic if the user list didn't have one.
+            if (!generic) generic = &m;
         } else if (input_mapping_is_match(m)) {
             input_mapping_execute(m, allow_commands);
             return;
@@ -572,7 +465,8 @@ static wchar_t input_read_characters_only() {
     wchar_t char_to_return;
     for (;;) {
         char_to_return = input_common_readch(0);
-        bool is_readline_function = (char_to_return >= R_MIN && char_to_return <= R_MAX);
+        bool is_readline_function =
+            (char_to_return >= R_BEGIN_INPUT_FUNCTIONS && char_to_return < R_END_INPUT_FUNCTIONS);
         // R_NULL and R_EOF are more control characters than readline functions, so check specially
         // for those.
         if (!is_readline_function || char_to_return == R_NULL || char_to_return == R_EOF) {
@@ -595,15 +489,11 @@ wint_t input_readch(bool allow_commands) {
     // Clear the interrupted flag.
     reader_reset_interrupted();
     // Search for sequence in mapping tables.
-    while (1) {
+    while (true) {
         wchar_t c = input_common_readch(0);
 
-        if (c >= R_MIN && c <= R_MAX) {
+        if (c >= R_BEGIN_INPUT_FUNCTIONS && c < R_END_INPUT_FUNCTIONS) {
             switch (c) {
-                case R_EOF:  // if it's closed, then just return
-                {
-                    return R_EOF;
-                }
                 case R_SELF_INSERT: {
                     // Issue #1595: ensure we only insert characters, not readline functions. The
                     // common case is that this will be empty.
@@ -614,7 +504,7 @@ wint_t input_readch(bool allow_commands) {
                         return input_readch();
                     }
                     c = input_common_readch(0);
-                    while (c >= R_MIN && c <= R_MAX) {
+                    while (c >= R_BEGIN_INPUT_FUNCTIONS && c < R_END_INPUT_FUNCTIONS) {
                         c = input_common_readch(0);
                     }
                     input_common_next_ch(c);
@@ -632,10 +522,10 @@ wint_t input_readch(bool allow_commands) {
     }
 }
 
-std::vector<input_mapping_name_t> input_mapping_get_names() {
+std::vector<input_mapping_name_t> input_mapping_get_names(bool user) {
     // Sort the mappings by the user specification order, so we can return them in the same order
     // that the user specified them in.
-    std::vector<input_mapping_t> local_list = mapping_list;
+    std::vector<input_mapping_t> local_list = user ? mapping_list : preset_mapping_list;
     std::sort(local_list.begin(), local_list.end(), specification_order_is_less_than);
     std::vector<input_mapping_name_t> result;
     result.reserve(local_list.size());
@@ -647,14 +537,21 @@ std::vector<input_mapping_name_t> input_mapping_get_names() {
     return result;
 }
 
-bool input_mapping_erase(const wcstring &sequence, const wcstring &mode) {
+void input_mapping_clear(const wchar_t *mode, bool user) {
+    ASSERT_IS_MAIN_THREAD();
+    auto &ml = user ? mapping_list : preset_mapping_list;
+    auto should_erase = [=](const input_mapping_t &m) { return mode == NULL || mode == m.mode; };
+    ml.erase(std::remove_if(ml.begin(), ml.end(), should_erase), ml.end());
+}
+
+bool input_mapping_erase(const wcstring &sequence, const wcstring &mode, bool user) {
     ASSERT_IS_MAIN_THREAD();
     bool result = false;
-
-    for (std::vector<input_mapping_t>::iterator it = mapping_list.begin(), end = mapping_list.end();
+    auto& ml = user ? mapping_list : preset_mapping_list;
+    for (std::vector<input_mapping_t>::iterator it = ml.begin(), end = ml.end();
          it != end; ++it) {
         if (sequence == it->seq && mode == it->mode) {
-            mapping_list.erase(it);
+            ml.erase(it);
             result = true;
             break;
         }
@@ -662,15 +559,14 @@ bool input_mapping_erase(const wcstring &sequence, const wcstring &mode) {
     return result;
 }
 
-bool input_mapping_get(const wcstring &sequence, const wcstring &mode, wcstring_list_t *out_cmds,
+bool input_mapping_get(const wcstring &sequence, const wcstring &mode, wcstring_list_t *out_cmds, bool user,
                        wcstring *out_sets_mode) {
     bool result = false;
-    for (std::vector<input_mapping_t>::const_iterator it = mapping_list.begin(),
-                                                      end = mapping_list.end();
-         it != end; ++it) {
-        if (sequence == it->seq && mode == it->mode) {
-            *out_cmds = it->commands;
-            *out_sets_mode = it->sets_mode;
+    auto& ml = user ? mapping_list : preset_mapping_list;
+    for (const input_mapping_t &m : ml) {
+        if (sequence == m.seq && mode == m.mode) {
+            *out_cmds = m.commands;
+            *out_sets_mode = m.sets_mode;
             result = true;
             break;
         }
@@ -678,8 +574,10 @@ bool input_mapping_get(const wcstring &sequence, const wcstring &mode, wcstring_
     return result;
 }
 
-/// Add all terminfo mappings.
-static void input_terminfo_init() {
+/// Add all terminfo mappings and cache other terminfo facts we care about.
+static void init_input_terminfo() {
+    assert(curses_initialized);
+    if (!cur_term) return;  // setupterm() failed so we can't referency any key definitions
     const terminfo_mapping_t tinfos[] = {
         TERMINFO_ADD(key_a1),
         TERMINFO_ADD(key_a3),
@@ -843,12 +741,11 @@ static void input_terminfo_init() {
 
 bool input_terminfo_get_sequence(const wchar_t *name, wcstring *out_seq) {
     ASSERT_IS_MAIN_THREAD();
+    assert(input_initialized);
+    CHECK(name, 0);
 
     const char *res = 0;
     int err = ENOENT;
-
-    CHECK(name, 0);
-    input_init();
 
     for (size_t i = 0; i < terminfo_mappings.size(); i++) {
         const terminfo_mapping_t &m = terminfo_mappings.at(i);
@@ -869,7 +766,7 @@ bool input_terminfo_get_sequence(const wchar_t *name, wcstring *out_seq) {
 }
 
 bool input_terminfo_get_name(const wcstring &seq, wcstring *out_name) {
-    input_init();
+    assert(input_initialized);
 
     for (size_t i = 0; i < terminfo_mappings.size(); i++) {
         terminfo_mapping_t &m = terminfo_mappings.at(i);
@@ -889,10 +786,9 @@ bool input_terminfo_get_name(const wcstring &seq, wcstring *out_name) {
 }
 
 wcstring_list_t input_terminfo_get_names(bool skip_null) {
+    assert(input_initialized);
     wcstring_list_t result;
     result.reserve(terminfo_mappings.size());
-
-    input_init();
 
     for (size_t i = 0; i < terminfo_mappings.size(); i++) {
         terminfo_mapping_t &m = terminfo_mappings.at(i);
@@ -905,15 +801,19 @@ wcstring_list_t input_terminfo_get_names(bool skip_null) {
     return result;
 }
 
-wcstring_list_t input_function_get_names(void) {
-    size_t count = sizeof name_arr / sizeof *name_arr;
-    return wcstring_list_t(name_arr, name_arr + count);
+wcstring_list_t input_function_get_names() {
+    wcstring_list_t result;
+    result.reserve(input_function_count);
+    for (const auto &md : input_function_metadata) {
+        result.push_back(md.name);
+    }
+    return result;
 }
 
 wchar_t input_function_get_code(const wcstring &name) {
-    for (size_t i = 0; i < sizeof code_arr / sizeof *code_arr; i++) {
-        if (name == name_arr[i]) {
-            return code_arr[i];
+    for (const auto &md : input_function_metadata) {
+        if (name == md.name) {
+            return md.code;
         }
     }
     return INPUT_CODE_NONE;

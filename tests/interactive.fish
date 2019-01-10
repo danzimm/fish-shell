@@ -4,12 +4,17 @@
 # should be running it via `make test` to ensure the environment is properly
 # setup.
 
+if test "$TRAVIS_OS_NAME" = osx
+    echo "Skipping interactive tests on macOS on Travis"
+    exit 0
+end
+
 # This is a list of flakey tests that often succeed when rerun.
-set TESTS_TO_RETRY bind.expect
+set -l TESTS_TO_RETRY bind.expect
 
 # Set this var to modify behavior of the code being tests. Such as avoiding running
 # `fish_update_completions` when running tests.
-set -x FISH_UNIT_TESTS_RUNNING 1
+set -gx FISH_UNIT_TESTS_RUNNING 1
 
 # Change to directory containing this script
 cd (dirname (status -f))
@@ -17,7 +22,7 @@ cd (dirname (status -f))
 # These env vars should not be inherited from the user environment because they can affect the
 # behavior of the tests. So either remove them or set them to a known value.
 # See also tests/test.fish.
-set TERM xterm
+set -gx TERM xterm
 set -e ITERM_PROFILE
 
 # Test files specified on commandline, or all *.expect files
@@ -27,8 +32,9 @@ else
     set files_to_test *.expect
 end
 
-source test_util.fish (status -f) $argv; or exit
-cat interactive.config >> $XDG_CONFIG_HOME/fish/config.fish
+source test_util.fish (status -f) $argv
+or exit
+cat interactive.config >>$XDG_CONFIG_HOME/fish/config.fish
 
 say -o cyan "Testing interactive functionality"
 if not type -q expect
@@ -39,12 +45,14 @@ end
 function test_file
     set -l file $argv[1]
     echo -n "Testing file $file ... "
+    set starttime (date +%s)
     begin
         set -lx TERM dumb
-        expect -n -c 'source interactive.expect.rc' -f $file >$file.tmp.out ^$file.tmp.err
+        expect -n -c 'source interactive.expect.rc' -f $file >$file.tmp.out 2>$file.tmp.err
     end
     set -l exit_status $status
     set -l res ok
+    set test_duration (math (date +%s) - $starttime)
     mv -f interactive.tmp.log $file.tmp.log
 
     diff $file.tmp.out $file.out >/dev/null
@@ -53,7 +61,7 @@ function test_file
     set -l err_status $status
 
     if test $out_status -eq 0 -a $err_status -eq 0 -a $exit_status -eq 0
-        say green "ok"
+        say green "ok ($test_duration sec)"
         # clean up tmp files
         rm -f $file.tmp.{err,out,log}
         return 0

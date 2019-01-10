@@ -1,13 +1,17 @@
-#!/usr/bin/env python
-
 from __future__ import unicode_literals
 from __future__ import print_function
 import binascii
 import cgi
+try:
+    from html import escape as escape_html
+except ImportError:
+    from cgi import escape as escape_html
+from distutils.version import LooseVersion
 import glob
 import multiprocessing.pool
 import operator
 import os
+import platform
 import random
 import re
 import select
@@ -15,7 +19,6 @@ import socket
 import string
 import subprocess
 import sys
-import webbrowser
 
 FISH_BIN_PATH = False  # will be set later
 IS_PY2 = sys.version_info[0] == 2
@@ -29,8 +32,25 @@ else:
     import socketserver as SocketServer
     from urllib.parse import parse_qs
 
+def isMacOS10_12_5_OrLater():
+    """ Return whether this system is macOS 10.12.5 or a later version. """
+    version = platform.mac_ver()[0]
+    return version and LooseVersion(version) >= LooseVersion('10.12.5')
+
+def is_wsl():
+    """ Return whether we are running under the Windows Subsystem for Linux """
+    if 'linux' in platform.system().lower():
+        with open('/proc/version', 'r') as f:
+            if 'Microsoft' in f.read():
+                return True
+    return False
+
+
 # Disable CLI web browsers
 term = os.environ.pop('TERM', None)
+# This import must be done with an empty $TERM, otherwise a command-line browser may be started
+# which will block the whole process - see https://docs.python.org/3/library/webbrowser.html
+import webbrowser
 if term:
     os.environ['TERM'] = term
 
@@ -115,7 +135,7 @@ def parse_color(color_str):
     comps = color_str.split(' ')
     color = 'normal'
     background_color = ''
-    bold, underline = False, False
+    bold, underline, italics, dim, reverse = False, False, False, False, False
     for comp in comps:
         # Remove quotes
         comp = comp.strip("'\" ")
@@ -123,6 +143,12 @@ def parse_color(color_str):
             bold = True
         elif comp == '--underline':
             underline = True
+        elif comp == '--italics':
+            italics = True
+        elif comp == '--dim':
+            dim = True
+        elif comp == '--reverse':
+            reverse = True
         elif comp.startswith('--background='):
             # Background color
             background_color = better_color(
@@ -132,7 +158,7 @@ def parse_color(color_str):
             color = better_color(color, parse_one_color(comp))
 
     return {"color": color, "background": background_color, "bold": bold,
-            "underline": underline}
+            "underline": underline, "italics": italics, "dim": dim, "reverse": reverse}
 
 
 def parse_bool(val):
@@ -286,8 +312,9 @@ def ansi_to_html(val):
     reg = re.compile("""
         (                        # Capture
          \x1b                    # Escape
-         [^m]+                   # One or more non-'m's
+         [^m]*                   # Zero or more non-'m's
          m                       # Literal m terminates the sequence
+         \x0f?                   # HACK: A ctrl-o - this is how tmux' sgr0 ends
         )                        # End capture
         """, re.VERBOSE)
     separated = reg.split(val)
@@ -304,7 +331,7 @@ def ansi_to_html(val):
         if i % 2 == 0:
             # It's text, possibly empty
             # Clean up other ANSI junk
-            result.append(cgi.escape(strip_ansi(component)))
+            result.append(escape_html(strip_ansi(component)))
         else:
             # It's an escape sequence. Close the previous escape.
             span_open = append_html_for_ansi_escape(component, result,
@@ -555,6 +582,7 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                          'param',
                          'comment',
                          'match',
+                         'selection',
                          'search_match',
                          'operator',
                          'escape',
@@ -562,6 +590,9 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                          'redirection',
                          'valid_path',
                          'autosuggestion'
+                         'user',
+                         'host',
+                         'cancel'
                          ])
 
         # Here are our color descriptions
@@ -575,6 +606,7 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             'param': 'Command parameters',
             'comment': 'Comments start with #',
             'match': 'Matching parenthesis',
+            'selection': 'Selected text',
             'search_match': 'History searching',
             'history_current': 'Directory history',
             'operator': 'Like * and ~',
@@ -582,7 +614,10 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             'cwd': 'Current directory',
             'cwd_root': 'cwd for root user',
             'valid_path': 'Valid paths',
-            'autosuggestion': 'Suggested completion'
+            'autosuggestion': 'Suggested completion',
+            'user': 'Username in the prompt',
+            'host': 'Hostname in the prompt',
+            'cancel': 'The ^C cancel indicator'
         }
 
         out, err = run_fish_cmd('set -L')
@@ -708,11 +743,17 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         return out
 
     def do_set_color_for_variable(self, name, color, background_color, bold,
-                                  underline):
+                                  underline, italics, dim, reverse):
+        "Sets a color for a fish color name, like 'autosuggestion'"
         if not color:
             color = 'normal'
-        "Sets a color for a fish color name, like 'autosuggestion'"
-        command = 'set -U fish_color_' + name
+        varname = 'fish_color_' + name
+        # If the name already starts with "fish_", use it as the varname
+        # This is needed for 'fish_pager_color' vars.
+        if name.startswith('fish_'):
+            varname = name
+        # TODO: Check if the varname is allowable.
+        command = 'set -U ' + varname
         if color:
             command += ' ' + color
         if background_color:
@@ -721,17 +762,23 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             command += ' --bold'
         if underline:
             command += ' --underline'
+        if italics:
+            command += ' --italics'
+        if dim:
+            command += ' --dim'
+        if reverse:
+            command += ' --reverse'
 
         out, err = run_fish_cmd(command)
         return out
 
     def do_get_function(self, func_name):
-        out, err = run_fish_cmd('functions ' + func_name)
+        out, err = run_fish_cmd('functions ' + func_name + ' | fish_indent --html')
         return out
 
     def do_delete_history_item(self, history_item_text):
         # It's really lame that we always return success here
-        cmd = ('builtin history delete --exact -- %s; builtin history save' %
+        cmd = ('builtin history delete --case-sensitive --exact -- %s; builtin history save' %
                escape_fish_cmd(history_item_text))
         out, err = run_fish_cmd(cmd)
         return True
@@ -828,11 +875,15 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         return result
 
     def do_get_abbreviations(self):
-        out, err = run_fish_cmd('echo -n -s $fish_user_abbreviations\x1e')
-
-        lines = (x for x in out.rstrip().split('\x1e'))
-        abbrs = (re.split('[ =]', x, maxsplit=1) for x in lines if x)
-        result = [{'word': x, 'phrase': y} for x, y in abbrs]
+        # Example abbreviation line:
+        # abbr -a -U -- ls 'ls -a'
+        result = []
+        out, err = run_fish_cmd('abbr --show')
+        for line in out.rstrip().split('\n'):
+            if not line: continue
+            _, abbr = line.split(' -- ', 1)
+            word, phrase = abbr.split(' ', 1)
+            result.append({'word':word, 'phrase':phrase})
         return result
 
     def do_remove_abbreviation(self, abbreviation):
@@ -951,13 +1002,17 @@ class FishConfigHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             color = postvars.get('color')
             background_color = postvars.get('background_color')
             bold = postvars.get('bold')
+            italics = postvars.get('italics')
+            reverse = postvars.get('reverse')
+            dim = postvars.get('dim')
             underline = postvars.get('underline')
 
             if what:
                 # Not sure why we get lists here?
                 output = self.do_set_color_for_variable(
                     what[0], color[0], background_color[0],
-                    parse_bool(bold[0]), parse_bool(underline[0]))
+                    parse_bool(bold[0]), parse_bool(underline[0]), parse_bool(italics[0]),
+                    parse_bool(dim[0]), parse_bool(reverse[0]))
             else:
                 output = 'Bad request'
         elif p == '/get_function/':
@@ -1124,9 +1179,15 @@ f.write(redirect_template_html % (url, url))
 f.close()
 
 # Open temporary file as URL
+# Use open on macOS >= 10.12.5 to work around #4035.
 fileurl = 'file://' + filename
 print("Web config started at '%s'. Hit enter to stop." % fileurl)
-webbrowser.open(fileurl)
+if isMacOS10_12_5_OrLater():
+    subprocess.check_call(['open', fileurl])
+elif is_wsl():
+    subprocess.call(['cmd.exe', '/c', "start %s" % url])
+else:
+    webbrowser.open(fileurl)
 
 # Select on stdin and httpd
 stdin_no = sys.stdin.fileno()

@@ -4,13 +4,13 @@ end
 
 function __fish_complete_eselect_modules
     set -l sedregexp 's/^  ([a-zA-Z0-9_-]*)[ ]*/\1\t/g'
-    __fish_eselect_cmd modules list | __fish_sgrep '^  ' | sed -r $sedregexp
+    __fish_eselect_cmd modules list | string match -r '^  ' | sed -r $sedregexp
 end
 
 function __fish_complete_eselect_actions
     set -l sedregexp 's/^  ([a-zA-Z0-9_-]*)[ ]*/\1\t/g'
     set -l cmdl (commandline -poc)
-    __fish_eselect_cmd $cmdl[2..-1] usage | __fish_sgrep '^  [^ -]' | sed -r $sedregexp
+    __fish_eselect_cmd $cmdl[2..-1] usage | string match -r '^  [^ -]' | sed -r $sedregexp
 end
 
 function __fish_complete_eselect_action_options
@@ -19,7 +19,7 @@ function __fish_complete_eselect_action_options
 
     # Alter further php completion
     if [ (__fish_print_cmd_args_without_options)[2] = 'php' ]
-        eselect php list-modules ^/dev/null | string split " "
+        eselect php list-modules 2>/dev/null | string split " "
         return
     end
 
@@ -31,14 +31,14 @@ function __fish_complete_eselect_action_options
     set -l findregexp '/^  '$cmdl[-1]'/,/^  [^ ]/p'
 
     set cmdl[-1] usage
-    __fish_eselect_cmd $cmdl[2..-1] | sed -n -re $findregexp | __fish_sgrep '^    --' | sed -re $parseregexp
+    __fish_eselect_cmd $cmdl[2..-1] | sed -n -re $findregexp | string match -r '^    --' | sed -re $parseregexp
 end
 
 function __fish_complete_eselect_php_actions
     set -l sedregexp 's/^\s*\[([0-9]+)\]\s+([A-Za-z0-9\.]+).*/\1\t\2/'
 
     if test (__fish_print_cmd_args_without_options)[3] = 'set'
-        eselect php list (__fish_print_cmd_args_without_options)[-1] ^/dev/null | sed -r $sedregexp
+        eselect php list (__fish_print_cmd_args_without_options)[-1] 2>/dev/null | sed -r $sedregexp
     end
 end
 
@@ -58,7 +58,7 @@ function __fish_complete_eselect_targets
             set cmdl[-1] list
     end
 
-    eselect --colour=no $cmdl[2..-1] | __fish_sgrep '^  [^ -]' | sed -r $sedregexp
+    eselect --colour=no $cmdl[2..-1] | string match -r '^  [^ -]' | sed -r $sedregexp
 end
 
 complete -c eselect -n "test (__fish_number_of_cmd_args_wo_opts) = 1" \

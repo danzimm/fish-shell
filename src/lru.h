@@ -4,7 +4,7 @@
 
 #include <wchar.h>
 
-#include <map>
+#include <unordered_map>
 
 #include "common.h"
 
@@ -22,8 +22,6 @@
 template <class DERIVED, class CONTENTS>
 class lru_cache_t {
     struct lru_node_t;
-    typedef typename std::map<wcstring, lru_node_t>::iterator node_iter_t;
-
     struct lru_link_t {
         // Our doubly linked list
         // The base class is used for the mouth only
@@ -38,14 +36,16 @@ class lru_cache_t {
         lru_node_t &operator=(const lru_node_t &) = delete;
         lru_node_t(lru_node_t &&) = default;
 
-        // Our location in the map!
-        node_iter_t iter;
+        // Our key in the map. This is owned by the map itself.
+        const wcstring *key = NULL;
 
         // The value from the client
         CONTENTS value;
 
-        explicit lru_node_t(CONTENTS v) : value(std::move(v)) {}
+        explicit lru_node_t(const CONTENTS &v) : value(std::move(v)) {}
     };
+
+    typedef typename std::unordered_map<wcstring, lru_node_t>::iterator node_iter_t;
 
     // Max node count. This may be (transiently) exceeded by add_node_without_eviction, which is
     // used from background threads.
@@ -54,7 +54,7 @@ class lru_cache_t {
     // All of our nodes
     // Note that our linked list contains pointers to these nodes in the map
     // We are dependent on the iterator-noninvalidation guarantees of std::map
-    std::map<wcstring, lru_node_t> node_map;
+    std::unordered_map<wcstring, lru_node_t> node_map;
 
     // Head of the linked list
     // The list is circular!
@@ -78,21 +78,23 @@ class lru_cache_t {
 
     // Remove the node
     void evict_node(lru_node_t *node) {
-        assert(node != &mouth);
-
         // We should never evict the mouth.
-        assert(node != NULL && node->iter != this->node_map.end());
+        assert(node != &mouth && node != NULL && node->key != NULL);
+
+        auto iter = this->node_map.find(*node->key);
+        assert(iter != this->node_map.end());
 
         // Remove it from the linked list.
         node->prev->next = node->next;
         node->next->prev = node->prev;
 
         // Pull out our key and value
-        wcstring key = std::move(node->iter->first);
+        // Note we copy the key in case the map needs it to erase the node
+        wcstring key = *node->key;
         CONTENTS value(std::move(node->value));
 
         // Remove us from the map. This deallocates node!
-        node_map.erase(node->iter);
+        node_map.erase(iter);
 
         // Tell ourselves what we did
         DERIVED *dthis = static_cast<DERIVED *>(this);
@@ -228,7 +230,7 @@ class lru_cache_t {
         // Tell the node where it is in the map
         node_iter_t iter = iter_inserted.first;
         lru_node_t *node = &iter->second;
-        node->iter = iter;
+        node->key = &iter->first;
 
         node->next = mouth.next;
         node->next->prev = node;
@@ -281,12 +283,11 @@ class lru_cache_t {
 
         explicit iterator(const lru_link_t *val) : node(val) {}
         void operator++() { node = node->prev; }
-        bool operator==(const iterator &other) { return node == other.node; }
-        bool operator!=(const iterator &other) { return !(*this == other); }
+        bool operator==(const iterator &other) const { return node == other.node; }
+        bool operator!=(const iterator &other) const { return !(*this == other); }
         value_type operator*() const {
             const lru_node_t *dnode = static_cast<const lru_node_t *>(node);
-            const wcstring &key = dnode->iter->first;
-            return {key, dnode->value};
+            return {*dnode->key, dnode->value};
         }
     };
 

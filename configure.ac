@@ -12,8 +12,8 @@ m4_syscmd([build_tools/git_version_gen.sh 2>/dev/null])
 
 AC_PREREQ([2.60])
 AC_INIT(fish,
-        m4_esyscmd([cut -f 3 -d ' ' FISH-BUILD-VERSION-FILE | tr -d '\n']),
-        fish-users@lists.sourceforge.net)
+        m4_esyscmd([cut -f 2 -d '=' FISH-BUILD-VERSION-FILE | tr -d '"\n']),
+        https://github.com/fish-shell/fish-shell/issues)
 ac_clean_files=a.out.dSYM
 
 #
@@ -25,6 +25,7 @@ AC_SUBST(HAVE_DOXYGEN)
 AC_SUBST(LDFLAGS_FISH)
 AC_SUBST(WCHAR_T_BITS)
 AC_SUBST(EXTRA_PCRE2)
+AC_SUBST(HAVE_BROKEN_WCWIDTH)
 
 #
 # If needed, run autoconf to regenerate the configure file
@@ -37,7 +38,7 @@ AC_SUBST(EXTRA_PCRE2)
 AC_MSG_CHECKING([if autoreconf needs to be run])
 if test configure -ot configure.ac; then
   AC_MSG_RESULT([yes])
-  if which autoreconf >/dev/null; then
+  if command -v autoreconf >/dev/null; then
     # No need to provide any error messages if autoreconf fails, the
     # shell and autconf should take care of that themselves
     AC_MSG_NOTICE([running autoreconf --no-recursive])
@@ -68,7 +69,7 @@ fi
 AC_MSG_CHECKING([if autoheader needs to be run])
 if test ! -f ./config.h.in -o config.h.in -ot configure.ac; then
   AC_MSG_RESULT([yes])
-  if which autoheader >/dev/null; then
+  if command -v autoheader >/dev/null; then
     AC_MSG_NOTICE([running autoheader])
     autoheader || exit 1
   else
@@ -211,17 +212,14 @@ AS_IF([test "$use_doxygen" != "no"],
 AC_SYS_LARGEFILE
 
 
-# fish does not use exceptions
-# Disabling exceptions saves about 20% (!) of the compiled code size
+# Fish does not use exceptions.
 CXXFLAGS="$CXXFLAGS -fno-exceptions"
-
 
 #
 # Set some warning flags
 # Don't warn about missing field initializers, it has too many
 # false positives for code like `struct termios tmodes = {};`
 #
-
 CXXFLAGS="$CXXFLAGS -Wextra -Wno-missing-field-initializers"
 
 #
@@ -318,14 +316,51 @@ AC_STRUCT_DIRENT_D_TYPE
 #
 
 AC_CHECK_FUNCS( wcsndup )
+AC_CHECK_FUNCS( wcstod_l )
 AC_CHECK_FUNCS( futimes )
 AC_CHECK_FUNCS( wcslcpy lrand48_r killpg )
 AC_CHECK_FUNCS( backtrace_symbols getifaddrs )
 AC_CHECK_FUNCS( futimens clock_gettime )
 AC_CHECK_FUNCS( getpwent flock )
-AC_CHECK_FUNCS( dirfd )
 
+AC_MSG_CHECKING([dirfd])
+AC_LINK_IFELSE([
+  AC_LANG_PROGRAM(
+    [
+      #include <dirent.h>
+      DIR *dirp;
+    ], [
+	    return dirfd(dirp);
+    ]
+  )
+  ]
+, [ AC_MSG_RESULT([yes])
+     AC_DEFINE([HAVE_DIRFD], 1, [ Define to 1 if you have the `dirfd' function or macro. ])
+   ],
+   [ AC_MSG_RESULT([no])]
+)
+
+AC_CHECK_DECL( [__NetBSD__], AC_DEFINE([TPARM_VARARGS], 1, [ Make tparm take varargs ]) )
 AC_CHECK_DECL( [mkostemp], [ AC_CHECK_FUNCS([mkostemp]) ] )
+
+#
+# Although setupterm is linkable thanks to SEARCH_LIBS above, some
+# builds of ncurses include the actual headers in a different package
+#
+AC_CHECK_DECL( [setupterm], , [AC_MSG_ERROR([Could not find a curses implementation, needed to build fish. If this is Linux, try running 'sudo apt-get install libncurses5-dev' or 'sudo yum install ncurses-devel'])], [
+#if HAVE_NCURSES_H
+#include <ncurses.h>
+#elif HAVE_NCURSES_CURSES_H
+#include <ncurses/curses.h>
+#else
+#include <curses.h>
+#endif
+#if HAVE_TERM_H
+#include <term.h>
+#elif HAVE_NCURSES_TERM_H
+#include <ncurses/term.h>
+#endif
+] )
 
 dnl AC_CHECK_FUNCS uses C linkage, but sometimes (Solaris!) the behaviour is
 dnl different with C++.
@@ -383,6 +418,15 @@ AC_TRY_LINK( [ #include <wchar.h> ],
              [AC_MSG_RESULT(no)],
              )
 
+AC_MSG_CHECKING([for std::make_unique])
+AC_TRY_LINK( [ #include <memory> ],
+             [ std::unique_ptr<int> foo = std::make_unique<int>(); ],
+             [ AC_MSG_RESULT(yes)
+               AC_DEFINE(HAVE_STD__MAKE_UNIQUE, 1, Define to 1 if you have the `std::make_unique' function.)
+             ],
+             [AC_MSG_RESULT(no)],
+             )
+
 if test x$local_gettext != xno; then
   AC_CHECK_FUNCS( gettext )
 
@@ -397,6 +441,17 @@ fi
 # Here follows a list of small programs used to test for various
 # features that Autoconf doesn't tell us about
 #
+
+dnl AC_CHECK_FUNCS uses C linkage, but sometimes (Solaris!) the behaviour is
+dnl different with C++.
+AC_MSG_CHECKING([if ctermid_r() available])
+AC_TRY_LINK( [ #include <stdio.h> ],
+             [ char buf[L_ctermid]; char *foo = ctermid_r(buf); ],
+             [ AC_MSG_RESULT(yes)
+               AC_DEFINE(HAVE_CTERMID_R, 1, Define to 1 if you have the `ctermid_r' function.)
+             ],
+             [AC_MSG_RESULT(no)],
+             )
 
 #
 # Check if struct winsize and TIOCGWINSZ exist
@@ -516,6 +571,7 @@ AC_COMPILE_IFELSE(
   [
     AC_LANG_PROGRAM(
       [
+    #define TPARM_VARARGS 1
 	#if HAVE_NCURSES_H
 	#include <ncurses.h>
 	#elif HAVE_NCURSES_CURSES_H
@@ -549,34 +605,8 @@ else
   AC_MSG_RESULT(no)
 fi
 
-# Check that threads actually work on Solaris
-AC_MSG_CHECKING([for threadsafe errno])
-AC_RUN_IFELSE(
-  [AC_LANG_PROGRAM([
-    #include <errno.h>
-    #include <pthread.h>
-    #include <signal.h>
-
-    void *thread1_func(void *p_arg)
-    {
-            errno = 1;
-            return 0;
-    }
-    ],[
-    errno = 0;
-    pthread_t t1;
-    pthread_create(&t1, NULL, thread1_func, NULL);
-    pthread_join(t1, NULL);
-    return errno;
-  ])],
-  [AC_MSG_RESULT(yes)],
-  [
-    AC_MSG_RESULT(no)
-    AC_MSG_FAILURE([errno is not threadsafe - check your compiler settings])
-  ],
-  [AC_MSG_RESULT(crosscompiling, skipped)]
-)
-
+# ========
+# PCRE2 library configuration.
 pcre2_min_version=10.21
 EXTRA_PCRE2=
 AC_ARG_WITH(
@@ -588,6 +618,20 @@ AC_ARG_WITH(
   [included_pcre2=$withval],
   [included_pcre2=auto]
 )
+
+HAVE_BROKEN_WCWIDTH=
+AC_ARG_ENABLE(
+    [wcwidth],
+    AS_HELP_STRING(
+        [--disable-internal-wcwidth],
+        [use system wcwidth instead of the bundled version]
+        ))
+
+if test "x$enable_wcwidth" != "xno"; then
+      AC_DEFINE([HAVE_BROKEN_WCWIDTH], [1], [banana])
+else
+      AC_DEFINE([HAVE_BROKEN_WCWIDTH], [0], [banana])
+fi
 
 if test "x$included_pcre2" != "xyes"; then
 
@@ -660,7 +704,7 @@ if test "x$included_pcre2" = "xyes"; then
   AC_MSG_NOTICE([using included PCRE2 library])
   # unfortunately these get added to the global configuration
   ac_configure_args="$ac_configure_args --disable-pcre2-8 --enable-pcre2-$WCHAR_T_BITS --disable-shared"
-  AC_CONFIG_SUBDIRS([pcre2-10.22])
+  AC_CONFIG_SUBDIRS([pcre2-10.32])
 
   PCRE2_CXXFLAGS='-I$(PCRE2_DIR)/src'
   PCRE2_LIBS='-L$(PCRE2_LIBDIR) -lpcre2-$(PCRE2_WIDTH)'

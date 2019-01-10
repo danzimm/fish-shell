@@ -15,9 +15,18 @@
 // in <wchar.h>. At least on OS X if we don't do this we get compilation errors do to the macro
 // substitution if wchar.h is included after this header.
 #include <wchar.h>  // IWYU pragma: keep
-#if HAVE_NCURSES_H
-#include <ncurses.h>  // IWYU pragma: keep
-#endif
+
+/// The column width of ambiguous East Asian characters.
+extern int g_fish_ambiguous_width;
+
+/// The column width of emoji characters. This must be configurable because the value changed
+/// between Unicode 8 and Unicode 9, wcwidth() is emoji-ignorant, and terminal emulators do
+/// different things. See issues like #4539 and https://github.com/neovim/neovim/issues/4976 for how
+/// painful this is. A value of 0 means to use the guessed value.
+extern int g_fish_emoji_width;
+
+/// The guessed value of the emoji width based on TERM.
+extern int g_guessed_fish_emoji_width;
 
 /// fish's internal versions of wcwidth and wcswidth, which can use an internal implementation if
 /// the system one is busted.
@@ -37,7 +46,7 @@ int fish_mkstemp_cloexec(char *);
 /// Under curses, tputs expects an int (*func)(char) as its last parameter, but in ncurses, tputs
 /// expects a int (*func)(int) as its last parameter. tputs_arg_t is defined to always be what tputs
 /// expects. Hopefully.
-#ifdef NCURSES_VERSION
+#if defined(NCURSES_VERSION) || defined(__NetBSD__)
 typedef int tputs_arg_t;
 #else
 typedef char tputs_arg_t;
@@ -54,10 +63,11 @@ struct winsize {
 
 #endif
 
-#ifdef TPARM_SOLARIS_KLUDGE
-/// Solaris tparm has a set fixed of paramters in it's curses implementation, work around this here.
+#if defined(TPARM_SOLARIS_KLUDGE)
+/// Solaris tparm has a set fixed of paramters in its curses implementation, work around this here.
 #define tparm tparm_solaris_kludge
-char *tparm_solaris_kludge(char *str, ...);
+char *tparm_solaris_kludge(char *str, long p1 = 0, long p2 = 0, long p3 = 0, long p4 = 0,
+                           long p5 = 0, long p6 = 0, long p7 = 0, long p8 = 0, long p9 = 0);
 #endif
 
 /// On OS X, use weak linking for wcsdup and wcscasecmp. Weak linking allows you to call the
@@ -89,16 +99,32 @@ wchar_t *wcsndup(const wchar_t *in, size_t c);
 #endif
 #else  //__APPLE__
 
-/// These functions are missing from Solaris 10
+/// These functions are missing from Solaris 10, and only accessible from
+/// Solaris 11 in the std:: namespace.
 #ifndef HAVE_WCSDUP
+#ifdef HAVE_STD__WCSDUP
+using std::wcsdup;
+#else
 wchar_t *wcsdup(const wchar_t *in);
-#endif
+#endif  // HAVE_STD__WCSDUP
+#endif  // HAVE_WCSDUP
+
 #ifndef HAVE_WCSCASECMP
+#ifdef HAVE_STD__WCSCASECMP
+using std::wcscasecmp;
+#else
 int wcscasecmp(const wchar_t *a, const wchar_t *b);
-#endif
+#endif  // HAVE_STD__WCSCASECMP
+#endif  // HAVE_WCSCASECMP
+
 #ifndef HAVE_WCSNCASECMP
+#ifdef HAVE_STD__WCSNCASECMP
+using std::wcsncasecmp;
+#else
 int wcsncasecmp(const wchar_t *s1, const wchar_t *s2, size_t n);
-#endif
+#endif  // HAVE_STD__WCSNCASECMP
+#endif  // HAVE_WCSNCASECMP
+
 #ifndef HAVE_DIRFD
 #ifndef __XOPEN_OR_POSIX
 #define dirfd(d) (d->dd_fd)
@@ -122,6 +148,8 @@ wchar_t *wcsndup(const wchar_t *in, size_t c);
 size_t wcslcpy(wchar_t *dst, const wchar_t *src, size_t siz);
 #endif
 
+#if 0
+// These are not currently used.
 #ifndef HAVE_LRAND48_R
 /// Data structure for the lrand48_r fallback implementation.
 struct drand48_data {
@@ -133,6 +161,7 @@ int lrand48_r(struct drand48_data *buffer, long int *result);
 
 /// Fallback implementation of srand48_r, the seed function for lrand48_r.
 int srand48_r(long int seedval, struct drand48_data *buffer);
+#endif
 #endif
 
 #ifndef HAVE_FUTIMES
@@ -157,19 +186,29 @@ int killpg(int pgr, int sig);
 #endif
 
 #ifndef HAVE_FLOCK
-/// Fallback implementation of flock in terms of fcntl
+/// Fallback implementation of flock in terms of fcntl.
 /// Danger! The semantics of flock and fcntl locking are very different.
 /// Use with caution.
-// Ignore the cppcheck warning as this is the implementation that it is
-// warning about!
-// cppcheck-suppress flockSemanticsWarning
 int flock(int fd, int op);
 
 #define LOCK_SH 1  // Shared lock.
 #define LOCK_EX 2  // Exclusive lock.
 #define LOCK_UN 8  // Unlock.
 #define LOCK_NB 4  // Don't block when locking.
+#endif
 
 #endif
 
+#ifndef HAVE_WCSTOD_L
+// On some platforms if this is incorrectly detected and a system-defined
+// defined version of `wcstod_l` exists, calling `wcstod` from our own
+// `wcstod_l` can call back into `wcstod_l` causing infinite recursion.
+// e.g. FreeBSD defines `wcstod(x, y)` as `wcstod_l(x, y, __get_locale())`.
+// Solution: namespace our implementation to make sure there is no symbol
+// duplication.
+#undef wcstod_l
+namespace fish_compat {
+    double wcstod_l(const wchar_t *enptr, wchar_t **endptr, locale_t loc);
+}
+#define wcstod_l(x, y, z) fish_compat::wcstod_l(x, y, z)
 #endif

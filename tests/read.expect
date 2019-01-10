@@ -16,6 +16,11 @@ expect_prompt
 
 # read
 
+send_line "read"
+expect_read_prompt
+send_line "text"
+expect_prompt
+
 send_line "read foo"
 expect_read_prompt
 send_line "text"
@@ -34,6 +39,15 @@ expect_read_prompt
 send_line -h "bar\r_marker 2"
 expect_prompt
 expect_marker 2
+print_var_contents foo
+
+# read -s
+
+send_line "read -s foo"
+expect_read_prompt
+send_line -h "read_s\r_marker 3"
+expect_prompt
+expect_marker 3
 print_var_contents foo
 
 # read -n
@@ -76,6 +90,14 @@ expect_prompt
 expect_marker 7
 print_var_contents foo
 
+# Verify we don't hang on `read | cat`. See #4540.
+send_line "read | cat"
+expect_read_prompt
+send_line -h "bar\r_marker 4540"
+expect_prompt
+expect_marker 4540
+
+
 # ==========
 # The fix for issue #2007 initially introduced a problem when using a function
 # to read from /dev/stdin when that is associated with the tty. These tests
@@ -88,7 +110,9 @@ send "def\n"
 expect "abc then def\r\n"
 expect_prompt
 
-send "r2l </dev/stdin\n"
+# Some systems don't have /dev/stdin - effectively skip the test there.
+# I'd love to warn about it, but I don't know how.
+send "test -r /dev/stdin; and r2l </dev/stdin; or r2l\n"
 expect_read_prompt
 send "ghi\n"
 expect_read_prompt

@@ -65,7 +65,6 @@
 #include "builtin.h"
 #include "common.h"
 #include "io.h"
-#include "proc.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 class parser_t;
@@ -209,7 +208,7 @@ void builtin_printf_state_t::fatal_error(const wchar_t *fmt, ...) {
     streams.err.append(errstr);
     if (!string_suffixes_string(L"\n", errstr)) streams.err.push_back(L'\n');
 
-    this->exit_code = STATUS_BUILTIN_ERROR;
+    this->exit_code = STATUS_CMD_ERROR;
     this->early_exit = true;
 }
 
@@ -272,19 +271,11 @@ template <>
 long double raw_string_to_scalar_type(const wchar_t *s, wchar_t **end) {
     double val = wcstod(s, end);
     if (**end == L'\0') return val;
-
     // The conversion using the user's locale failed. That may be due to the string not being a
     // valid floating point value. It could also be due to the locale using different separator
     // characters than the normal english convention. So try again by forcing the use of a locale
     // that employs the english convention for writing floating point numbers.
-    //
-    // TODO: switch to the wcstod_l() function to avoid changing the global locale.
-    char *saved_locale = strdup(setlocale(LC_NUMERIC, NULL));
-    setlocale(LC_NUMERIC, "C");
-    val = wcstod(s, end);
-    setlocale(LC_NUMERIC, saved_locale);
-    free(saved_locale);
-    return val;
+    return wcstod_l(s, end, fish_c_locale());
 }
 
 template <typename T>
@@ -318,7 +309,7 @@ void builtin_printf_state_t::print_esc_char(wchar_t c) {
             break;
         }
         case L'e': {  // escape
-            this->append_output(L'\e');
+            this->append_output(L'\x1B');
             break;
         }
         case L'f': {  // form feed
@@ -445,6 +436,7 @@ void builtin_printf_state_t::print_direc(const wchar_t *start, size_t length, wc
         case L'X':
         case L'd':
         case L'i':
+        case L'o':
         case L'u': {
             fmt.append(L"ll");
             break;
@@ -720,21 +712,31 @@ int builtin_printf_state_t::print_formatted(const wchar_t *format, int argc, wch
 
 /// The printf builtin.
 int builtin_printf(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
-    UNUSED(parser);
-    builtin_printf_state_t state(streams);
-
-    wchar_t *format;
-    int args_used;
+    const wchar_t *cmd = argv[0];
     int argc = builtin_count_args(argv);
+    help_only_cmd_opts_t opts;
 
-    if (argc <= 1) {
-        state.fatal_error(_(L"printf: not enough arguments"));
-        return STATUS_BUILTIN_ERROR;
+    int optind;
+    int retval = parse_help_only_cmd_opts(opts, &optind, argc, argv, parser, streams);
+    if (retval != STATUS_CMD_OK) return retval;
+
+    if (opts.print_help) {
+        builtin_print_help(parser, streams, cmd, streams.out);
+        return STATUS_CMD_OK;
     }
 
-    format = argv[1];
-    argc -= 2;
-    argv += 2;
+    argc -= optind;
+    argv += optind;
+    if (argc < 1) {
+        streams.err.append_format(BUILTIN_ERR_MIN_ARG_COUNT1, cmd, 1, argc);
+        return STATUS_INVALID_ARGS;
+    }
+
+    builtin_printf_state_t state(streams);
+    int args_used;
+    wchar_t *format = argv[0];
+    argc--;
+    argv++;
 
     do {
         args_used = state.print_formatted(format, argc, argv);

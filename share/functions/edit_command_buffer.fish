@@ -6,9 +6,9 @@ function edit_command_buffer --description 'Edit the command buffer in an extern
     else
         # We should never execute this block but better to be paranoid.
         if set -q TMPDIR
-            set f $TMPDIR/fish.(echo %self).fish
+            set f $TMPDIR/fish.$fish_pid.fish
         else
-            set f /tmp/fish.(echo %self).fish
+            set f /tmp/fish.$fish_pid.fish
         end
         touch $f
         or return 1
@@ -17,9 +17,13 @@ function edit_command_buffer --description 'Edit the command buffer in an extern
     # Edit the command line with the users preferred editor or vim or emacs.
     commandline -b >$f
     if set -q VISUAL
-        eval $VISUAL $f
+        __fish_disable_bracketed_paste
+        $VISUAL $f
+        __fish_enable_bracketed_paste
     else if set -q EDITOR
-        eval $EDITOR $f
+        __fish_disable_bracketed_paste
+        $EDITOR $f
+        __fish_enable_bracketed_paste
     else
         echo
         echo (_ 'External editor requested but $VISUAL or $EDITOR not set.')
@@ -41,4 +45,7 @@ function edit_command_buffer --description 'Edit the command buffer in an extern
         echo (_ "or the file was empty")
     end
     command rm $f
+    # We've probably opened something that messed with the screen.
+    # A repaint seems in order.
+    commandline -f repaint
 end

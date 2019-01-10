@@ -1,65 +1,77 @@
 # Completions for Android adb command
 
-function __fish_adb_no_subcommand --description 'Test if adb has yet to be given the subcommand'
-	for i in (commandline -opc)
-		if contains -- $i connect disconnect devices push pull sync shell emu logcat install uninstall jdwp forward bugreport backup restore version help wait-for-device start-server kill-server remount reboot get-state get-serialno get-devpath status-window root usb tcpip ppp sideload reconnect
-			return 1
-		end
-	end
-	return 0
+function __fish_adb_no_subcommand -d 'Test if adb has yet to be given the subcommand'
+    for i in (commandline -opc)
+        if contains -- $i connect disconnect devices push pull sync shell emu logcat install uninstall jdwp forward bugreport backup restore version help wait-for-device start-server kill-server remount reboot get-state get-serialno get-devpath status-window root usb tcpip ppp sideload reconnect
+            return 1
+        end
+    end
+    return 0
 end
 
-function __fish_adb_get_devices --description 'Run adb devices and parse output'
-	# This seems reasonably portable for all the platforms adb runs on
-	set -l count (ps x | grep -c adb)
-	set -l TAB \t
-	# Don't run adb devices unless the server is already started - it takes a while to init
-	if [ $count -gt 1 ]
-		# The tail is to strip the header line, the sed is to massage the -l format
-		# into a simple "identifier <TAB> modelname" format which is what we want for complete
-		adb devices -l | tail -n +2 | sed -E -e "s/([^ ]+) +./\1$TAB/" -e "s/$TAB.*model:([^ ]+).*/$TAB\1/"
-	end
+function __fish_adb_get_devices -d 'Run adb devices and parse output'
+    # This seems reasonably portable for all the platforms adb runs on
+    set -l procs (ps -Ao comm= | string match 'adb')
+    # Don't run adb devices unless the server is already started - it takes a while to init
+    if set -q procs[1]
+        adb devices -l | string replace -rf '(\S+) +.' '$1'\t | string replace -r \t'.*model:(\S+).*' \t'$1'
+    end
 end
 
-function __fish_adb_run_command --description 'Runs adb with any -s parameters already given on the command line'
-	set -l sopt
-	set -l sopt_is_next
-	set -l cmd (commandline -poc)
-	set -e cmd[1]
-	for i in $cmd
-		if test $sopt_is_next
-			set sopt -s $i
-			break
-		else
-			switch $i
-				case -s
-					set sopt_is_next 1
-			end
-		end
-	end
+function __fish_adb_run_command -d 'Runs adb with any -s parameters already given on the command line'
+    set -l sopt
+    set -l sopt_is_next
+    set -l cmd (commandline -poc)
+    set -e cmd[1]
+    for i in $cmd
+        if test $sopt_is_next
+            set sopt -s $i
+            break
+        else
+            switch $i
+                case -s
+                    set sopt_is_next 1
+            end
+        end
+    end
 
-	# If no -s option, see if there's a -d or -e instead
-	if test -z "$sopt"
-		if contains -- -d $cmd
-			set sopt '-d'
-		else if contains -- -e $cmd
-			set sopt '-e'
-		end
-	end
+    # If no -s option, see if there's a -d or -e instead
+    if test -z "$sopt"
+        if contains -- -d $cmd
+            set sopt '-d'
+        else if contains -- -e $cmd
+            set sopt '-e'
+        end
+    end
 
-	# adb returns CRLF (seemingly) so strip CRs
-	adb $sopt shell $argv | sed s/\r//
+    # adb returns CRLF (seemingly) so strip CRs
+    adb $sopt shell $argv | string replace -a \r ''
 end
 
 function __fish_adb_list_packages
-	__fish_adb_run_command pm list packages ^/dev/null | sed s/package://
+    __fish_adb_run_command pm list packages 2>/dev/null | string replace 'package:' ''
 end
 
 
 function __fish_adb_list_uninstallable_packages
-	# -3 doesn't exactly mean show uninstallable, but it's the closest you can get to with pm list
-	__fish_adb_run_command pm list packages -3 | sed s/package://
+    # -3 doesn't exactly mean show uninstallable, but it's the closest you can get to with pm list
+    __fish_adb_run_command pm list packages -3 | string replace 'package:' ''
 end
+
+function __fish_adb_list_files
+   set -l token (commandline -ct)
+
+   # Have tab complete show initial / if nothing on current token
+   if test -z "$token"
+       set token "/"
+   end
+
+   # Return list of directories suffixed with '/'
+   __fish_adb_run_command find -H "$token*" -maxdepth 0 -type d 2>/dev/null | awk '{print $1"/"}'
+   # Return list of files
+   __fish_adb_run_command find -H "$token*" -maxdepth 0 -type f 2>/dev/null
+end
+
 
 # Generic options, must come before command
 complete -n '__fish_adb_no_subcommand' -c adb -s s -x -a "(__fish_adb_get_devices)" -d 'Device to communicate with'
@@ -146,3 +158,7 @@ complete -n '__fish_seen_subcommand_from sideload' -c adb -xa '(__fish_complete_
 
 # reconnect
 complete -n '__fish_seen_subcommand_from reconnect' -c adb -x -a 'device' -d 'Kick current connection from device side and make it reconnect.'
+
+# commands that accept listing device files
+complete -n '__fish_seen_subcommand_from shell' -c adb -f -a "(__fish_adb_list_files)" -d 'File on device'
+complete -n '__fish_seen_subcommand_from pull' -c adb -f -a "(__fish_adb_list_files)" -d 'File on device'

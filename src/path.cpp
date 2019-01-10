@@ -4,12 +4,12 @@
 #include "config.h"  // IWYU pragma: keep
 
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <wchar.h>
 
+#include <memory>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -24,12 +24,19 @@
 /// Unexpected error in path_get_path().
 #define MISSING_COMMAND_ERR_MSG _(L"Error while searching for command '%ls'")
 
-static bool path_get_path_core(const wcstring &cmd, wcstring *out_path,
-                               const env_var_t &bin_path_var) {
-    int err = ENOENT;
-    debug(3, L"path_get_path( '%ls' )", cmd.c_str());
+// Note that PREFIX is defined in the `Makefile` and is thus defined when this module is compiled.
+// This ensures we always default to "/bin", "/usr/bin" and the bin dir defined for the fish
+// programs. Possibly with a duplicate dir if PREFIX is empty, "/", "/usr" or "/usr/". If the PREFIX
+// duplicates /bin or /usr/bin that is harmless other than a trivial amount of time testing a path
+// we've already tested.
+const wcstring_list_t dflt_pathsv({L"/bin", L"/usr/bin", PREFIX L"/bin"});
 
-    // If the command has a slash, it must be a full path.
+static bool path_get_path_core(const wcstring &cmd, wcstring *out_path,
+                               const maybe_t<env_var_t> &bin_path_var) {
+    debug(5, L"path_get_path( '%ls' )", cmd.c_str());
+
+    // If the command has a slash, it must be an absolute or relative path and thus we don't bother
+    // looking for a matching command.
     if (cmd.find(L'/') != wcstring::npos) {
         if (waccess(cmd, X_OK) != 0) {
             return false;
@@ -47,45 +54,56 @@ static bool path_get_path_core(const wcstring &cmd, wcstring *out_path,
         return false;
     }
 
-    wcstring bin_path;
-    if (!bin_path_var.missing()) {
-        bin_path = bin_path_var;
+    const wcstring_list_t *pathsv;
+    if (bin_path_var) {
+        pathsv = &bin_path_var->as_list();
     } else {
-        if (contains(PREFIX L"/bin", L"/bin", L"/usr/bin")) {
-            bin_path = L"/bin" ARRAY_SEP_STR L"/usr/bin";
-        } else {
-            bin_path = L"/bin" ARRAY_SEP_STR L"/usr/bin" ARRAY_SEP_STR PREFIX L"/bin";
-        }
+        pathsv = &dflt_pathsv;
     }
 
-    wcstring nxt_path;
-    wcstokenizer tokenizer(bin_path, ARRAY_SEP_STR);
-    while (tokenizer.next(nxt_path)) {
-        if (nxt_path.empty()) continue;
-        append_path_component(nxt_path, cmd);
-        if (waccess(nxt_path, X_OK) == 0) {
+    int err = ENOENT;
+    for (auto next_path : *pathsv) {
+        if (next_path.empty()) continue;
+        append_path_component(next_path, cmd);
+        if (waccess(next_path, X_OK) == 0) {
             struct stat buff;
-            if (wstat(nxt_path, &buff) == -1) {
+            if (wstat(next_path, &buff) == -1) {
                 if (errno != EACCES) {
                     wperror(L"stat");
                 }
                 continue;
             }
             if (S_ISREG(buff.st_mode)) {
-                if (out_path) *out_path = std::move(nxt_path);
+                if (out_path) *out_path = std::move(next_path);
                 return true;
             }
             err = EACCES;
         } else {
             switch (errno) {
-                case ENOENT:
-                case ENAMETOOLONG:
                 case EACCES:
+                case ENAMETOOLONG:
+                case ENOENT:
                 case ENOTDIR: {
                     break;
                 }
+#ifdef __sun
+                //Solaris 5.11 can return any of the following three if the path
+                //does not exist. Yes, even 0. No, none of this is documented.
+                case 0:
+                case EAGAIN:
+                case EEXIST: {
+                    break;
+                }
+#endif
+                //WSL has a bug where access(2) can return EINVAL
+                //See https://github.com/Microsoft/BashOnWindows/issues/2522
+                //The only other way EINVAL can happen is if the wrong
+                //mode was specified, but we have X_OK hard-coded above.
+                case EINVAL: {
+                    break;
+                }
                 default: {
-                    debug(1, MISSING_COMMAND_ERR_MSG, nxt_path.c_str());
+                    debug(1, MISSING_COMMAND_ERR_MSG, next_path.c_str());
                     wperror(L"access");
                     break;
                 }
@@ -102,18 +120,49 @@ bool path_get_path(const wcstring &cmd, wcstring *out_path, const env_vars_snaps
 }
 
 bool path_get_path(const wcstring &cmd, wcstring *out_path) {
-    return path_get_path_core(cmd, out_path, env_get_string(L"PATH"));
+    return path_get_path_core(cmd, out_path, env_get(L"PATH"));
 }
 
-bool path_get_cdpath(const wcstring &dir, wcstring *out, const wchar_t *wd,
+wcstring_list_t path_get_paths(const wcstring &cmd) {
+    debug(5, L"path_get_paths('%ls')", cmd.c_str());
+    wcstring_list_t paths;
+
+    // If the command has a slash, it must be an absolute or relative path and thus we don't bother
+    // looking for matching commands in the PATH var.
+    if (cmd.find(L'/') != wcstring::npos) {
+        struct stat buff;
+        if (wstat(cmd, &buff)) return paths;
+        if (!S_ISREG(buff.st_mode)) return paths;
+        if (waccess(cmd, X_OK)) return paths;
+        paths.push_back(cmd);
+        return paths;
+    }
+
+    auto path_var = env_get(L"PATH");
+    std::vector<wcstring> pathsv;
+    if (path_var) path_var->to_list(pathsv);
+    for (auto path : pathsv) {
+        if (path.empty()) continue;
+        append_path_component(path, cmd);
+        if (waccess(path, X_OK) == 0) {
+            struct stat buff;
+            if (wstat(path, &buff) == -1) {
+                if (errno != EACCES) wperror(L"stat");
+                continue;
+            }
+            if (S_ISREG(buff.st_mode)) paths.push_back(path);
+        }
+    }
+
+    return paths;
+}
+
+bool path_get_cdpath(const wcstring &dir, wcstring *out, const wcstring &wd,
                      const env_vars_snapshot_t &env_vars) {
     int err = ENOENT;
     if (dir.empty()) return false;
 
-    if (wd) {
-        size_t len = wcslen(wd);
-        assert(wd[len - 1] == L'/');
-    }
+    assert(!wd.empty() && wd.back() == L'/');
 
     wcstring_list_t paths;
     if (dir.at(0) == L'/') {
@@ -122,39 +171,35 @@ bool path_get_cdpath(const wcstring &dir, wcstring *out, const wchar_t *wd,
     } else if (string_prefixes_string(L"./", dir) || string_prefixes_string(L"../", dir) ||
                dir == L"." || dir == L"..") {
         // Path is relative to the working directory.
-        wcstring path;
-        if (wd) path.append(wd);
-        path.append(dir);
-        paths.push_back(path);
+        paths.push_back(path_normalize_for_cd(wd, dir));
     } else {
         // Respect CDPATH.
-        env_var_t path = env_vars.get(L"CDPATH");
-        if (path.missing_or_empty()) path = L".";  // we'll change this to the wd if we have one
-
-        wcstring nxt_path;
-        wcstokenizer tokenizer(path, ARRAY_SEP_STR);
-        while (tokenizer.next(nxt_path)) {
-            if (nxt_path == L"." && wd != NULL) {
-                // nxt_path is just '.', and we have a working directory, so use the wd instead.
-                // TODO: if nxt_path starts with ./ we need to replace the . with the wd.
-                nxt_path = wd;
+        wcstring_list_t cdpathsv;
+        if (auto cdpaths = env_vars.get(L"CDPATH")) {
+            cdpathsv = cdpaths->as_list();
+        }
+        if (cdpathsv.empty()) {
+            cdpathsv.push_back(L".");
+        }
+        for (wcstring next_path : cdpathsv) {
+            if (next_path.empty()) next_path = L".";
+            if (next_path == L"." && !wd.empty()) {
+                // next_path is just '.', and we have a working directory, so use the wd instead.
+                // TODO: if next_path starts with ./ we need to replace the . with the wd.
+                next_path = wd;
             }
-            expand_tilde(nxt_path);
+            expand_tilde(next_path);
+            if (next_path.empty()) continue;
 
-            // debug( 2, L"woot %ls\n", expanded_path.c_str() );
-
-            if (nxt_path.empty()) continue;
-
-            wcstring whole_path = nxt_path;
+            wcstring whole_path = next_path;
             append_path_component(whole_path, dir);
             paths.push_back(whole_path);
         }
     }
 
     bool success = false;
-    for (wcstring_list_t::const_iterator iter = paths.begin(); iter != paths.end(); ++iter) {
+    for (const wcstring &dir : paths) {
         struct stat buf;
-        const wcstring &dir = *iter;
         if (wstat(dir, &buf) == 0) {
             if (S_ISDIR(buf.st_mode)) {
                 success = true;
@@ -170,7 +215,7 @@ bool path_get_cdpath(const wcstring &dir, wcstring *out, const wchar_t *wd,
     return success;
 }
 
-bool path_can_be_implicit_cd(const wcstring &path, wcstring *out_path, const wchar_t *wd,
+bool path_can_be_implicit_cd(const wcstring &path, const wcstring &wd, wcstring *out_path,
                              const env_vars_snapshot_t &vars) {
     wcstring exp_path = path;
     expand_tilde(exp_path);
@@ -179,8 +224,6 @@ bool path_can_be_implicit_cd(const wcstring &path, wcstring *out_path, const wch
     if (string_prefixes_string(L"/", exp_path) || string_prefixes_string(L"./", exp_path) ||
         string_prefixes_string(L"../", exp_path) || string_suffixes_string(L"/", exp_path) ||
         exp_path == L"..") {
-        // These paths can be implicit cd, so see if you cd to the path. Note that a single period
-        // cannot (that's used for sourcing files anyways).
         result = path_get_cdpath(exp_path, out_path, wd, vars);
     }
     return result;
@@ -224,16 +267,14 @@ static void maybe_issue_path_warning(const wcstring &which_dir, const wcstring &
                                      bool using_xdg, const wcstring &xdg_var, const wcstring &path,
                                      int saved_errno) {
     wcstring warning_var_name = L"_FISH_WARNED_" + which_dir;
-    if (env_exist(warning_var_name.c_str(), ENV_GLOBAL | ENV_EXPORT)) {
-        return;
-    }
-    env_set(warning_var_name, L"1", ENV_GLOBAL | ENV_EXPORT);
+    auto var = env_get(warning_var_name, ENV_GLOBAL | ENV_EXPORT);
+    if (!var) return;
+    env_set_one(warning_var_name, ENV_GLOBAL | ENV_EXPORT, L"1");
 
     debug(0, custom_error_msg.c_str());
     if (path.empty()) {
         debug(0, _(L"Unable to locate the %ls directory."), which_dir.c_str());
-        debug(0, _(L"Please set the %ls or HOME environment variable "
-                   L"before starting fish."),
+        debug(0, _(L"Please set the %ls or HOME environment variable before starting fish."),
               xdg_var.c_str());
     } else {
         const wchar_t *env_var = using_xdg ? xdg_var.c_str() : L"HOME";
@@ -242,7 +283,7 @@ static void maybe_issue_path_warning(const wcstring &which_dir, const wcstring &
         debug(0, _(L"The error was '%s'."), strerror(saved_errno));
         debug(0, _(L"Please set $%ls to a directory where you have write access."), env_var);
     }
-    fputwc(L'\n', stderr);
+    ignore_result(write(STDERR_FILENO, "\n", 1));
 }
 
 static void path_create(wcstring &path, const wcstring &xdg_var, const wcstring &which_dir,
@@ -254,19 +295,20 @@ static void path_create(wcstring &path, const wcstring &xdg_var, const wcstring 
     // The vars we fetch must be exported. Allowing them to be universal doesn't make sense and
     // allowing that creates a lock inversion that deadlocks the shell since we're called before
     // uvars are available.
-    const env_var_t xdg_dir = env_get_string(xdg_var, ENV_GLOBAL | ENV_EXPORT);
+    const auto xdg_dir = env_get(xdg_var, ENV_GLOBAL | ENV_EXPORT);
     if (!xdg_dir.missing_or_empty()) {
         using_xdg = true;
-        path = xdg_dir + L"/fish";
+        path = xdg_dir->as_string() + L"/fish";
         if (create_directory(path) != -1) {
             path_done = true;
         } else {
             saved_errno = errno;
         }
     } else {
-        const env_var_t home = env_get_string(L"HOME", ENV_GLOBAL | ENV_EXPORT);
+        const auto home = env_get(L"HOME", ENV_GLOBAL | ENV_EXPORT);
         if (!home.missing_or_empty()) {
-            path = home + (which_dir == L"config" ? L"/.config/fish" : L"/.local/share/fish");
+            path = home->as_string() +
+                   (which_dir == L"config" ? L"/.config/fish" : L"/.local/share/fish");
             if (create_directory(path) != -1) {
                 path_done = true;
             } else {

@@ -10,23 +10,21 @@
 #include <unistd.h>
 #include <wchar.h>
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include "builtin.h"
 #include "common.h"
 #include "io.h"
-#include "proc.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 using std::unique_ptr;
 using std::move;
 
-enum { BUILTIN_TEST_SUCCESS = STATUS_BUILTIN_OK, BUILTIN_TEST_FAIL = STATUS_BUILTIN_ERROR };
-
-int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv);
-
+namespace {
 namespace test_expressions {
 
 enum token_t {
@@ -42,6 +40,7 @@ enum token_t {
     test_filetype_G,  // "-G", for check effective group id
     test_filetype_g,  // "-g", for set-group-id
     test_filetype_h,  // "-h", for symbolic links
+    test_filetype_k,  // "-k", for sticky bit
     test_filetype_L,  // "-L", same as -h
     test_filetype_O,  // "-O", for check effective user id
     test_filetype_p,  // "-p", for FIFO
@@ -75,6 +74,36 @@ enum token_t {
     test_paren_close,  // ")", close paren
 };
 
+/// Our number type. We support both doubles and long longs. We have to support these separately
+/// because some integers are not representable as doubles; these may come up in practice (e.g.
+/// inodes).
+class number_t {
+    // A number has an integral base and a floating point delta.
+    // Conceptually the number is base + delta.
+    // We enforce the property that 0 <= delta < 1.
+    long long base;
+    double delta;
+
+   public:
+    number_t(long long base, double delta) : base(base), delta(delta) {
+        assert(0.0 <= delta && delta < 1.0 && "Invalid delta");
+    }
+    number_t() : number_t(0, 0.0) {}
+
+    // Compare two numbers. Returns an integer -1, 0, 1 corresponding to whether we are less than,
+    // equal to, or greater than the rhs.
+    int compare(number_t rhs) const {
+        if (this->base != rhs.base) return (this->base > rhs.base) - (this->base < rhs.base);
+        return (this->delta > rhs.delta) - (this->delta < rhs.delta);
+    }
+
+    // Return true if the number is a tty()/
+    bool isatty() const {
+        if (delta != 0.0 || base > INT_MAX || base < INT_MIN) return false;
+        return ::isatty(static_cast<int>(base));
+    }
+};
+
 static bool binary_primary_evaluate(test_expressions::token_t token, const wcstring &left,
                                     const wcstring &right, wcstring_list_t &errors);
 static bool unary_primary_evaluate(test_expressions::token_t token, const wcstring &arg,
@@ -82,52 +111,52 @@ static bool unary_primary_evaluate(test_expressions::token_t token, const wcstri
 
 enum { UNARY_PRIMARY = 1 << 0, BINARY_PRIMARY = 1 << 1 };
 
-static const struct token_info_t {
+struct token_info_t {
     token_t tok;
-    const wchar_t *string;
     unsigned int flags;
-} token_infos[] = {{test_unknown, L"", 0},
-                   {test_bang, L"!", 0},
-                   {test_filetype_b, L"-b", UNARY_PRIMARY},
-                   {test_filetype_c, L"-c", UNARY_PRIMARY},
-                   {test_filetype_d, L"-d", UNARY_PRIMARY},
-                   {test_filetype_e, L"-e", UNARY_PRIMARY},
-                   {test_filetype_f, L"-f", UNARY_PRIMARY},
-                   {test_filetype_G, L"-G", UNARY_PRIMARY},
-                   {test_filetype_g, L"-g", UNARY_PRIMARY},
-                   {test_filetype_h, L"-h", UNARY_PRIMARY},
-                   {test_filetype_L, L"-L", UNARY_PRIMARY},
-                   {test_filetype_O, L"-O", UNARY_PRIMARY},
-                   {test_filetype_p, L"-p", UNARY_PRIMARY},
-                   {test_filetype_S, L"-S", UNARY_PRIMARY},
-                   {test_filesize_s, L"-s", UNARY_PRIMARY},
-                   {test_filedesc_t, L"-t", UNARY_PRIMARY},
-                   {test_fileperm_r, L"-r", UNARY_PRIMARY},
-                   {test_fileperm_u, L"-u", UNARY_PRIMARY},
-                   {test_fileperm_w, L"-w", UNARY_PRIMARY},
-                   {test_fileperm_x, L"-x", UNARY_PRIMARY},
-                   {test_string_n, L"-n", UNARY_PRIMARY},
-                   {test_string_z, L"-z", UNARY_PRIMARY},
-                   {test_string_equal, L"=", BINARY_PRIMARY},
-                   {test_string_not_equal, L"!=", BINARY_PRIMARY},
-                   {test_number_equal, L"-eq", BINARY_PRIMARY},
-                   {test_number_not_equal, L"-ne", BINARY_PRIMARY},
-                   {test_number_greater, L"-gt", BINARY_PRIMARY},
-                   {test_number_greater_equal, L"-ge", BINARY_PRIMARY},
-                   {test_number_lesser, L"-lt", BINARY_PRIMARY},
-                   {test_number_lesser_equal, L"-le", BINARY_PRIMARY},
-                   {test_combine_and, L"-a", 0},
-                   {test_combine_or, L"-o", 0},
-                   {test_paren_open, L"(", 0},
-                   {test_paren_close, L")", 0}};
+};
 
-const token_info_t *token_for_string(const wcstring &str) {
-    for (size_t i = 0; i < sizeof token_infos / sizeof *token_infos; i++) {
-        if (str == token_infos[i].string) {
-            return &token_infos[i];
-        }
-    }
-    return &token_infos[0];  // unknown
+const token_info_t * const token_for_string(const wcstring &str) {
+    static const std::map<wcstring, const token_info_t> token_infos = {
+        {L"", {test_unknown, 0}},
+        {L"!", {test_bang, 0}},
+        {L"-b", {test_filetype_b, UNARY_PRIMARY}},
+        {L"-c", {test_filetype_c, UNARY_PRIMARY}},
+        {L"-d", {test_filetype_d, UNARY_PRIMARY}},
+        {L"-e", {test_filetype_e, UNARY_PRIMARY}},
+        {L"-f", {test_filetype_f, UNARY_PRIMARY}},
+        {L"-G", {test_filetype_G, UNARY_PRIMARY}},
+        {L"-g", {test_filetype_g, UNARY_PRIMARY}},
+        {L"-h", {test_filetype_h, UNARY_PRIMARY}},
+        {L"-k", {test_filetype_k, UNARY_PRIMARY}},
+        {L"-L", {test_filetype_L, UNARY_PRIMARY}},
+        {L"-O", {test_filetype_O, UNARY_PRIMARY}},
+        {L"-p", {test_filetype_p, UNARY_PRIMARY}},
+        {L"-S", {test_filetype_S, UNARY_PRIMARY}},
+        {L"-s", {test_filesize_s, UNARY_PRIMARY}},
+        {L"-t", {test_filedesc_t, UNARY_PRIMARY}},
+        {L"-r", {test_fileperm_r, UNARY_PRIMARY}},
+        {L"-u", {test_fileperm_u, UNARY_PRIMARY}},
+        {L"-w", {test_fileperm_w, UNARY_PRIMARY}},
+        {L"-x", {test_fileperm_x, UNARY_PRIMARY}},
+        {L"-n", {test_string_n, UNARY_PRIMARY}},
+        {L"-z", {test_string_z, UNARY_PRIMARY}},
+        {L"=", {test_string_equal, BINARY_PRIMARY}},
+        {L"!=", {test_string_not_equal, BINARY_PRIMARY}},
+        {L"-eq", {test_number_equal, BINARY_PRIMARY}},
+        {L"-ne", {test_number_not_equal, BINARY_PRIMARY}},
+        {L"-gt", {test_number_greater, BINARY_PRIMARY}},
+        {L"-ge", {test_number_greater_equal, BINARY_PRIMARY}},
+        {L"-lt", {test_number_lesser, BINARY_PRIMARY}},
+        {L"-le", {test_number_lesser_equal, BINARY_PRIMARY}},
+        {L"-a", {test_combine_and, 0}},
+        {L"-o", {test_combine_or, 0}},
+        {L"(", {test_paren_open, 0}},
+        {L")", {test_paren_close, 0}}};
+
+    auto t = token_infos.find(str);
+    if (t != token_infos.end()) return &t->second;
+    return &token_infos.find(L"")->second;
 }
 
 // Grammar.
@@ -156,7 +185,7 @@ class test_parser {
     const wcstring &arg(unsigned int idx) { return strings.at(idx); }
 
    public:
-    explicit test_parser(const wcstring_list_t &val) : strings(val) {}
+    explicit test_parser(wcstring_list_t val) : strings(std::move(val)) {}
 
     unique_ptr<expression> parse_expression(unsigned int start, unsigned int end);
     unique_ptr<expression> parse_3_arg_expression(unsigned int start, unsigned int end);
@@ -184,15 +213,15 @@ struct range_t {
 /// Base class for expressions.
 class expression {
    protected:
-    expression(token_t what, range_t where) : token(what), range(where) {}
+    expression(token_t what, range_t where) : token(what), range(std::move(where)) {}
 
    public:
     const token_t token;
     range_t range;
 
-    virtual ~expression() {}
+    virtual ~expression() = default;
 
-    /// Evaluate returns true if the expression is true (i.e. BUILTIN_TEST_SUCCESS).
+    /// Evaluate returns true if the expression is true (i.e. STATUS_CMD_OK).
     virtual bool evaluate(wcstring_list_t &errors) = 0;
 };
 
@@ -200,9 +229,9 @@ class expression {
 class unary_primary : public expression {
    public:
     wcstring arg;
-    unary_primary(token_t tok, range_t where, const wcstring &what)
-        : expression(tok, where), arg(what) {}
-    bool evaluate(wcstring_list_t &errors);
+    unary_primary(token_t tok, range_t where, wcstring what)
+        : expression(tok, where), arg(std::move(what)) {}
+    bool evaluate(wcstring_list_t &errors) override;
 };
 
 /// Two argument primary like foo != bar.
@@ -211,9 +240,9 @@ class binary_primary : public expression {
     wcstring arg_left;
     wcstring arg_right;
 
-    binary_primary(token_t tok, range_t where, const wcstring &left, const wcstring &right)
-        : expression(tok, where), arg_left(left), arg_right(right) {}
-    bool evaluate(wcstring_list_t &errors);
+    binary_primary(token_t tok, range_t where, wcstring left, wcstring right)
+        : expression(tok, where), arg_left(std::move(left)), arg_right(std::move(right)) {}
+    bool evaluate(wcstring_list_t &errors) override;
 };
 
 /// Unary operator like bang.
@@ -222,7 +251,7 @@ class unary_operator : public expression {
     unique_ptr<expression> subject;
     unary_operator(token_t tok, range_t where, unique_ptr<expression> exp)
         : expression(tok, where), subject(move(exp)) {}
-    bool evaluate(wcstring_list_t &errors);
+    bool evaluate(wcstring_list_t &errors) override;
 };
 
 /// Combining expression. Contains a list of AND or OR expressions. It takes more than two so that
@@ -233,15 +262,15 @@ class combining_expression : public expression {
     const std::vector<token_t> combiners;
 
     combining_expression(token_t tok, range_t where, std::vector<unique_ptr<expression>> exprs,
-                         std::vector<token_t> combs)
+                         const std::vector<token_t> &combs)
         : expression(tok, where), subjects(std::move(exprs)), combiners(std::move(combs)) {
         // We should have one more subject than combiner.
         assert(subjects.size() == combiners.size() + 1);
     }
 
-    virtual ~combining_expression() {}
+    ~combining_expression() override = default;
 
-    bool evaluate(wcstring_list_t &errors);
+    bool evaluate(wcstring_list_t &errors) override;
 };
 
 /// Parenthetical expression.
@@ -251,7 +280,7 @@ class parenthetical_expression : public expression {
     parenthetical_expression(token_t tok, range_t where, unique_ptr<expression> expr)
         : expression(tok, where), contents(move(expr)) {}
 
-    virtual bool evaluate(wcstring_list_t &errors);
+    bool evaluate(wcstring_list_t &errors) override;
 };
 
 void test_parser::add_error(const wchar_t *fmt, ...) {
@@ -592,29 +621,68 @@ bool combining_expression::evaluate(wcstring_list_t &errors) {
     }
 
     errors.push_back(format_string(L"Unknown token type in %s", __func__));
-    return BUILTIN_TEST_FAIL;
+    return STATUS_INVALID_ARGS;
 }
 
 bool parenthetical_expression::evaluate(wcstring_list_t &errors) {
     return contents->evaluate(errors);
 }
 
+// Parse a double from arg. Return true on success, false on failure.
+static bool parse_double(const wchar_t *arg, double *out_res) {
+    // Consume leading spaces.
+    while (arg && *arg != L'\0' && iswspace(*arg)) arg++;
+    errno = 0;
+    wchar_t *end = NULL;
+    *out_res = fish_wcstod(arg, &end);
+    // Consume trailing spaces.
+    while (end && *end != L'\0' && iswspace(*end)) end++;
+    return errno == 0 && end > arg && *end == L'\0';
+}
+
 // IEEE 1003.1 says nothing about what it means for two strings to be "algebraically equal". For
 // example, should we interpret 0x10 as 0, 10, or 16? Here we use only base 10 and use wcstoll,
 // which allows for leading + and -, and whitespace. This is consistent, albeit a bit more lenient
 // since we allow trailing whitespace, with other implementations such as bash.
-static bool parse_number(const wcstring &arg, long long *out, wcstring_list_t &errors) {
-    *out = fish_wcstoll(arg.c_str());
-    if (errno) {
-        errors.push_back(format_string(_(L"invalid integer '%ls'"), arg.c_str()));
+static bool parse_number(const wcstring &arg, number_t *number, wcstring_list_t &errors) {
+    const wchar_t *argcs = arg.c_str();
+    double floating = 0;
+    bool got_float = parse_double(argcs, &floating);
+    errno = 0;
+    long long integral = fish_wcstoll(argcs);
+    bool got_int = (errno == 0);
+    if (got_int) {
+        // Here the value is just an integer; ignore the floating point parse because it may be
+        // invalid (e.g. not a representable integer).
+        *number = number_t{integral, 0.0};
+
+        return true;
+    } else if (got_float && errno != ERANGE) {
+        // Here we parsed an (in range) floating point value that could not be parsed as an integer.
+        // Break the floating point value into base and delta. Ensure that base is <= the floating
+        // point value.
+        double intpart = std::floor(floating);
+        double delta = floating - intpart;
+        *number = number_t{static_cast<long long>(intpart), delta};
+
+        return true;
+    } else {
+        // We could not parse a float or an int.
+        // Check for special fish_wcsto* value or show standard EINVAL/ERANGE error.
+        if (errno == -1) {
+            errors.push_back(format_string(_(L"Integer %lld in '%ls' followed by non-digit"),
+                                           integral, argcs));
+        } else {
+            errors.push_back(format_string(L"%s: '%ls'", strerror(errno), argcs));
+        }
+        return false;
     }
-    return !errno;
 }
 
 static bool binary_primary_evaluate(test_expressions::token_t token, const wcstring &left,
                                     const wcstring &right, wcstring_list_t &errors) {
     using namespace test_expressions;
-    long long left_num, right_num;
+    number_t ln, rn;
     switch (token) {
         case test_string_equal: {
             return left == right;
@@ -623,28 +691,28 @@ static bool binary_primary_evaluate(test_expressions::token_t token, const wcstr
             return left != right;
         }
         case test_number_equal: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num == right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) == 0;
         }
         case test_number_not_equal: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num != right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) != 0;
         }
         case test_number_greater: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num > right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) > 0;
         }
         case test_number_greater_equal: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num >= right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) >= 0;
         }
         case test_number_lesser: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num < right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) < 0;
         }
         case test_number_lesser_equal: {
-            return parse_number(left, &left_num, errors) &&
-                   parse_number(right, &right_num, errors) && left_num <= right_num;
+            return parse_number(left, &ln, errors) && parse_number(right, &rn, errors) &&
+                   ln.compare(rn) <= 0;
         }
         default: {
             errors.push_back(format_string(L"Unknown token type in %s", __func__));
@@ -657,7 +725,6 @@ static bool unary_primary_evaluate(test_expressions::token_t token, const wcstri
                                    wcstring_list_t &errors) {
     using namespace test_expressions;
     struct stat buf;
-    long long num;
     switch (token) {
         case test_filetype_b: {  // "-b", for block special files
             return !wstat(arg, &buf) && S_ISBLK(buf.st_mode);
@@ -684,6 +751,13 @@ static bool unary_primary_evaluate(test_expressions::token_t token, const wcstri
         case test_filetype_L: {  // "-L", same as -h
             return !lwstat(arg, &buf) && S_ISLNK(buf.st_mode);
         }
+        case test_filetype_k: {  // "-k", for sticky bit
+#ifdef S_ISVTX
+            return !lwstat(arg, &buf) && buf.st_mode & S_ISVTX;
+#else
+            return false;
+#endif
+        }
         case test_filetype_O: {  // "-O", for check effective user id
             return !wstat(arg, &buf) && geteuid() == buf.st_uid;
         }
@@ -697,7 +771,8 @@ static bool unary_primary_evaluate(test_expressions::token_t token, const wcstri
             return !wstat(arg, &buf) && buf.st_size > 0;
         }
         case test_filedesc_t: {  // "-t", whether the fd is associated with a terminal
-            return parse_number(arg, &num, errors) && num == (int)num && isatty((int)num);
+            number_t num;
+            return parse_number(arg, &num, errors) && num.isatty();
         }
         case test_fileperm_r: {  // "-r", read permission
             return !waccess(arg, R_OK);
@@ -723,7 +798,8 @@ static bool unary_primary_evaluate(test_expressions::token_t token, const wcstri
         }
     }
 }
-};
+};  // namespace test_expressions
+};  // anonymous namespace
 
 /// Evaluate a conditional expression given the arguments. If fromtest is set, the caller is the
 /// test or [ builtin; with the pointer giving the name of the command. for POSIX conformance this
@@ -735,7 +811,7 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     using namespace test_expressions;
 
     // The first argument should be the name of the command ('test').
-    if (!argv[0]) return BUILTIN_TEST_FAIL;
+    if (!argv[0]) return STATUS_INVALID_ARGS;
 
     // Whether we are invoked with bracket '[' or not.
     wchar_t *program_name = argv[0];
@@ -752,7 +828,7 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             argc--;
         } else {
             streams.err.append(L"[: the last argument must be ']'\n");
-            return BUILTIN_TEST_FAIL;
+            return STATUS_INVALID_ARGS;
         }
     }
 
@@ -760,10 +836,10 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     const wcstring_list_t args(argv + 1, argv + 1 + argc);
 
     if (argc == 0) {
-        return BUILTIN_TEST_FAIL;  // Per 1003.1, exit false.
+        return STATUS_INVALID_ARGS;  // Per 1003.1, exit false.
     } else if (argc == 1) {
         // Per 1003.1, exit true if the arg is non-empty.
-        return args.at(0).empty() ? BUILTIN_TEST_FAIL : BUILTIN_TEST_SUCCESS;
+        return args.at(0).empty() ? STATUS_CMD_ERROR : STATUS_CMD_OK;
     }
 
     // Try parsing
@@ -778,16 +854,18 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         streams.err.append_format(L"and returned parse error: %ls\n", err.c_str());
 #endif
         streams.err.append(err);
-        return BUILTIN_TEST_FAIL;
+        return STATUS_CMD_ERROR;
     }
 
     wcstring_list_t eval_errors;
     bool result = expr->evaluate(eval_errors);
-    if (!eval_errors.empty() && !should_suppress_stderr_for_tests()) {
-        streams.err.append(L"test returned eval errors:\n");
-        for (size_t i = 0; i < eval_errors.size(); i++) {
-            streams.err.append_format(L"\t%ls\n", eval_errors.at(i).c_str());
+    if (!eval_errors.empty()) {
+        if (!should_suppress_stderr_for_tests()) {
+            for (size_t i = 0; i < eval_errors.size(); i++) {
+                streams.err.append_format(L"\t%ls\n", eval_errors.at(i).c_str());
+            }
         }
+        return STATUS_INVALID_ARGS;
     }
-    return result ? BUILTIN_TEST_SUCCESS : BUILTIN_TEST_FAIL;
+    return result ? STATUS_CMD_OK : STATUS_CMD_ERROR;
 }

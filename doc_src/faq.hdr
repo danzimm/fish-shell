@@ -12,18 +12,19 @@
 - <a href='#faq-prompt'>How do I set my prompt?</a>
 - <a href='#faq-cmd-history'>How do I run a command from history?</a>
 - <a href='#faq-subcommand'>How do I run a subcommand? The backtick doesn't work!</a>
+- <a href='#faq-pkg-config'>My command (pkg-config) gives its output as a single long string?</a>
 - <a href='#faq-exit-status'>How do I get the exit status of a command?</a>
 - <a href='#faq-single-env'>How do I set an environment variable for just one command?</a>
+- <a href='#faq-exported-uvar'>Why doesn't `set -Ux` (exported universal variables) seem to work?</a>
 - <a href='#faq-customize-colors'>How do I customize my syntax highlighting colors?</a>
 - <a href='#faq-update-manpage-completions'>How do I update man page completions?</a>
-- <a href='#faq-cwd-symlink'>Why does cd, pwd and other fish commands always resolve symlinked directories to their canonical path?</a>
 - <a href='#faq-cd-implicit'>I accidentally entered a directory path and fish changed directory. What happened?</a>
 - <a href='#faq-open'>The open command doesn't work.</a>
 - <a href='#faq-default'>How do I make fish my default shell?</a>
 - <a href='#faq-titlebar'>I'm seeing weird output before each prompt when using screen. What's wrong?</a>
 - <a href='#faq-greeting'>How do I change the greeting message?</a>
 - <a href='#faq-history'>Why doesn't history substitution ("!$" etc.) work?</a>
-- <a href='#faq-cd-minus'>How to make `-` a shortcut for `cd -`?</a>
+- <a href='#faq-cd-minus'>How can I use `-` as a shortcut for `cd -`?</a>
 - <a href='#faq-uninstalling'>How do I uninstall fish?</a>
 - <a href='#faq-third-party'>Where can I find extra tools for fish?</a>
 
@@ -81,10 +82,56 @@ for i in (ls)
 end
 \endfish
 
+\section faq-pkg-config My command (pkg-config) gives its output as a single long string?
+
+Unlike other shells, fish splits command substitutions only on newlines, not spaces or tabs or the characters in $IFS.
+
+That means if you run
+
+\fish{cli-dark}
+echo x(printf '%s ' a b c)x
+\endfish
+
+It will print `xa b c x`. But if you do
+
+\fish{cli-dark}
+echo x(printf '%s\n' a b c)x
+\endfish
+
+it will print `xax xbx xcx`.
+
+In the overwhelming majority of cases, splitting on spaces is unwanted, so this is an improvement.
+
+However sometimes, especially with `pkg-config` and related tools, splitting on spaces is needed.
+
+In these cases use `string split " "` like:
+
+\fish{cli-dark}
+g++ example_01.cpp (pkg-config --cflags --libs gtk+-2.0 | string split " ")
+\endfish
 
 \section faq-exit-status How do I get the exit status of a command?
 
 Use the `$status` variable. This replaces the `$?` variable used in some other shells.
+
+\fish{cli-dark}
+somecommand
+if test $status -eq 7
+    echo "That's my lucky number!"
+end
+\endfish
+
+If you are just interested in success or failure, you can run the command directly as the if-condition:
+
+\fish{cli-dark}
+if somecommand
+    echo "Command succeeded"
+else
+    echo "Command failed"
+end
+\endfish
+
+See the documentation for <a href="commands.html#test">`test`</a> and <a href="commands.html#if">`if`</a> for more information.
 
 <hr>
 \section faq-single-env How do I set an environment variable for just one command?
@@ -104,6 +151,26 @@ begin
 end
 \endfish
 
+\section faq-exported-uvar Why doesn't `set -Ux` (exported universal variables) seem to work?
+
+A global variable of the same name already exists.
+
+Environment variables such as `EDITOR` or `TZ` can be set universally using `set -Ux`.  However, if
+there is an environment variable already set before fish starts (such as by login scripts or system
+administrators), it is imported into fish as a global variable. The <a
+href="index.html#variables-scope">variable scopes</a> are searched from the "inside out", which
+means that local variables are checked first, followed by global variables, and finally universal
+variables.
+
+This means that the global value takes precedence over the universal value.
+
+To avoid this problem, consider changing the setting which fish inherits. If this is not possible,
+add a statement to your <a href="index.html#">user initialization file</a> (usually
+`~/.config/fish/config.fish`):
+
+\fish{cli-dark}
+set -gx EDITOR vim
+\endfish
 
 \section faq-customize-colors How do I customize my syntax highlighting colors?
 
@@ -113,17 +180,6 @@ Use the web configuration tool, <a href="commands.html#fish_config">`fish_config
 \section faq-update-manpage-completions How do I update man page completions?
 
 Use the <a href="commands.html#fish_update_completions">`fish_update_completions`</a> command.
-
-<hr>
-\section faq-cwd-symlink Why does cd, $PWD and and various fish commands always resolve symlinked directories to their canonical path?
-
-<i>For example if `~/images` is a symlink to `~/Documents/Images`, if I write '`cd images`', my prompt will say `~/Documents/Images`, not `~/images`.</i>
-
-Because it is impossible to consistently keep symlinked directories unresolved. It is indeed possible to do this partially, and many other shells do so. But it was felt there are enough serious corner cases that this is a bad idea. Most such issues have to do with how '..' is handled, and are variations of the following example:
-
-Writing `cd images; ls ..` given the above directory structure would list the contents of `~/Documents`, not of `~`, even though using `cd ..` changes the current directory to `~`, and the prompt, the `pwd` builtin and many other directory information sources suggest that the current directory is `~/images` and its parent is `~`. This issue is not possible to fix without either making every single command into a builtin, breaking Unix semantics or implementing kludges in every single command. This issue can also be seen when doing IO redirection.
-
-Another related issue is that many programs that operate on recursive directory trees, like the find command, silently ignore symlinked directories. For example, ```find $PWD -name '*.txt'``` silently fails in shells that don't resolve symlinked paths.
 
 <hr>
 \section faq-cd-implicit I accidentally entered a directory path and fish changed directory. What happened?
@@ -204,7 +260,7 @@ Fish history recall is very simple yet effective:
 See <a href='index.html#editor'>documentation</a> for more details about line editing in fish.
 
 <hr>
-\section faq-cd-minus How to make `-` a shortcut for `cd -`?
+\section faq-cd-minus How can I use `-` as a shortcut for `cd -`?
 
 In fish versions prior to 2.5.0 it was possible to create a function named `-` that would do `cd -`. Changes in the 2.5.0 release included several bug fixes that enforce the rule that a bare hyphen is not a valid function (or variable) name. However, you can achieve the same effect via an abbreviation:
 
@@ -241,7 +297,7 @@ The fish user community extends fish in unique and useful ways via scripts that 
 - <a href="https://github.com/oh-my-fish/oh-my-fish">Oh My Fish</a>
 - <a href="https://github.com/justinmayer/tacklebox">Tacklebox</a>
 
-This is not an exhaustive list and the fish project has no opinion regarding the merits of the repositories listed above or the scripts found therein. We mention these only because you may find within them a solution to a need you have such as supporting the `&&` and `||` operators or improved integration with other tools that you use.
+This is not an exhaustive list and the fish project has no opinion regarding the merits of the repositories listed above or the scripts found therein.
 
 \htmlonly[block]
 </div>

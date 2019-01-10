@@ -45,16 +45,29 @@ Cambridge, MA 02139, USA.  */
 
 class wgetopter_t {
    private:
+    bool initialized = false;
+    bool missing_arg_return_colon = false;
+
     void exchange(wchar_t **argv);
-    const wchar_t *_wgetopt_initialize(const wchar_t *optstring);
+    void _wgetopt_initialize(const wchar_t *optstring);
     int _wgetopt_internal(int argc, wchar_t **argv, const wchar_t *optstring,
                           const struct woption *longopts, int *longind, int long_only);
+    int _advance_to_next_argv(int argc, wchar_t **argv, const struct woption *longopts);
+    int _handle_short_opt(int argc, wchar_t **argv);
+    bool _handle_long_opt(int argc, wchar_t **argv, const struct woption *longopts, int *longind,
+                          int long_only, int *retval);
+    const struct woption *_find_matching_long_opt(const struct woption *longopts, wchar_t *nameend,
+                                                  int *exact, int *ambig, int *indfound);
+    void _update_long_opt(int argc, wchar_t **argv, const struct woption *pfound, wchar_t *nameend,
+                          int *longind, int option_index, int *retval);
 
    public:
     // For communication from `getopt' to the caller. When `getopt' finds an option that takes an
     // argument, the argument value is returned here. Also, when `ordering' is RETURN_IN_ORDER, each
     // non-option ARGV-element is returned here.
-    wchar_t *woptarg;
+    wchar_t *woptarg = nullptr;
+
+    const wchar_t *shortopts = nullptr;
 
     // Index in ARGV of the next element to be scanned. This is used for communication to and from
     // the caller and for communication between successive calls to `getopt'.
@@ -68,21 +81,21 @@ class wgetopter_t {
     // so far.
 
     // XXX 1003.2 says this must be 1 before any call.
-    int woptind;
+    int woptind = 0;
 
     // The next char to be scanned in the option-element in which the last option character we
     // returned was found. This allows us to pick up the scan where we left off.
     //
     // If this is zero, or a null string, it means resume the scan by advancing to the next
     // ARGV-element.
-    wchar_t *nextchar;
+    wchar_t *nextchar = nullptr;
 
     // Callers store zero here to inhibit the error message for unrecognized options.
-    int wopterr;
+    int wopterr = 0;
 
     // Set to an option character which was unrecognized. This must be initialized on some systems
     // to avoid linking in the system's own getopt implementation.
-    int woptopt;
+    int woptopt = '?';
 
     // Describe how to deal with options that follow non-option ARGV-elements.
     //
@@ -105,29 +118,19 @@ class wgetopter_t {
     // The special argument `--' forces an end of option-scanning regardless of the value of
     // `ordering'.  In the case of RETURN_IN_ORDER, only `--' can cause `getopt' to return EOF with
     // `woptind' != ARGC.
-    enum { REQUIRE_ORDER, PERMUTE, RETURN_IN_ORDER } ordering;
+    enum { REQUIRE_ORDER, PERMUTE, RETURN_IN_ORDER } ordering = PERMUTE;
 
     // Handle permutation of arguments.
 
     // Describe the part of ARGV that contains non-options that have been skipped.  `first_nonopt'
     // is the index in ARGV of the first of them; `last_nonopt' is the index after the last of them.
-    int first_nonopt;
-    int last_nonopt;
+    int first_nonopt = 0;
+    int last_nonopt = 0;
 
-    wgetopter_t()
-        : woptarg(NULL),
-          woptind(0),
-          nextchar(0),
-          wopterr(0),
-          woptopt('?'),
-          ordering(),
-          first_nonopt(0),
-          last_nonopt(0) {}
+    wgetopter_t() {}
 
     int wgetopt_long(int argc, wchar_t **argv, const wchar_t *options,
                      const struct woption *long_options, int *opt_index);
-    int wgetopt_long_only(int argc, wchar_t **argv, const wchar_t *options,
-                          const struct woption *long_options, int *opt_index);
 };
 
 /// Describe the long-named options requested by the application. The LONG_OPTIONS argument to
@@ -158,7 +161,7 @@ struct woption {
     int *flag;
     /// If \c flag is non-null, this is the value that flag will be set to. Otherwise, this is the
     /// return-value of the function call.
-    int val;
+    wchar_t val;
 };
 
 // Names for the values of the `has_arg' field of `struct option'.

@@ -14,19 +14,21 @@ function mktemp
     set -l opts
     while set -q argv[1]
         switch $argv[1]
-        case -d
-            set opts $opts d
-        case -t
-            set opts $opts t
-        case --
-            set -e argv[1]
-            break
-        case '-*'
-            echo "mktemp: unknown flag $argv[1]" >&2
-            _mktemp_help >&2
-            exit 2
-        case '*'
-            break
+            case -d
+                set opts $opts d
+            case -t
+                set opts $opts t
+            case -u
+                set opts $opts u
+            case --
+                set -e argv[1]
+                break
+            case '-*'
+                echo "mktemp: unknown flag $argv[1]" >&2
+                _mktemp_help >&2
+                exit 2
+            case '*'
+                break
         end
         set -e argv[1]
     end
@@ -50,8 +52,7 @@ function mktemp
     # So let's outlaw them anywhere besides the end.
     # Similarly GNU sed requires at least 3 X's, BSD sed requires none. Let's require 3.
     begin
-        set -l IFS
-        printf '%s' "$template" | read -la chars
+        set -l chars (string split '' -- $template)
         set -l found_x
         for c in $chars
             if test $c = X
@@ -70,29 +71,29 @@ function mktemp
     end
 
     set -l args
+    if contains u $opts
+        set args $args -u
+    end
     if contains d $opts
         set args $args -d
     end
     if contains t $opts
         switch $template
-        case '/*'
-            echo "mktemp: invalid template '$template' with -t, template must not be absolute" >&2
-            _mktemp_help >&2
-            exit 1
+            case '/*'
+                echo "mktemp: invalid template '$template' with -t, template must not be absolute" >&2
+                _mktemp_help >&2
+                exit 1
         end
 
-        switch "$TMPDIR"
-        case ''
-            set template /tmp/$template
-        case '*/'
-            set template $TMPDIR$template
-        case '*'
+        if set -q TMPDIR[1]
             set template $TMPDIR/$template
+        else
+            set template /tmp/$template
         end
     end
     set args $args $template
 
-    command mktemp $args
+    realpath (command mktemp $args)
 end
 
 function _mktemp_help

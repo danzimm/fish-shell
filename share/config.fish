@@ -5,15 +5,15 @@
 # Set default field separators
 #
 set -g IFS \n\ \t
+set -qg __fish_added_user_paths
+or set -g __fish_added_user_paths
 
 #
 # Create the default command_not_found handler
 #
 function __fish_default_command_not_found_handler
-    echo "fish: Unknown command '$argv'" >&2
+    printf "fish: Unknown command '%s'\n" (string escape -- $argv) >&2
 end
-
-set -g version $FISH_VERSION
 
 if status --is-interactive
     # The user has seemingly explicitly launched an old fish with too-new scripts installed.
@@ -25,7 +25,7 @@ if status --is-interactive
         # These "XXX nostring" hacks were added for 2.3.1
         set_color --bold
         echo "You appear to be trying to launch an old fish binary with newer scripts "
-        echo "installed into" (set_color --underline)"$__fish_datadir"
+        echo "installed into" (set_color --underline)"$__fish_data_dir"
         set_color normal
         echo -e "\nThis is an unsupported configuration.\n"
         set_color yellow
@@ -34,9 +34,8 @@ if status --is-interactive
         # Remove this code when we've made it safer to upgrade fish.
     else
         # Enable truecolor/24-bit support for select terminals
-        # Ignore Neovim (in 0.1.4 at least), Screen and emacs' ansi-term as they swallow the sequences, rendering the text white.
-        if not set -q NVIM_LISTEN_ADDRESS
-            and not set -q STY
+        # Ignore Screen and emacs' ansi-term as they swallow the sequences, rendering the text white.
+        if not set -q STY
             and not string match -q -- 'eterm*' $TERM
             and begin
                 set -q KONSOLE_PROFILE_NAME # KDE's konsole
@@ -63,19 +62,7 @@ end
 # unless they already exist
 #
 
-set -l configdir ~/.config
-
-if set -q XDG_CONFIG_HOME
-    set configdir $XDG_CONFIG_HOME
-end
-
-set -l userdatadir ~/.local/share
-
-if set -q XDG_DATA_HOME
-    set userdatadir $XDG_DATA_HOME
-end
-
-# __fish_datadir, __fish_sysconfdir, __fish_help_dir, __fish_bin_dir
+# __fish_data_dir, __fish_sysconf_dir, __fish_help_dir, __fish_bin_dir
 # are expected to have been set up by read_init from fish.cpp
 
 # Grab extra directories (as specified by the build process, usually for
@@ -83,27 +70,34 @@ end
 set -l __extra_completionsdir
 set -l __extra_functionsdir
 set -l __extra_confdir
-if test -f $__fish_datadir/__fish_build_paths.fish
-    source $__fish_datadir/__fish_build_paths.fish
+if test -f $__fish_data_dir/__fish_build_paths.fish
+    source $__fish_data_dir/__fish_build_paths.fish
 end
 
 # Set up function and completion paths. Make sure that the fish
 # default functions/completions are included in the respective path.
 
 if not set -q fish_function_path
-    set fish_function_path $configdir/fish/functions $__fish_sysconfdir/functions $__extra_functionsdir $__fish_datadir/functions
+    set fish_function_path $__fish_config_dir/functions $__fish_sysconf_dir/functions $__extra_functionsdir $__fish_data_dir/functions
 end
 
-if not contains -- $__fish_datadir/functions $fish_function_path
-    set fish_function_path $fish_function_path $__fish_datadir/functions
+if not contains -- $__fish_data_dir/functions $fish_function_path
+    set fish_function_path $fish_function_path $__fish_data_dir/functions
 end
 
 if not set -q fish_complete_path
-    set fish_complete_path $configdir/fish/completions $__fish_sysconfdir/completions $__extra_completionsdir $__fish_datadir/completions $userdatadir/fish/generated_completions
+    set fish_complete_path $__fish_config_dir/completions $__fish_sysconf_dir/completions $__extra_completionsdir $__fish_data_dir/completions $__fish_user_data_dir/generated_completions
 end
 
-if not contains -- $__fish_datadir/completions $fish_complete_path
-    set fish_complete_path $fish_complete_path $__fish_datadir/completions
+if not contains -- $__fish_data_dir/completions $fish_complete_path
+    set fish_complete_path $fish_complete_path $__fish_data_dir/completions
+end
+
+# This cannot be in an autoload-file because `:.fish` is an invalid filename on windows.
+function :
+    # no-op function for compatibility with sh, bash, and others.
+    # Often used to insert a comment into a chain of commands without having
+    # it eat up the remainder of the line, handy in Makefiles.
 end
 
 #
@@ -120,79 +114,29 @@ if test -d /usr/xpg4/bin
     end
 end
 
-# OS X-ism: Load the path files out of /etc/paths and /etc/paths.d/*
-set -g __fish_tmp_path $PATH
-function __fish_load_path_helper_paths
-    # We want to rearrange the path to reflect this order. Delete that path component if it exists and then prepend it.
-    # Since we are prepending but want to preserve the order of the input file, we reverse the array, append, and then reverse it again
-    set __fish_tmp_path $__fish_tmp_path[-1..1]
-    while read -l new_path_comp
-        if test -d $new_path_comp
-            set -l where (contains -i -- $new_path_comp $__fish_tmp_path)
-            and set -e __fish_tmp_path[$where]
-            set __fish_tmp_path $new_path_comp $__fish_tmp_path
-        end
-    end
-    set __fish_tmp_path $__fish_tmp_path[-1..1]
-end
-test -r /etc/paths
-and __fish_load_path_helper_paths </etc/paths
-for pathfile in /etc/paths.d/*
-    __fish_load_path_helper_paths <$pathfile
-end
-set -xg PATH $__fish_tmp_path
-set -e __fish_tmp_path
-functions -e __fish_load_path_helper_paths
-
-# OS X-ism: Load the manpath files out of /etc/manpaths and /etc/manpaths.d/*
-if set -q MANPATH
-    set -g __fish_tmp_manpath $MANPATH
-    function __fish_load_manpath_helper_manpaths
-        # We want to rearrange the manpath to reflect this order. Delete that manpath component if it exists and then prepend it.
-        # Since we are prepending but want to preserve the order of the input file, we reverse the array, append, and then reverse it again
-        set __fish_tmp_manpath $__fish_tmp_manpath[-1..1]
-        while read -l new_manpath_comp
-            if test -d $new_manpath_comp
-                set -l where (contains -i -- $new_manpath_comp $__fish_tmp_manpath)
-                and set -e __fish_tmp_manpath[$where]
-                set __fish_tmp_manpath $new_manpath_comp $__fish_tmp_manpath
-            end
-        end
-        set __fish_tmp_manpath $__fish_tmp_manpath[-1..1]
-    end
-    test -r /etc/manpaths
-    and __fish_load_manpath_helper_manpaths </etc/manpaths
-    for manpathfile in /etc/manpaths.d/*
-        __fish_load_manpath_helper_manpaths <$manpathfile
-    end
-    set -xg MANPATH $__fish_tmp_manpath
-    set -e __fish_tmp_manpath
-    functions -e __fish_load_manpath_helper_manpaths
-end
-
-
 # Add a handler for when fish_user_path changes, so we can apply the same changes to PATH
-# Invoke it immediately to apply the current value of fish_user_path
 function __fish_reconstruct_path -d "Update PATH when fish_user_paths changes" --on-variable fish_user_paths
     set -l local_path $PATH
-    set -l x
+
     for x in $__fish_added_user_paths
         set -l idx (contains --index -- $x $local_path)
         and set -e local_path[$idx]
     end
 
-    set -e __fish_added_user_paths
-    for x in $fish_user_paths[-1..1]
-        if set -l idx (contains --index -- $x $local_path)
-            set -e local_path[$idx]
-        else
-            set -g __fish_added_user_paths $__fish_added_user_paths $x
+    set -g __fish_added_user_paths
+    if set -q fish_user_paths
+        for x in $fish_user_paths[-1..1]
+            if set -l idx (contains --index -- $x $local_path)
+                set -e local_path[$idx]
+            else
+                set -g __fish_added_user_paths $__fish_added_user_paths $x
+            end
+            set local_path $x $local_path
         end
-        set local_path $x $local_path
     end
+
     set -xg PATH $local_path
 end
-__fish_reconstruct_path
 
 #
 # Launch debugger on SIGTRAP
@@ -211,13 +155,16 @@ function __fish_on_interactive --on-event fish_prompt
     functions -e __fish_on_interactive
 end
 
+# Set the locale if it isn't explicitly set. Allowing the lack of locale env vars to imply the
+# C/POSIX locale causes too many problems. Do this before reading the snippets because they might be
+# in UTF-8 (with non-ASCII characters).
+__fish_set_locale
+
 # "." command for compatibility with old fish versions.
 function . --description 'Evaluate contents of file (deprecated, see "source")' --no-scope-shadowing
-    if begin
-            test (count $argv) -eq 0
-            # Uses tty directly, as isatty depends on "."
-            and tty 0>&0 >/dev/null
-        end
+    if test (count $argv) -eq 0
+        # Uses tty directly, as isatty depends on "."
+        and tty 0>&0 >/dev/null
         echo "source: '.' command is deprecated, and doesn't work with STDIN anymore. Did you mean 'source' or './'?" >&2
         return 1
     else
@@ -225,35 +172,54 @@ function . --description 'Evaluate contents of file (deprecated, see "source")' 
     end
 end
 
-# Set the locale if it isn't explicitly set. Allowing the lack of locale env vars to imply the
-# C/POSIX locale causes too many problems. Do this before reading the snippets because they might be
-# in UTF-8 (with non-ASCII characters).
-__fish_set_locale
-
-# As last part of initialization, source the conf directories
-# Implement precedence (User > Admin > Extra (e.g. vendors) > Fish) by basically doing "basename"
-set -l sourcelist
-for file in $configdir/fish/conf.d/*.fish $__fish_sysconfdir/conf.d/*.fish $__extra_confdir/*.fish
-    set -l basename (string replace -r '^.*/' '' -- $file)
-    contains -- $basename $sourcelist
-    and continue
-    set sourcelist $sourcelist $basename
-    # Also skip non-files or unreadable files
-    # This allows one to use e.g. symlinks to /dev/null to "mask" something (like in systemd)
-    [ -f $file -a -r $file ]
-    and source $file
-end
-
-# Upgrade pre-existing abbreviations from the old "key=value" to the new "key value" syntax
-# This needs to be in share/config.fish because __fish_config_interactive is called after 2sourcing config.fish, which might contain abbr calls
+# Upgrade pre-existing abbreviations from the old "key=value" to the new "key value" syntax.
+# This needs to be in share/config.fish because __fish_config_interactive is called after sourcing
+# config.fish, which might contain abbr calls.
 if not set -q __fish_init_2_3_0
-    set -l fab
-    for abb in $fish_user_abbreviations
-        set fab $fab (string replace -r '^([^ =]+)=(.*)$' '$1 $2' -- $abb)
+    if set -q fish_user_abbreviations
+        set -l fab
+        for abbr in $fish_user_abbreviations
+            set fab $fab (string replace -r '^([^ =]+)=(.*)$' '$1 $2' -- $abbr)
+        end
+        set fish_user_abbreviations $fab
     end
-    set fish_user_abbreviations $fab
     set -U __fish_init_2_3_0
 end
+
+# macOS-ism: Emulate calling path_helper.
+if command -sq /usr/libexec/path_helper
+    # Adapt construct_path from the macOS /usr/libexec/path_helper
+    # executable for fish; see
+    # https://opensource.apple.com/source/shell_cmds/shell_cmds-203/path_helper/path_helper.c.auto.html .
+    function __fish_macos_set_env -d "set an environment variable like path_helper does (macOS only)"
+        set -l result
+
+        for path_file in $argv[2] $argv[3]/*
+            if test -f $path_file
+                while read -l entry
+                    if not contains $entry $result
+                        set result $result $entry
+                    end
+                end <$path_file
+            end
+        end
+
+        for entry in $$argv[1]
+            if not contains $entry $result
+                set result $result $entry
+            end
+        end
+
+        set -xg $argv[1] $result
+    end
+
+    __fish_macos_set_env 'PATH' '/etc/paths' '/etc/paths.d'
+    if [ -n "$MANPATH" ]
+        __fish_macos_set_env 'MANPATH' '/etc/manpaths' '/etc/manpaths.d'
+    end
+    functions -e __fish_macos_set_env
+end
+
 
 #
 # Some things should only be done for login terminals
@@ -261,11 +227,9 @@ end
 #
 
 if status --is-login
-
     #
     # Put linux consoles in unicode mode.
     #
-
     if test "$TERM" = linux
         if string match -qir '\.UTF' -- $LANG
             if command -sq unicode_start
@@ -273,4 +237,58 @@ if status --is-login
             end
         end
     end
+end
+
+# Invoke this here to apply the current value of fish_user_path after
+# PATH is possibly set above.
+__fish_reconstruct_path
+
+# Allow %n job expansion to be used with fg/bg/wait
+# `jobs` is the only one that natively supports job expansion
+function __fish_expand_pid_args
+    for arg in $argv
+        if string match -qr '^%\d+$' -- $arg
+            # set newargv $newargv (jobs -p $arg)
+            jobs -p $arg
+            if not test $status -eq 0
+                return 1
+            end
+        else
+            printf "%s\n" $arg
+        end
+    end
+end
+
+function bg --wraps bg
+    builtin bg (__fish_expand_pid_args $argv)
+end
+
+function fg --wraps fg
+    builtin fg (__fish_expand_pid_args $argv)
+end
+
+function kill --wraps kill
+    command kill (__fish_expand_pid_args $argv)
+end
+
+function wait --wraps wait
+    builtin wait (__fish_expand_pid_args $argv)
+end
+
+function disown --wraps disown
+    builtin disown (__fish_expand_pid_args $argv)
+end
+
+# As last part of initialization, source the conf directories.
+# Implement precedence (User > Admin > Extra (e.g. vendors) > Fish) by basically doing "basename".
+set -l sourcelist
+for file in $__fish_config_dir/conf.d/*.fish $__fish_sysconf_dir/conf.d/*.fish $__extra_confdir/*.fish
+    set -l basename (string replace -r '^.*/' '' -- $file)
+    contains -- $basename $sourcelist
+    and continue
+    set sourcelist $sourcelist $basename
+    # Also skip non-files or unreadable files.
+    # This allows one to use e.g. symlinks to /dev/null to "mask" something (like in systemd).
+    [ -f $file -a -r $file ]
+    and source $file
 end

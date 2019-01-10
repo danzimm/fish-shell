@@ -7,19 +7,19 @@
 
 #include <vector>
 
+#include "builtin_bind.h"
 #include "common.h"
-#include "env.h"
 
-#define DEFAULT_BIND_MODE L"default"
 #define FISH_BIND_MODE_VAR L"fish_bind_mode"
 
 wcstring describe_char(wint_t c);
 
-/// Initialize the terminal by calling setupterm, and set up arrays used by readch to detect escape
-/// sequences for special keys.
-///
-/// Before calling input_init, terminfo is not initialized and MUST not be used.
-int input_init();
+/// Set to true when the input subsytem has been initialized.
+extern bool input_initialized;
+
+/// Set up arrays used by readch to detect escape sequences for special keys and perform related
+/// initializations for our input subsystem.
+void init_input();
 
 /// free up memory used by terminal functions.
 void input_destroy();
@@ -48,11 +48,11 @@ void input_queue_ch(wint_t ch);
 /// \param command an input function that will be run whenever the key sequence occurs
 void input_mapping_add(const wchar_t *sequence, const wchar_t *command,
                        const wchar_t *mode = DEFAULT_BIND_MODE,
-                       const wchar_t *new_mode = DEFAULT_BIND_MODE);
+                       const wchar_t *new_mode = DEFAULT_BIND_MODE, bool user = true);
 
 void input_mapping_add(const wchar_t *sequence, const wchar_t *const *commands, size_t commands_len,
                        const wchar_t *mode = DEFAULT_BIND_MODE,
-                       const wchar_t *new_mode = DEFAULT_BIND_MODE);
+                       const wchar_t *new_mode = DEFAULT_BIND_MODE, bool user = true);
 
 struct input_mapping_name_t {
     wcstring seq;
@@ -60,14 +60,17 @@ struct input_mapping_name_t {
 };
 
 /// Returns all mapping names and modes.
-std::vector<input_mapping_name_t> input_mapping_get_names();
+std::vector<input_mapping_name_t> input_mapping_get_names(bool user = true);
+
+/// Erase all bindings
+void input_mapping_clear(const wchar_t *mode = NULL, bool user = true);
 
 /// Erase binding for specified key sequence.
-bool input_mapping_erase(const wcstring &sequence, const wcstring &mode = DEFAULT_BIND_MODE);
+bool input_mapping_erase(const wcstring &sequence, const wcstring &mode = DEFAULT_BIND_MODE, bool user = true);
 
 /// Gets the command bound to the specified key sequence in the specified mode. Returns true if it
 /// exists, false if not.
-bool input_mapping_get(const wcstring &sequence, const wcstring &mode, wcstring_list_t *out_cmds,
+bool input_mapping_get(const wcstring &sequence, const wcstring &mode, wcstring_list_t *out_cmds, bool user,
                        wcstring *out_new_mode);
 
 /// Return the current bind mode.
@@ -100,8 +103,5 @@ wchar_t input_function_get_code(const wcstring &name);
 
 /// Returns a list of all existing input function names.
 wcstring_list_t input_function_get_names(void);
-
-/// Updates our idea of whether we support term256 and term24bit.
-void update_fish_color_support();
 
 #endif

@@ -12,13 +12,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/statfs.h>
+#endif
+#include <sys/mount.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <wchar.h>
 #include <wctype.h>
 
-#include <map>
 #include <string>
+#include <unordered_map>
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
@@ -28,36 +33,31 @@ typedef std::string cstring;
 
 const file_id_t kInvalidFileID = {(dev_t)-1LL, (ino_t)-1LL, (uint64_t)-1LL, -1, -1, -1, -1};
 
-#ifndef PATH_MAX
-#ifdef MAXPATHLEN
-#define PATH_MAX MAXPATHLEN
-#else
-/// Fallback length of MAXPATHLEN. Hopefully a sane value.
-#define PATH_MAX 4096
-#endif
-#endif
-
 /// Map used as cache by wgettext.
-static owning_lock<std::map<wcstring, wcstring>> wgettext_map;
+static owning_lock<std::unordered_map<wcstring, wcstring>> wgettext_map;
 
-bool wreaddir_resolving(DIR *dir, const std::wstring &dir_path, std::wstring &out_name,
-                        bool *out_is_dir) {
-    struct dirent *d = readdir(dir);
-    if (!d) return false;
+bool wreaddir_resolving(DIR *dir, const wcstring &dir_path, wcstring &out_name, bool *out_is_dir) {
+    struct dirent *result = readdir(dir);
+    if (!result) {
+        out_name = L"";
+        return false;
+    }
 
-    out_name = str2wcstring(d->d_name);
-    if (!out_is_dir) return true;
+    out_name = str2wcstring(result->d_name);
+    if (!out_is_dir) {
+        return true;
+    }
 
     // The caller cares if this is a directory, so check.
     bool is_dir = false;
     // We may be able to skip stat, if the readdir can tell us the file type directly.
     bool check_with_stat = true;
 #ifdef HAVE_STRUCT_DIRENT_D_TYPE
-    if (d->d_type == DT_DIR) {
+    if (result->d_type == DT_DIR) {
         // Known directory.
         is_dir = true;
         check_with_stat = false;
-    } else if (d->d_type == DT_LNK || d->d_type == DT_UNKNOWN) {
+    } else if (result->d_type == DT_LNK || result->d_type == DT_UNKNOWN) {
         // We want to treat symlinks to directories as directories. Use stat to resolve it.
         check_with_stat = true;
     } else {
@@ -70,7 +70,7 @@ bool wreaddir_resolving(DIR *dir, const std::wstring &dir_path, std::wstring &ou
         // We couldn't determine the file type from the dirent; check by stat'ing it.
         cstring fullpath = wcs2string(dir_path);
         fullpath.push_back('/');
-        fullpath.append(d->d_name);
+        fullpath.append(result->d_name);
         struct stat buf;
         if (stat(fullpath.c_str(), &buf) != 0) {
             is_dir = false;
@@ -82,58 +82,56 @@ bool wreaddir_resolving(DIR *dir, const std::wstring &dir_path, std::wstring &ou
     return true;
 }
 
-bool wreaddir(DIR *dir, std::wstring &out_name) {
-    struct dirent *d = readdir(dir);
-    if (!d) return false;
+bool wreaddir(DIR *dir, wcstring &out_name) {
+    struct dirent *result = readdir(dir);
+    if (!result) {
+        out_name = L"";
+        return false;
+    }
 
-    out_name = str2wcstring(d->d_name);
+    out_name = str2wcstring(result->d_name);
     return true;
 }
 
 bool wreaddir_for_dirs(DIR *dir, wcstring *out_name) {
     struct dirent *result = NULL;
-    while (result == NULL) {
-        struct dirent *d = readdir(dir);
-        if (!d) break;
+    while (!result) {
+        result = readdir(dir);
+        if (!result) break;
 
 #if HAVE_STRUCT_DIRENT_D_TYPE
-        switch (d->d_type) {
+        switch (result->d_type) {
             case DT_DIR:
             case DT_LNK:
             case DT_UNKNOWN: {
-                // These may be directories.
-                result = d;
-                break;
+                break;  // these may be directories
             }
             default: {
-                // Nothing else can.
-                break;
+                break;  // nothing else can
             }
         }
 #else
         // We can't determine if it's a directory or not, so just return it.
-        result = d;
+        break;
 #endif
     }
+
     if (result && out_name) {
         *out_name = str2wcstring(result->d_name);
     }
-    return result != NULL;
+    if (!result) return false;
+    return true;
 }
 
 const wcstring wgetcwd() {
-    wcstring retval;
-
-    char *res = getcwd(NULL, 0);
+    char cwd[PATH_MAX];
+    char *res = getcwd(cwd, sizeof(cwd));
     if (res) {
-        retval = str2wcstring(res);
-        free(res);
-    } else {
-        debug(0, _(L"getcwd() failed with errno %d/%s"), errno, strerror(errno));
-        retval = wcstring();
+        return str2wcstring(res);
     }
 
-    return retval;
+    debug(0, _(L"getcwd() failed with errno %d/%s"), errno, strerror(errno));
+    return wcstring();
 }
 
 int wchdir(const wcstring &dir) {
@@ -219,6 +217,26 @@ DIR *wopendir(const wcstring &name) {
     return opendir(tmp.c_str());
 }
 
+dir_t::dir_t(const wcstring &path) {
+    const cstring tmp = wcs2string(path);
+    this->dir = opendir(tmp.c_str());
+}
+
+dir_t::~dir_t() {
+    if (this->dir != nullptr) {
+        closedir(this->dir);
+        this->dir = nullptr;
+    }
+}
+
+bool dir_t::valid() const {
+    return this->dir != nullptr;
+}
+
+bool dir_t::read(wcstring &name) {
+    return wreaddir(this->dir, name);
+}
+
 int wstat(const wcstring &file_name, struct stat *buf) {
     const cstring tmp = wcs2string(file_name);
     return stat(tmp.c_str(), buf);
@@ -265,6 +283,38 @@ int make_fd_blocking(int fd) {
         err = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
     }
     return err == -1 ? errno : 0;
+}
+
+int fd_check_is_remote(int fd) {
+#if defined(__linux__)
+    struct statfs buf{0};
+    if (fstatfs(fd, &buf) < 0) {
+        return -1;
+    }
+    // Linux has constants for these like NFS_SUPER_MAGIC, SMB_SUPER_MAGIC, CIFS_MAGIC_NUMBER but
+    // these are in varying headers. Simply hard code them.
+    switch (buf.f_type) {
+        case 0x6969:      // NFS_SUPER_MAGIC
+        case 0x517B:      // SMB_SUPER_MAGIC
+        case 0xFF534D42:  // CIFS_MAGIC_NUMBER
+            return 1;
+        default:
+            // Other FSes are assumed local.
+            return 0;
+    }
+#elif defined(ST_LOCAL)
+    // ST_LOCAL is a flag to statvfs, which is itself standardized.
+    // In practice the only system to use this path is NetBSD.
+    struct statvfs buf {};
+    if (fstatvfs(fd, &buf) < 0) return -1;
+    return (buf.f_flag & ST_LOCAL) ? 0 : 1;
+#elif defined(MNT_LOCAL)
+    struct statfs buf {};
+    if (fstatfs(fd, &buf) < 0) return -1;
+    return (buf.f_flags & MNT_LOCAL) ? 0 : 1;
+#else
+    return -1;
+#endif
 }
 
 static inline void safe_append(char *buffer, const char *s, size_t buffsize) {
@@ -323,67 +373,142 @@ void safe_perror(const char *message) {
     safe_append(buff, safe_strerror(err), sizeof buff);
     safe_append(buff, "\n", sizeof buff);
 
-    write_ignore(STDERR_FILENO, buff, strlen(buff));
+    ignore_result(write(STDERR_FILENO, buff, strlen(buff)));
     errno = err;
 }
 
-wchar_t *wrealpath(const wcstring &pathname, wchar_t *resolved_path) {
-    if (pathname.size() == 0) return NULL;
+/// Wide character realpath. The last path component does not need to be valid. If an error occurs,
+/// wrealpath() returns none() and errno is likely set.
+maybe_t<wcstring> wrealpath(const wcstring &pathname) {
+    if (pathname.empty()) return none();
 
-    cstring real_path("");
+    cstring real_path;
     cstring narrow_path = wcs2string(pathname);
 
-    // Strip trailing slashes. This is needed to be bug-for-bug compatible with GNU realpath which
-    // treats "/a//" as equivalent to "/a" whether or not /a exists.
+    // Strip trailing slashes. This is treats "/a//" as equivalent to "/a" if /a is a non-directory.
     while (narrow_path.size() > 1 && narrow_path.at(narrow_path.size() - 1) == '/') {
         narrow_path.erase(narrow_path.size() - 1, 1);
     }
 
-    char *narrow_res = realpath(narrow_path.c_str(), NULL);
+    char tmpbuf[PATH_MAX];
+    char *narrow_res = realpath(narrow_path.c_str(), tmpbuf);
+
     if (narrow_res) {
         real_path.append(narrow_res);
     } else {
+        // Check if everything up to the last path component is valid.
         size_t pathsep_idx = narrow_path.rfind('/');
+
         if (pathsep_idx == 0) {
             // If the only pathsep is the first character then it's an absolute path with a
             // single path component and thus doesn't need conversion.
             real_path = narrow_path;
         } else {
+            // Only call realpath() on the portion up to the last component.
+            errno = 0;
+
             if (pathsep_idx == cstring::npos) {
-                // No pathsep means a single path component relative to pwd.
-                narrow_res = realpath(".", NULL);
-                assert(narrow_res != NULL);
-                pathsep_idx = 0;
+                // If there is no "/", this is a file in $PWD, so give the realpath to that.
+                narrow_res = realpath(".", tmpbuf);
             } else {
+                errno = 0;
                 // Only call realpath() on the portion up to the last component.
-                narrow_res = realpath(narrow_path.substr(0, pathsep_idx).c_str(), NULL);
-                if (!narrow_res) return NULL;
-                pathsep_idx++;
+                narrow_res = realpath(narrow_path.substr(0, pathsep_idx).c_str(), tmpbuf);
             }
+
+            if (!narrow_res) return none();
+
+            pathsep_idx++;
             real_path.append(narrow_res);
-            // This test is to deal with pathological cases such as /../../x => //x.
+
+            // This test is to deal with cases such as /../../x => //x.
             if (real_path.size() > 1) real_path.append("/");
+
             real_path.append(narrow_path.substr(pathsep_idx, cstring::npos));
         }
     }
-#if __APPLE__ && __DARWIN_C_LEVEL < 200809L
-// OS X Snow Leopard is broken with respect to the dynamically allocated buffer returned by
-// realpath(). It's not dynamically allocated so attempting to free that buffer triggers a
-// malloc/free error. Thus we don't attempt the free in this case.
-#else
-    free(narrow_res);
-#endif
+    return str2wcstring(real_path);
+}
 
-    wcstring wreal_path = str2wcstring(real_path);
-    if (resolved_path) {
-        wcslcpy(resolved_path, wreal_path.c_str(), PATH_MAX);
-        return resolved_path;
+wcstring normalize_path(const wcstring &path) {
+    // Count the leading slashes.
+    const wchar_t sep = L'/';
+    size_t leading_slashes = 0;
+    for (wchar_t c : path) {
+        if (c != sep) break;
+        leading_slashes++;
     }
-    return wcsdup(wreal_path.c_str());
+
+    wcstring_list_t comps = split_string(path, sep);
+    wcstring_list_t new_comps;
+    for (wcstring &comp : comps) {
+        if (comp.empty() || comp == L".") {
+            continue;
+        } else if (comp != L"..") {
+            new_comps.push_back(std::move(comp));
+        } else if (!new_comps.empty() && new_comps.back() != L"..") {
+            // '..' with a real path component, drop that path component.
+            new_comps.pop_back();
+        } else if (leading_slashes == 0) {
+            // We underflowed the .. and are a relative (not absolute) path.
+            new_comps.push_back(L"..");
+        }
+    }
+    wcstring result = join_strings(new_comps, sep);
+    // Prepend one or two leading slashes.
+    // Two slashes are preserved. Three+ slashes are collapsed to one. (!)
+    result.insert(0, leading_slashes > 2 ? 1 : leading_slashes, sep);
+    // Ensure ./ normalizes to . and not empty.
+    if (result.empty()) result.push_back(L'.');
+    return result;
+}
+
+wcstring path_normalize_for_cd(const wcstring &wd, const wcstring &path) {
+    // Fast paths.
+    const wchar_t sep = L'/';
+    assert(!wd.empty() && wd.front() == sep && wd.back() == sep &&
+           "Invalid working directory, it must start and end with /");
+    if (path.empty()) {
+        return wd;
+    } else if (path.front() == sep) {
+        return path;
+    } else if (path.front() != L'.') {
+        return wd + path;
+    }
+
+    // Split our strings by the sep.
+    wcstring_list_t wd_comps = split_string(wd, sep);
+    wcstring_list_t path_comps = split_string(path, sep);
+
+    // Remove empty segments from wd_comps.
+    // In particular this removes the leading and trailing empties.
+    wd_comps.erase(std::remove(wd_comps.begin(), wd_comps.end(), L""), wd_comps.end());
+
+    // Erase leading . and .. components from path_comps, popping from wd_comps as we go.
+    size_t erase_count = 0;
+    for (const wcstring &comp : path_comps) {
+        bool erase_it = false;
+        if (comp.empty() || comp == L".") {
+            erase_it = true;
+        } else if (comp == L".." && !wd_comps.empty()) {
+            erase_it = true;
+            wd_comps.pop_back();
+        }
+        if (erase_it) {
+            erase_count++;
+        } else {
+            break;
+        }
+    }
+    // Append un-erased elements to wd_comps and join them, then prepend the leading /.
+    std::move(path_comps.begin() + erase_count, path_comps.end(), std::back_inserter(wd_comps));
+    wcstring result = join_strings(wd_comps, sep);
+    result.insert(0, 1, L'/');
+    return result;
 }
 
 wcstring wdirname(const wcstring &path) {
-    char *tmp = wcs2str(path.c_str());
+    char *tmp = wcs2str(path);
     char *narrow_res = dirname(tmp);
     wcstring result = format_string(L"%s", narrow_res);
     free(tmp);
@@ -391,7 +516,7 @@ wcstring wdirname(const wcstring &path) {
 }
 
 wcstring wbasename(const wcstring &path) {
-    char *tmp = wcs2str(path.c_str());
+    char *tmp = wcs2str(path);
     char *narrow_res = basename(tmp);
     wcstring result = format_string(L"%s", narrow_res);
     free(tmp);
@@ -418,7 +543,7 @@ const wcstring &wgettext(const wchar_t *in) {
 
     wgettext_init_if_necessary();
     auto wmap = wgettext_map.acquire();
-    wcstring &val = wmap.value[key];
+    wcstring &val = (*wmap)[key];
     if (val.empty()) {
         cstring mbs_in = wcs2string(key);
         char *out = fish_gettext(mbs_in.c_str());
@@ -458,6 +583,7 @@ int fish_iswalnum(wint_t wc) {
     return iswalnum(wc);
 }
 
+#if 0
 /// We need this because there are too many implementations that don't return the proper answer for
 /// some code points. See issue #3050.
 int fish_iswalpha(wint_t wc) {
@@ -465,6 +591,7 @@ int fish_iswalpha(wint_t wc) {
     if (fish_is_pua(wc)) return 0;
     return iswalpha(wc);
 }
+#endif
 
 /// We need this because there are too many implementations that don't return the proper answer for
 /// some code points. See issue #3050.
@@ -473,40 +600,6 @@ int fish_iswgraph(wint_t wc) {
     if (fish_is_pua(wc)) return 1;
     return iswgraph(wc);
 }
-
-/// Test if the given string is a valid variable name.
-///
-/// \return null if this is a valid name, and a pointer to the first invalid character otherwise.
-const wchar_t *wcsvarname(const wchar_t *str) {
-    if (str[0] == L'\0') return str;
-    while (*str) {
-        if ((!fish_iswalnum(*str)) && (*str != L'_')) {
-            return str;
-        }
-        str++;
-    }
-    return NULL;
-}
-
-/// Test if the given string is a valid variable name.
-///
-/// \return null if this is a valid name, and a pointer to the first invalid character otherwise.
-const wchar_t *wcsvarname(const wcstring &str) { return wcsvarname(str.c_str()); }
-
-/// Test if the string is a valid function name.
-///
-/// \return true if it is valid else false.
-bool wcsfuncname(const wcstring &str) {
-    if (str.size() == 0) return false;
-    if (str.at(0) == L'-') return false;
-    if (str.find_first_of(L'/') != wcstring::npos) return false;
-    return true;
-}
-
-/// Test if the given string is valid in a variable name.
-///
-/// \return true if this is a valid name, false otherwise.
-bool wcsvarchr(wchar_t chr) { return fish_iswalnum(chr) || chr == L'_'; }
 
 /// Convenience variants on fish_wcwswidth().
 ///
@@ -517,6 +610,11 @@ int fish_wcswidth(const wchar_t *str) { return fish_wcswidth(str, wcslen(str)); 
 ///
 /// See fallback.h for the normal definitions.
 int fish_wcswidth(const wcstring &str) { return fish_wcswidth(str.c_str(), str.size()); }
+
+locale_t fish_c_locale() {
+    static locale_t loc = newlocale(LC_ALL_MASK, "C", NULL);
+    return loc;
+}
 
 /// Like fish_wcstol(), but fails on a value outside the range of an int.
 ///
@@ -652,25 +750,46 @@ unsigned long long fish_wcstoull(const wchar_t *str, const wchar_t **endptr, int
     return result;
 }
 
-file_id_t file_id_t::file_id_from_stat(const struct stat *buf) {
-    assert(buf != NULL);
+/// Like wcstod(), but wcstod() is enormously expensive on some platforms so this tries to have a
+/// fast path.
+double fish_wcstod(const wchar_t *str, wchar_t **endptr) {
+    // The "fast path." If we're all ASCII and we fit inline, use strtod().
+    char narrow[128];
+    size_t len = wcslen(str);
+    size_t len_plus_0 = 1 + len;
+    auto is_digit = [](wchar_t c) { return '0' <= c && c <= '9'; };
+    if (len_plus_0 <= sizeof narrow && std::all_of(str, str + len, is_digit)) {
+        // Fast path. Copy the string into a local buffer and run strtod() on it.
+        // We can ignore the locale-taking version because we are limited to ASCII digits.
+        std::copy(str, str + len_plus_0, narrow);
+        char *narrow_endptr = nullptr;
+        double ret = strtod(narrow, endptr ? &narrow_endptr : nullptr);
+        if (endptr) {
+            assert(narrow_endptr && "narrow_endptr should not be null");
+            *endptr = const_cast<wchar_t *>(str + (narrow_endptr - narrow));
+        }
+        return ret;
+    }
+    return wcstod_l(str, endptr, fish_c_locale());
+}
 
+file_id_t file_id_t::from_stat(const struct stat &buf) {
     file_id_t result = {};
-    result.device = buf->st_dev;
-    result.inode = buf->st_ino;
-    result.size = buf->st_size;
-    result.change_seconds = buf->st_ctime;
-    result.mod_seconds = buf->st_mtime;
+    result.device = buf.st_dev;
+    result.inode = buf.st_ino;
+    result.size = buf.st_size;
+    result.change_seconds = buf.st_ctime;
+    result.mod_seconds = buf.st_mtime;
 
 #ifdef HAVE_STRUCT_STAT_ST_CTIME_NSEC
-    result.change_nanoseconds = buf->st_ctime_nsec;
-    result.mod_nanoseconds = buf->st_mtime_nsec;
+    result.change_nanoseconds = buf.st_ctime_nsec;
+    result.mod_nanoseconds = buf.st_mtime_nsec;
 #elif defined(__APPLE__)
-    result.change_nanoseconds = buf->st_ctimespec.tv_nsec;
-    result.mod_nanoseconds = buf->st_mtimespec.tv_nsec;
+    result.change_nanoseconds = buf.st_ctimespec.tv_nsec;
+    result.mod_nanoseconds = buf.st_mtimespec.tv_nsec;
 #elif defined(_BSD_SOURCE) || defined(_SVID_SOURCE) || defined(_XOPEN_SOURCE)
-    result.change_nanoseconds = buf->st_ctim.tv_nsec;
-    result.mod_nanoseconds = buf->st_mtim.tv_nsec;
+    result.change_nanoseconds = buf.st_ctim.tv_nsec;
+    result.mod_nanoseconds = buf.st_mtim.tv_nsec;
 #else
     result.change_nanoseconds = 0;
     result.mod_nanoseconds = 0;
@@ -683,7 +802,7 @@ file_id_t file_id_for_fd(int fd) {
     file_id_t result = kInvalidFileID;
     struct stat buf = {};
     if (fd >= 0 && 0 == fstat(fd, &buf)) {
-        result = file_id_t::file_id_from_stat(&buf);
+        result = file_id_t::from_stat(buf);
     }
     return result;
 }
@@ -692,7 +811,7 @@ file_id_t file_id_for_path(const wcstring &path) {
     file_id_t result = kInvalidFileID;
     struct stat buf = {};
     if (0 == wstat(path, &buf)) {
-        result = file_id_t::file_id_from_stat(&buf);
+        result = file_id_t::from_stat(buf);
     }
     return result;
 }

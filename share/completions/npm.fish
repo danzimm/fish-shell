@@ -4,6 +4,22 @@
 # see also Fish's large set of completions for examples:
 # https://github.com/fish-shell/fish-shell/tree/master/share/completions
 
+# If all-the-package-names is installed, it will be used to generate npm completions.
+# Install globally with `sudo npm install -g all-the-package-names`. Keep it up to date.
+function __npm_list_packages
+    if not type -q all-the-package-names
+        return
+    end
+
+    all-the-package-names
+end
+
+# Entire list of packages is too long to be used in a `complete` subcommand
+# Search it for matches instead
+function __npm_filtered_list_packages
+    __npm_list_packages | grep (commandline -ct) | head -n 50
+end
+
 function __fish_npm_needs_command
     set cmd (commandline -opc)
 
@@ -34,7 +50,7 @@ function __fish_npm_needs_option
     return 1
 end
 
-function __fish_complete_npm --description "Complete the commandline using npm's 'completion' tool"
+function __fish_complete_npm -d "Complete the commandline using npm's 'completion' tool"
     # Note that this function will generate undescribed completion options, and current fish
     # will sometimes pick these over versions with descriptions.
     # However, this seems worth it because it means automatically getting _some_ completions if npm updates.
@@ -59,26 +75,33 @@ function __fish_complete_npm --description "Complete the commandline using npm's
             set COMP_CWORD (math $COMP_CWORD + 1)
             set COMP_LINE $COMP_LINE ""
         end
-        command npm completion -- $COMP_LINE ^/dev/null
+        command npm completion -- $COMP_LINE 2>/dev/null
     end
 end
 
 # use npm completion for most of the things,
-# except options completion because it sucks at it.
+# except options completion (because it sucks at it)
+# and run-script completion (reading package.json is faster).
 # see: https://github.com/npm/npm/issues/9524
 # and: https://github.com/fish-shell/fish-shell/pull/2366
-complete -f -c npm -n 'not __fish_npm_needs_option' -a "(__fish_complete_npm)"
+complete -f -c npm -n 'not __fish_npm_needs_option; and not __fish_npm_using_command run; and not __fish_npm_using_command run-script' -a "(__fish_complete_npm)"
 
 # list available npm scripts and their parial content
+function __fish_parse_npm_run_completions
+    while read -l name
+        set -l trim 20
+        read -l value
+        set value (string sub -l $trim -- $value)
+        printf "%s\t%s\n" $name $value
+    end
+end
+
 function __fish_npm_run
     # Like above, only try to call npm if there's a command by that name to facilitate aliases that call nvm.
-    if command -sq npm
-        command npm run | string match -r -v '^[^ ]|^$' | string trim | while read -l name
-            set -l trim 20
-            read -l value
-            echo "$value" | cut -c1-$trim | read -l value
-            printf "%s\t%s\n" $name $value
-        end
+    if command -sq jq; and test -e package.json
+        jq -r '.scripts | to_entries[] | .key,.value' <package.json | __fish_parse_npm_run_completions
+    else if command -sq npm
+        command npm run | string match -r -v '^[^ ]|^$' | string trim | __fish_parse_npm_run_completions
     end
 end
 
@@ -185,3 +208,4 @@ complete -f -c npm -n '__fish_npm_needs_command' -a 'unpublish' -d 'Remove a pac
 complete -f -c npm -n '__fish_npm_needs_command' -a 'unstar' -d 'Remove star from a package'
 complete -f -c npm -n '__fish_npm_needs_command' -a 'version' -d 'Bump a package version'
 complete -f -c npm -n '__fish_npm_needs_command' -a 'whoami' -d 'Display npm username'
+complete -f -c npm -n '__fish_seen_subcommand_from install' -a '(__npm_filtered_list_packages)'

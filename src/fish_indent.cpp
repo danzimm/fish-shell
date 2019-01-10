@@ -36,11 +36,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include "env.h"
 #include "fish_version.h"
 #include "highlight.h"
-#include "input.h"
 #include "output.h"
 #include "parse_constants.h"
-#include "parse_tree.h"
 #include "print_help.h"
+#include "tnode.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 #define SPACES_PER_INDENT 4
@@ -48,16 +47,27 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 // An indent_t represents an abstract indent depth. 2 means we are in a doubly-nested block, etc.
 typedef unsigned int indent_t;
 static bool dump_parse_tree = false;
+static int ret = 0;
 
 // Read the entire contents of a file into the specified string.
 static wcstring read_file(FILE *f) {
     wcstring result;
     while (1) {
         wint_t c = fgetwc(f);
+
         if (c == WEOF) {
             if (ferror(f)) {
-                wperror(L"fgetwc");
-                exit(1);
+                if (errno == EILSEQ) {
+                    // Illegal byte sequence. Try to skip past it.
+                    clearerr(f);
+                    int ch = fgetc(f); // for printing the warning, and seeks forward 1 byte.
+                    debug(1, "%s (byte=%X)", strerror(errno), ch);
+                    ret = 1;
+                    continue;
+                } else {
+                    wperror(L"fgetwc");
+                    exit(1);
+                }
             }
             break;
         }
@@ -66,16 +76,59 @@ static wcstring read_file(FILE *f) {
     return result;
 }
 
-// Append whitespace as necessary. If we have a newline, append the appropriate indent. Otherwise,
-// append a space.
-static void append_whitespace(indent_t node_indent, bool do_indent, bool has_new_line,
-                              wcstring *out_result) {
-    if (!has_new_line) {
-        out_result->push_back(L' ');
-    } else if (do_indent) {
-        out_result->append(node_indent * SPACES_PER_INDENT, L' ');
+struct prettifier_t {
+    // Original source.
+    const wcstring &source;
+
+    // The prettifier output.
+    wcstring output;
+
+    // Whether to indent, or just insert spaces.
+    const bool do_indent;
+
+    // Whether we are at the beginning of a new line.
+    bool has_new_line = true;
+
+    // Whether we need to append a continuation new line before continuing.
+    bool needs_continuation_newline = false;
+
+    // Additional indentation due to line continuation (escaped newline)
+    uint32_t line_continuation_indent = 0;
+
+    prettifier_t(const wcstring &source, bool do_indent) : source(source), do_indent(do_indent) {}
+
+    void prettify_node_recursive(const parse_node_tree_t &tree,
+                                 node_offset_t node_idx, indent_t node_indent,
+                                 parse_token_type_t parent_type);
+
+    void maybe_prepend_escaped_newline(const parse_node_t &node) {
+        if (node.has_preceding_escaped_newline()) {
+            output.append(L" \\");
+            append_newline(true);
+        }
     }
-}
+
+    void append_newline(bool is_continuation = false) {
+        output.push_back('\n');
+        has_new_line = true;
+        needs_continuation_newline = false;
+        line_continuation_indent = is_continuation ? 1 : 0;
+    }
+
+    // Append whitespace as necessary. If we have a newline, append the appropriate indent. Otherwise,
+    // append a space.
+    void append_whitespace(indent_t node_indent) {
+        if (needs_continuation_newline) {
+            append_newline(true);
+        }
+        if (!has_new_line) {
+            output.push_back(L' ');
+        } else if (do_indent) {
+            output.append((node_indent + line_continuation_indent) * SPACES_PER_INDENT, L' ');
+        }
+    }
+
+};
 
 // Dump a parse tree node in a form helpful to someone debugging the behavior of this program.
 static void dump_node(indent_t node_indent, const parse_node_t &node, const wcstring &source) {
@@ -107,10 +160,9 @@ static void dump_node(indent_t node_indent, const parse_node_t &node, const wcst
              token_type_description(node.type), prevc_str, source_txt.c_str(), nextc_str);
 }
 
-static void prettify_node_recursive(const wcstring &source, const parse_node_tree_t &tree,
+void prettifier_t::prettify_node_recursive(const parse_node_tree_t &tree,
                                     node_offset_t node_idx, indent_t node_indent,
-                                    parse_token_type_t parent_type, bool *has_new_line,
-                                    wcstring *out_result, bool do_indent) {
+                                    parse_token_type_t parent_type) {
     const parse_node_t &node = tree.at(node_idx);
     const parse_token_type_t node_type = node.type;
     const parse_token_type_t prev_node_type =
@@ -122,7 +174,7 @@ static void prettify_node_recursive(const wcstring &source, const parse_node_tre
     const bool is_root_case_list =
         node_type == symbol_case_item_list && parent_type != symbol_case_item_list;
     const bool is_if_while_header =
-        (node_type == symbol_job || node_type == symbol_andor_job_list) &&
+        (node_type == symbol_job_conjunction || node_type == symbol_andor_job_list) &&
         (parent_type == symbol_if_clause || parent_type == symbol_while_header);
 
     if (is_root_job_list || is_root_case_list || is_if_while_header) {
@@ -131,33 +183,36 @@ static void prettify_node_recursive(const wcstring &source, const parse_node_tre
 
     if (dump_parse_tree) dump_node(node_indent, node, source);
 
-    if (node.has_comments())  // handle comments, which come before the text
-    {
-        const parse_node_tree_t::parse_node_list_t comment_nodes =
-            (tree.comment_nodes_for_node(node));
-        for (size_t i = 0; i < comment_nodes.size(); i++) {
-            const parse_node_t &comment_node = *comment_nodes.at(i);
-            append_whitespace(node_indent, do_indent, *has_new_line, out_result);
-            out_result->append(source, comment_node.source_start, comment_node.source_length);
+    // Prepend any escaped newline.
+    maybe_prepend_escaped_newline(node);
+
+    // handle comments, which come before the text
+    if (node.has_comments()) {
+        auto comment_nodes = tree.comment_nodes_for_node(node);
+        for (const auto &comment : comment_nodes) {
+            maybe_prepend_escaped_newline(*comment.node());
+            append_whitespace(node_indent);
+            auto source_range = comment.source_range();
+            output.append(source, source_range->start, source_range->length);
+            needs_continuation_newline = true;
         }
     }
 
     if (node_type == parse_token_type_end) {
-        out_result->push_back(L'\n');
-        *has_new_line = true;
+        append_newline();
     } else if ((node_type >= FIRST_PARSE_TOKEN_TYPE && node_type <= LAST_PARSE_TOKEN_TYPE) ||
                node_type == parse_special_type_parse_error) {
         if (node.keyword != parse_keyword_none) {
-            append_whitespace(node_indent, do_indent, *has_new_line, out_result);
-            out_result->append(keyword_description(node.keyword));
-            *has_new_line = false;
+            append_whitespace(node_indent);
+            output.append(keyword_description(node.keyword));
+            has_new_line = false;
         } else if (node.has_source()) {
             // Some type representing a particular token.
             if (prev_node_type != parse_token_type_redirection) {
-                append_whitespace(node_indent, do_indent, *has_new_line, out_result);
+                append_whitespace(node_indent);
             }
-            out_result->append(source, node.source_start, node.source_length);
-            *has_new_line = false;
+            output.append(source, node.source_start, node.source_length);
+            has_new_line = false;
         }
     }
 
@@ -166,34 +221,35 @@ static void prettify_node_recursive(const wcstring &source, const parse_node_tre
         // Note: We pass our type to our child, which becomes its parent node type.
         // Note: While node.child_start could be -1 (NODE_OFFSET_INVALID) the addition is safe
         // because we won't execute this call in that case since node.child_count should be zero.
-        prettify_node_recursive(source, tree, node.child_start + idx, node_indent, node_type,
-                                has_new_line, out_result, do_indent);
+        prettify_node_recursive(tree, node.child_start + idx, node_indent, node_type);
     }
 }
 
 // Entry point for prettification.
 static wcstring prettify(const wcstring &src, bool do_indent) {
-    parse_node_tree_t tree;
+    parse_node_tree_t parse_tree;
     int parse_flags = (parse_flag_continue_after_error | parse_flag_include_comments |
                        parse_flag_leave_unterminated | parse_flag_show_blank_lines);
-    if (!parse_tree_from_string(src, parse_flags, &tree, NULL)) {
-        // We return the initial string on failure.
-        return src;
+    if (!parse_tree_from_string(src, parse_flags, &parse_tree, NULL)) {
+        return src;  // we return the original string on failure
+    }
+
+    if (dump_parse_tree) {
+        const wcstring dump = parse_dump_tree(parse_tree, src);
+        fwprintf(stderr, L"%ls\n", dump.c_str());
     }
 
     // We may have a forest of disconnected trees on a parse failure. We have to handle all nodes
     // that have no parent, and all parse errors.
-    bool has_new_line = true;
-    wcstring result;
-    for (node_offset_t i = 0; i < tree.size(); i++) {
-        const parse_node_t &node = tree.at(i);
+    prettifier_t prettifier{src, do_indent};
+    for (node_offset_t i = 0; i < parse_tree.size(); i++) {
+        const parse_node_t &node = parse_tree.at(i);
         if (node.parent == NODE_OFFSET_INVALID || node.type == parse_special_type_parse_error) {
             // A root node.
-            prettify_node_recursive(src, tree, i, 0, symbol_job_list, &has_new_line, &result,
-                                    do_indent);
+            prettifier.prettify_node_recursive(parse_tree, i, 0, symbol_job_list);
         }
     }
-    return result;
+    return std::move(prettifier.output);
 }
 
 // Helper for output_set_writer
@@ -347,7 +403,6 @@ int main(int argc, char *argv[]) {
     // (e.g., "# -*- coding: <encoding-name> -*-").
     setlocale(LC_ALL, "");
     env_init();
-    input_init();
 
     // Types of output we support.
     enum {
@@ -374,11 +429,6 @@ int main(int argc, char *argv[]) {
     int opt;
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
         switch (opt) {
-            case 0: {
-                fwprintf(stderr, _(L"getopt_long() unexpectedly returned zero\n"));
-                exit(127);
-                break;
-            }
             case 'P': {
                 dump_parse_tree = true;
                 break;
@@ -512,5 +562,5 @@ int main(int argc, char *argv[]) {
     }
 
     fputws(str2wcstring(colored_output).c_str(), stdout);
-    return 0;
+    return ret;
 }
