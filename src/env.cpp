@@ -566,8 +566,10 @@ static void guess_emoji_width() {
     if (term == L"Apple_Terminal" && version >= 400) {
         // Apple Terminal on High Sierra
         g_guessed_fish_emoji_width = 2;
+        debug(2, "default emoji width: 2 for %ls", term.c_str());
     } else {
         g_guessed_fish_emoji_width = 1;
+        debug(2, "default emoji width: 1");
     }
 }
 
@@ -649,8 +651,15 @@ static void setup_path() {
     auto &vars = env_stack_t::globals();
     const auto path = vars.get(L"PATH");
     if (path.missing_or_empty()) {
-        wcstring_list_t value({L"/usr/bin", L"/bin"});
-        vars.set(L"PATH", ENV_GLOBAL | ENV_EXPORT, value);
+#if defined(_CS_PATH)
+        // _CS_PATH: colon-separated paths to find POSIX utilities
+        std::string cspath;
+        cspath.resize(confstr(_CS_PATH, nullptr, 0));
+        confstr(_CS_PATH, &cspath[0], cspath.length());
+#else
+        std::string cspath = "/bin:/usr/bin"; // I doubt this is even necessary
+#endif
+        vars.set_one(L"PATH", ENV_GLOBAL | ENV_EXPORT, str2wcstring(cspath));
     }
 }
 
@@ -777,6 +786,7 @@ static void handle_change_emoji_width(const wcstring &op, const wcstring &var_na
         new_width = fish_wcstol(width_str->as_string().c_str());
     }
     g_fish_emoji_width = std::max(0, new_width);
+    debug(2, "'fish_emoji_width' preference: %d, overwriting default", g_fish_emoji_width);
 }
 
 static void handle_change_ambiguous_width(const wcstring &op, const wcstring &var_name,
@@ -1005,7 +1015,11 @@ void env_init(const struct config_paths_t *paths /* or NULL */) {
 
     // initialize the PWD variable if necessary
     // Note we may inherit a virtual PWD that doesn't match what getcwd would return; respect that.
-    if (vars.get(L"PWD").missing_or_empty()) {
+    // Note we treat PWD as read-only so it was not set in vars.
+    const char *incoming_pwd = getenv("PWD");
+    if (incoming_pwd && incoming_pwd[0]) {
+        vars.set_one(L"PWD",  ENV_EXPORT | ENV_GLOBAL, str2wcstring(incoming_pwd));
+    } else {
         vars.set_pwd_from_getcwd();
     }
     vars.set_termsize();    // initialize the terminal size variables
@@ -1723,12 +1737,16 @@ wcstring env_get_runtime_path() {
     } else {
         // Don't rely on $USER being set, as setup_user() has not yet been called.
         // See https://github.com/fish-shell/fish-shell/issues/5180
-        const char *uname = getpwuid(geteuid())->pw_name;
+        // getpeuid() can't fail, but getpwuid sure can.
+        auto pwuid = getpwuid(geteuid());
+        const char *uname = pwuid ? pwuid->pw_name : NULL;
         // /tmp/fish.user
         std::string tmpdir = "/tmp/fish.";
-        tmpdir.append(uname);
+        if (uname) {
+            tmpdir.append(uname);
+        }
 
-        if (check_runtime_path(tmpdir.c_str()) != 0) {
+        if (!uname || check_runtime_path(tmpdir.c_str()) != 0) {
             debug(0, L"Runtime path not available.");
             debug(0, L"Try deleting the directory %s and restarting fish.", tmpdir.c_str());
             return result;

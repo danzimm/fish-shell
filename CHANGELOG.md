@@ -14,6 +14,7 @@
 - Lots of improvements to completions.
 - fish_clipboard_* now supports wayland by means of [wl-clipboard](https://github.com/bugaevc/wl-clipboard).
 - mandoc can now be used to format the output from `--help` if nroff is not installed
+- New color options for the pager have been added (#5524).
 
 
 =======
@@ -22,6 +23,26 @@
 ### Fixes and improvements
 
 - exec now behaves properly inside functions (#5449)
+- while loops now evaluate to the last executed command in the loop body (or zero if the body was empty), matching POSIX semantics.
+- fish does not hang on launch when running under Cygwin/MSYS2
+- The pager-toggle-search binding (by default Control-S) now positions the cursor in the completions list.
+- The error when a command is not found is now printed a single time instead of once per argument. (#5588)
+- The git completions now print correct file paths instead of ../../../ (and so on) with older git versions directly inside a git root. (#5578)
+- The git completions won't suggest :/ paths (relative to the git root) so much anymore. (#5574)
+- The git completions will now fuzzy-match paths again. (#5476)
+- The git completions will ignore shell aliases, so enterprising users can set up the wrapping command (via `set -g __fish_git_alias_$command $whatitwraps`). (#5412)
+- A crash when the user's information can't be read was fixed. (#5550)
+- fish no longer crashes when $hostname or some other non-electric read-only variable is used as a loop variable. (#5548)
+- The "kill" completions won't invoke the same command 25 times anymore, speeding matters up considerably. (#5541)
+- Fish now inherits symlinked paths correctly. (#5525)
+- fish_title had a few spaces removed, saving space. (#5517)
+- The `nim` prompt now works correctly when chosen in fish_config. (#5490)
+- A potential crash in `string match` discovered via GLIBCXX_ASSERTIONS was fixed. (#5479)
+- A crash on FreeBSD related to the wcstod_l function was fixed. (#5453)
+- An assertion that checked getpid() in a tight loop was removed, increasing performance in some cases up to 40%. (#5447)
+- `string` now prints help to stdout, like other builtins. (#5495)
+- The completions for `configure` now correctly offer directories. (#5518)
+- The `man` completions won't interpret the argument as a regex anymore. (#5566)
 
 
 # fish 3.0.0 (released December 28, 2018)
@@ -107,7 +128,6 @@ A new feature flags mechanism is added for staging deprecations and breaking cha
 - `read` writes directly to stdout if called without arguments (#4407).
 - `read` can now read individual lines into separate variables without consuming the input in its entirety via the new `/--line` option.
 - `set` has new `--append` and `--prepend` options (#1326).
-- `set` has a new `--show` option to show lots of information about variables (#4265).
 - `string match` with an empty pattern and `--entire` in glob mode now matches everything instead of nothing (#4971).
 - `string split` supports a new `--no-empty` option to exclude empty strings from the result (#4779).
 - `string` has new subcommands `split0` and `join0` for working with NUL-delimited output.

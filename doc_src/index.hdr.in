@@ -320,7 +320,9 @@ Autosuggestions are a powerful way to quickly summon frequently entered commands
 
 \section completion Tab completion
 
-Tab completion is one of the most time saving features of any modern shell. By tapping the tab key, the user asks `fish` to guess the rest of the command or parameter that the user is currently typing. If  `fish` can only find one possible completion, `fish` will write it out. If there is more than one completion, `fish` will write out the longest prefix that all completions have in common. If the completions differ on the first character, a list of all possible completions is printed. The list features descriptions of the completions and if the list doesn't fit the screen, it is scrollable by using the arrow keys, the page up/page down keys, the tab key or the space bar. Once the list has been entered, pressing any other key will start a search. If the list has not been entered, pressing any other key will exit the list and insert the pressed key into the command line.
+Tab completion is one of the most time saving features of any modern shell. By tapping the tab key, the user asks `fish` to guess the rest of the command or parameter that the user is currently typing. If  `fish` can only find one possible completion, `fish` will write it out. If there is more than one completion, `fish` will write out the longest prefix that all completions have in common. If the completions differ on the first character, a list of all possible completions is printed. The list features descriptions of the completions and if the list doesn't fit the screen, it is scrollable by using the arrow keys, the page up/page down keys, the tab key or the space bar.
+
+If the list is visible, pressing control-S (or the `pager-toggle-search` binding) will allow filtering the list. Shift-tab (or the `complete-and-search` binding) will trigger completion with the search field immediately visible.
 
 These are the general purpose tab completions that `fish` provides:
 
@@ -1024,15 +1026,31 @@ The following variables are available to change the highlighting colors in fish:
 
 Additionally, the following variables are available to change the highlighting in the completion pager:
 
+- `fish_pager_color_progress`, the color of the progress bar at the bottom left corner
+
+- `fish_pager_color_background`, the background color of a line
+
 - `fish_pager_color_prefix`, the color of the prefix string, i.e. the string that is to be completed
 
 - `fish_pager_color_completion`, the color of the completion itself
 
 - `fish_pager_color_description`, the color of the completion description
 
-- `fish_pager_color_progress`, the color of the progress bar at the bottom left corner
+- `fish_pager_color_secondary_background`, `fish_pager_color_background` of every second unselected completion. Defaults to `fish_pager_color_background`
 
-- `fish_pager_color_secondary`, the background color of the every second completion
+- `fish_pager_color_secondary_ prefix`, `fish_pager_color_prefix` of every second unselected completion. Defaults to `fish_pager_color_prefix`
+
+- `fish_pager_color_secondary_completion`, `fish_pager_color_completion` of every second unselected completion. Defaults to `fish_pager_color_completion`
+
+- `fish_pager_color_secondary_description`, `fish_pager_color_description` of every second unselected completion. Defaults to `fish_pager_color_description`
+
+- `fish_pager_color_selected_background`, `fish_pager_color_background` of the selected completion. Defaults to `fish_color_search_match`
+
+- `fish_pager_color_selected_prefix`, `fish_pager_color_prefix` of the selected completion. Defaults to `fish_pager_color_prefix`
+
+- `fish_pager_color_selected_completion`, `fish_pager_color_completion` of the selected completion. Defaults to `fish_pager_color_completion`
+
+- `fish_pager_color_selected_description`, `fish_pager_color_description` of the selected completion. Defaults to `fish_pager_color_description`
 
 Example:
 
