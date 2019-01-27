@@ -5,8 +5,11 @@
 # This is the case for at least Cygwin and Newlib.
 LIST(APPEND CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE=1)
 IF(APPLE)
-  # 10.7+ only.
-  LIST(APPEND CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS} "-Werror=unguarded-availability")
+    INCLUDE(CheckCXXCompilerFlag)
+    CHECK_CXX_COMPILER_FLAG("-Werror=unguarded-availability" REQUIRES_UNGUARDED_AVAILABILITY)
+    IF(REQUIRES_UNGUARDED_AVAILABILITY)
+        LIST(APPEND CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS} "-Werror=unguarded-availability")
+    ENDIF()
 ENDIF()
 
 # Try using CMake's own logic to locate curses/ncurses
@@ -28,7 +31,12 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 IF(CMAKE_VERSION VERSION_LESS 3.4.0)
     ENABLE_LANGUAGE(C)
 ENDIF()
-FIND_PACKAGE(Threads REQUIRED)
+# Don't set pthreads to required. Either we're on a platform where explict
+# linking with -lpthread is the norm (e.g. Linux) and it'll be found, or we're
+# on a platform that include pthreads by default (e.g. BSD, macOS) where this
+# won't find anything, or we're on a road-much-less-traveled OS where the user
+# can figure out what's wrong without a hard error here. See #5512.
+FIND_PACKAGE(Threads)
 
 # Detect WSL. Does not match against native Windows/WIN32.
 if (CMAKE_HOST_SYSTEM_VERSION MATCHES ".*-Microsoft")
