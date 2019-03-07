@@ -31,7 +31,7 @@
 /// Time in milliseconds to wait for another byte to be available for reading
 /// after \x1B is read before assuming that escape key was pressed, and not an
 /// escape sequence.
-#define WAIT_ON_ESCAPE_DEFAULT 300
+#define WAIT_ON_ESCAPE_DEFAULT 30
 static int wait_on_escape_ms = WAIT_ON_ESCAPE_DEFAULT;
 
 /// Characters that have been read and returned by the sequence matching code.
@@ -60,8 +60,6 @@ static wint_t lookahead_front() { return lookahead_list.front(); }
 static int (*interrupt_handler)();
 
 void input_common_init(int (*ih)()) { interrupt_handler = ih; }
-
-void input_common_destroy() {}
 
 /// Internal function used by input_common_readch to read one byte from fd 0. This function should
 /// only be called by input_common_readch().

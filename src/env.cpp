@@ -95,10 +95,6 @@ bool term_has_xn = false;
 /// found in `TERMINFO_DIRS` we don't to call `handle_curses()` before we've imported the latter.
 static bool env_initialized = false;
 
-typedef std::unordered_map<wcstring, void (*)(const wcstring &, const wcstring &, env_stack_t &)>
-    var_dispatch_table_t;
-static var_dispatch_table_t var_dispatch_table;
-
 /// List of all locale environment variable names that might trigger (re)initializing the locale
 /// subsystem.
 static const wcstring_list_t locale_variables({L"LANG", L"LANGUAGE", L"LC_ALL", L"LC_ADDRESS",
@@ -110,6 +106,11 @@ static const wcstring_list_t locale_variables({L"LANG", L"LANGUAGE", L"LC_ALL", 
 /// List of all curses environment variable names that might trigger (re)initializing the curses
 /// subsystem.
 static const wcstring_list_t curses_variables({L"TERM", L"TERMINFO", L"TERMINFO_DIRS"});
+
+typedef std::unordered_map<wcstring, void (*)(const wcstring &, const wcstring &, env_stack_t &)>
+    var_dispatch_table_t;
+static var_dispatch_table_t create_var_dispatch_table();
+static const var_dispatch_table_t s_var_dispatch_table = create_var_dispatch_table();
 
 // Some forward declarations to make it easy to logically group the code.
 static void init_locale(const environment_t &vars);
@@ -315,8 +316,8 @@ bool string_set_contains(const T &set, const wchar_t *val) {
 /// Check if a variable may not be set using the set command.
 static bool is_read_only(const wchar_t *val) {
     const string_set_t env_read_only = {
-        L"PWD",          L"SHLVL",    L"history",  L"status", L"version",
-        L"FISH_VERSION", L"fish_pid", L"hostname", L"_",      L"fish_private_mode"};
+        L"PWD",          L"SHLVL",    L"history",  L"pipestatus", L"status", L"version",
+        L"FISH_VERSION", L"fish_pid", L"hostname", L"_",          L"fish_private_mode"};
     return string_set_contains(env_read_only, val) ||
         (in_private_mode() && wcscmp(L"fish_history", val) == 0);
 }
@@ -329,7 +330,7 @@ static bool variable_should_auto_pathvar(const wcstring &name) {
 }
 
 /// Table of variables whose value is dynamically calculated, such as umask, status, etc.
-static const string_set_t env_electric = {L"history", L"status", L"umask"};
+static const string_set_t env_electric = {L"history", L"pipestatus", L"status", L"umask"};
 
 static bool is_electric(const wcstring &key) { return contains(env_electric, key); }
 
@@ -464,51 +465,51 @@ static bool does_term_support_setting_title(const environment_t &vars) {
 static void update_fish_color_support(const environment_t &vars) {
     // Detect or infer term256 support. If fish_term256 is set, we respect it;
     // otherwise infer it from the TERM variable or use terminfo.
-    auto fish_term256 = vars.get(L"fish_term256");
-    auto term_var = vars.get(L"TERM");
-    wcstring term = term_var.missing_or_empty() ? L"" : term_var->as_string();
-    bool support_term256 = false;  // default to no support
-    if (!fish_term256.missing_or_empty()) {
-        support_term256 = from_string<bool>(fish_term256->as_string());
-        debug(2, L"256 color support determined by 'fish_term256'");
+    wcstring term;
+    bool support_term256 = false;
+    bool support_term24bit = false;
+
+    if (auto term_var = vars.get(L"TERM")) term = term_var->as_string();
+
+    if (auto fish_term256 = vars.get(L"fish_term256")) {
+        // $fish_term256
+        support_term256 = bool_from_string(fish_term256->as_string());
+        debug(2, L"256 color support determined by '$fish_term256'");
     } else if (term.find(L"256color") != wcstring::npos) {
-        // TERM=*256color*: Explicitly supported.
+        // TERM is *256color*: 256 colors explicitly supported
         support_term256 = true;
-        debug(2, L"256 color support enabled for '256color' in TERM");
+        debug(2, L"256 color support enabled for TERM=%ls", term.c_str());
     } else if (term.find(L"xterm") != wcstring::npos) {
-        // Assume that all xterms are 256, except for OS X SnowLeopard
-        const auto prog_var = vars.get(L"TERM_PROGRAM");
-        const auto progver_var = vars.get(L"TERM_PROGRAM_VERSION");
-        wcstring term_program = prog_var.missing_or_empty() ? L"" : prog_var->as_string();
-        if (term_program == L"Apple_Terminal" && !progver_var.missing_or_empty()) {
-            // OS X Lion is version 300+, it has 256 color support
-            if (strtod(wcs2str(progver_var->as_string()), NULL) > 300) {
+        // Assume that all 'xterm's can handle 256, except for Terminal.app from Snow Leopard
+        wcstring term_program, term_version;
+        if (auto tp = vars.get(L"TERM_PROGRAM")) term_program = tp->as_string();
+        if (auto tpv = vars.get(L"TERM_PROGRAM_VERSION")) {
+            if (term_program == L"Apple_Terminal" &&
+                fish_wcstod(tpv->as_string().c_str(), NULL) > 299) {
+                // OS X Lion is version 299+, it has 256 color support (see github Wiki)
                 support_term256 = true;
-                debug(2, L"256 color support enabled for TERM=xterm + modern Terminal.app");
+                debug(2, L"256 color support enabled for TERM=%ls on Terminal.app", term.c_str());
+            } else {
+                support_term256 = true;
+                debug(2, L"256 color support enabled for TERM=%ls", term.c_str());
             }
-        } else {
-            support_term256 = true;
-            debug(2, L"256 color support enabled for TERM=xterm");
         }
     } else if (cur_term != NULL) {
         // See if terminfo happens to identify 256 colors
         support_term256 = (max_colors >= 256);
-        debug(2, L"256 color support: using %d colors per terminfo", max_colors);
-    } else {
-        debug(2, L"256 color support not enabled (yet)");
+        debug(2, L"256 color support: %d colors per terminfo entry for %ls", max_colors, term.c_str());
     }
 
-    auto fish_term24bit = vars.get(L"fish_term24bit");
-    bool support_term24bit;
-    if (!fish_term24bit.missing_or_empty()) {
-        support_term24bit = from_string<bool>(fish_term24bit->as_string());
+    // Handle $fish_term24bit
+    if (auto fish_term24bit = vars.get(L"fish_term24bit")) {
+        support_term24bit = bool_from_string(fish_term24bit->as_string());
         debug(2, L"'fish_term24bit' preference: 24-bit color %s",
               support_term24bit ? L"enabled" : L"disabled");
     } else {
         // We don't attempt to infer term24 bit support yet.
-        support_term24bit = false;
+        // XXX: actually, we do, in config.fish.
+        // So we actually change the color mode shortly after startup
     }
-
     color_support_t support = (support_term256 ? color_support_term256 : 0) |
                               (support_term24bit ? color_support_term24bit : 0);
     output_set_color_support(support);
@@ -560,16 +561,22 @@ static void guess_emoji_width() {
         version = strtod(narrow_version.c_str(), NULL);
     }
 
-    // iTerm2 defaults to Unicode 8 sizes.
-    // See https://gitlab.com/gnachman/iterm2/wikis/unicodeversionswitching
 
     if (term == L"Apple_Terminal" && version >= 400) {
         // Apple Terminal on High Sierra
         g_guessed_fish_emoji_width = 2;
         debug(2, "default emoji width: 2 for %ls", term.c_str());
-    } else {
+    } else if (term == L"iTerm.app") {
+        // iTerm2 defaults to Unicode 8 sizes.
+        // See https://gitlab.com/gnachman/iterm2/wikis/unicodeversionswitching
         g_guessed_fish_emoji_width = 1;
         debug(2, "default emoji width: 1");
+    } else {
+        // Default to whatever system wcwidth says to U+1F603,
+        // but only if it's at least 1.
+        int w = wcwidth(L'😃');
+        g_guessed_fish_emoji_width = w > 0 ? w : 1;
+        debug(2, "default emoji width: %d", g_guessed_fish_emoji_width);
     }
 }
 
@@ -623,8 +630,8 @@ static void react_to_variable_change(const wchar_t *op, const wcstring &key, env
     // call the appropriate functions to put the value of the var into effect.
     if (!env_initialized) return;
 
-    auto dispatch = var_dispatch_table.find(key);
-    if (dispatch != var_dispatch_table.end()) {
+    auto dispatch = s_var_dispatch_table.find(key);
+    if (dispatch != s_var_dispatch_table.end()) {
         (*dispatch->second)(op, key, vars);
     } else if (string_prefixes_string(L"fish_color_", key)) {
         reader_react_to_color_change();
@@ -638,12 +645,7 @@ static void universal_callback(env_stack_t *stack, const callback_data_t &cb) {
 
     react_to_variable_change(op, cb.key, *stack);
     stack->mark_changed_exported();
-
-    event_t ev = event_t::variable_event(cb.key);
-    ev.arguments.push_back(L"VARIABLE");
-    ev.arguments.push_back(op);
-    ev.arguments.push_back(cb.key);
-    event_fire(&ev);
+    event_fire(event_t::variable(cb.key, {L"VARIABLE", op, cb.key}));
 }
 
 /// Make sure the PATH variable contains something.
@@ -853,6 +855,8 @@ static void handle_locale_change(const wcstring &op, const wcstring &var_name, e
     UNUSED(op);
     UNUSED(var_name);
     init_locale(vars);
+    // We need to re-guess emoji width because the locale might have changed to a multibyte one.
+    guess_emoji_width();
 }
 
 static void handle_curses_change(const wcstring &op, const wcstring &var_name, env_stack_t &vars) {
@@ -864,7 +868,8 @@ static void handle_curses_change(const wcstring &op, const wcstring &var_name, e
 
 /// Populate the dispatch table used by `react_to_variable_change()` to efficiently call the
 /// appropriate function to handle a change to a variable.
-static void setup_var_dispatch_table() {
+static var_dispatch_table_t create_var_dispatch_table() {
+    var_dispatch_table_t var_dispatch_table;
     for (const auto &var_name : locale_variables) {
         var_dispatch_table.emplace(var_name, handle_locale_change);
     }
@@ -887,11 +892,10 @@ static void setup_var_dispatch_table() {
     var_dispatch_table.emplace(L"fish_read_limit", handle_read_limit_change);
     var_dispatch_table.emplace(L"fish_history", handle_fish_history_change);
     var_dispatch_table.emplace(L"TZ", handle_tz_change);
+    return var_dispatch_table;
 }
 
 void env_init(const struct config_paths_t *paths /* or NULL */) {
-    setup_var_dispatch_table();
-
     env_stack_t &vars = env_stack_t::globals();
     // Import environment variables. Walk backwards so that the first one out of any duplicates wins
     // (See issue #2784).
@@ -956,7 +960,7 @@ void env_init(const struct config_paths_t *paths /* or NULL */) {
     vars.set_one(L"FISH_VERSION", ENV_GLOBAL, version);
 
     // Set the $fish_pid variable.
-    vars.set_one(L"fish_pid", ENV_GLOBAL, to_string<long>(getpid()));
+    vars.set_one(L"fish_pid", ENV_GLOBAL, to_string(getpid()));
 
     // Set the $hostname variable
     wcstring hostname = L"fish";
@@ -971,7 +975,7 @@ void env_init(const struct config_paths_t *paths /* or NULL */) {
         // TODO: Figure out how to handle invalid numbers better. Shouldn't we issue a diagnostic?
         long shlvl_i = fish_wcstol(str2wcstring(shlvl_var).c_str(), &end);
         if (!errno && shlvl_i >= 0) {
-            nshlvl_str = to_string<long>(shlvl_i + 1);
+            nshlvl_str = to_string(shlvl_i + 1);
         }
     }
     vars.set_one(L"SHLVL", ENV_GLOBAL | ENV_EXPORT, nshlvl_str);
@@ -1014,11 +1018,13 @@ void env_init(const struct config_paths_t *paths /* or NULL */) {
     }
 
     // initialize the PWD variable if necessary
-    // Note we may inherit a virtual PWD that doesn't match what getcwd would return; respect that.
-    // Note we treat PWD as read-only so it was not set in vars.
-    const char *incoming_pwd = getenv("PWD");
-    if (incoming_pwd && incoming_pwd[0]) {
-        vars.set_one(L"PWD",  ENV_EXPORT | ENV_GLOBAL, str2wcstring(incoming_pwd));
+    // Note we may inherit a virtual PWD that doesn't match what getcwd would return; respect that
+    // if and only if it matches getcwd (#5647). Note we treat PWD as read-only so it was not set in
+    // vars.
+    const char *incoming_pwd_cstr = getenv("PWD");
+    wcstring incoming_pwd = incoming_pwd_cstr ? str2wcstring(incoming_pwd_cstr) : wcstring{};
+    if (!incoming_pwd.empty() && paths_are_same_file(incoming_pwd, L".")) {
+        vars.set_one(L"PWD", ENV_EXPORT | ENV_GLOBAL, incoming_pwd);
     } else {
         vars.set_pwd_from_getcwd();
     }
@@ -1028,7 +1034,7 @@ void env_init(const struct config_paths_t *paths /* or NULL */) {
     // Set g_use_posix_spawn. Default to true.
     auto use_posix_spawn = vars.get(L"fish_use_posix_spawn");
     g_use_posix_spawn =
-        use_posix_spawn.missing_or_empty() ? true : from_string<bool>(use_posix_spawn->as_string());
+        use_posix_spawn.missing_or_empty() ? true : bool_from_string(use_posix_spawn->as_string());
 
     // Set fish_bind_mode to "default".
     vars.set_one(FISH_BIND_MODE_VAR, ENV_GLOBAL, DEFAULT_BIND_MODE);
@@ -1253,12 +1259,7 @@ int env_stack_t::set_internal(const wcstring &key, env_mode_flags_t input_var_mo
         }
     }
 
-    event_t ev = event_t::variable_event(key);
-    ev.arguments.reserve(3);
-    ev.arguments.push_back(L"VARIABLE");
-    ev.arguments.push_back(L"SET");
-    ev.arguments.push_back(key);
-    event_fire(&ev);
+    event_fire(event_t::variable(key, {L"VARIABLE", L"SET", key}));
     react_to_variable_change(L"SET", key, *this);
     return ENV_OK;
 }
@@ -1324,12 +1325,7 @@ int env_stack_t::remove(const wcstring &key, int var_mode) {
         }
 
         if (try_remove(first_node, key.c_str(), var_mode)) {
-            event_t ev = event_t::variable_event(key);
-            ev.arguments.push_back(L"VARIABLE");
-            ev.arguments.push_back(L"ERASE");
-            ev.arguments.push_back(key);
-            event_fire(&ev);
-
+            event_fire(event_t::variable(key, {L"VARIABLE", L"ERASE", key}));
             erased = 1;
         }
     }
@@ -1344,11 +1340,7 @@ int env_stack_t::remove(const wcstring &key, int var_mode) {
         }
         if (erased) {
             env_universal_barrier();
-            event_t ev = event_t::variable_event(key);
-            ev.arguments.push_back(L"VARIABLE");
-            ev.arguments.push_back(L"ERASE");
-            ev.arguments.push_back(key);
-            event_fire(&ev);
+            event_fire(event_t::variable(key, {L"VARIABLE", L"ERASE", key}));
         }
 
         if (is_exported) vars_stack().mark_changed_exported();
@@ -1407,6 +1399,14 @@ maybe_t<env_var_t> env_stack_t::get(const wcstring &key, env_mode_flags_t mode) 
             wcstring_list_t result;
             if (history) history->get_history(result);
             return env_var_t(L"history", result);
+        } else if (key == L"pipestatus") {
+            const auto js = proc_get_last_statuses();
+            wcstring_list_t result;
+            result.reserve(js.pipestatus.size());
+            for (int i : js.pipestatus) {
+                result.push_back(to_string(i));
+            }
+            return env_var_t(L"pipestatus", std::move(result));
         } else if (key == L"status") {
             return env_var_t(L"status", to_string(proc_get_last_status()));
         } else if (key == L"umask") {
@@ -1741,7 +1741,7 @@ wcstring env_get_runtime_path() {
         auto pwuid = getpwuid(geteuid());
         const char *uname = pwuid ? pwuid->pw_name : NULL;
         // /tmp/fish.user
-        std::string tmpdir = "/tmp/fish.";
+        std::string tmpdir = get_path_to_tmp_dir() + "/fish.";
         if (uname) {
             tmpdir.append(uname);
         }

@@ -56,7 +56,7 @@ int get_arity(const int type) {
 typedef struct te_expr {
     int type;
     union {double value; const void *function;};
-    te_expr *parameters[1];
+    te_expr *parameters[];
 } te_expr;
 
 // TODO: Rename since variables have been removed.
@@ -92,7 +92,7 @@ void te_free(te_expr *n);
 static te_expr *new_expr(const int type, const te_expr *parameters[]) {
     const int arity = get_arity(type);
     const int psize = sizeof(te_expr*) * arity;
-    const int size = (sizeof(te_expr) - sizeof(void*)) + psize;
+    const int size = sizeof(te_expr) + psize;
     te_expr *ret = (te_expr *)malloc(size);
     // This sets float to 0, which depends on the implementation.
     // We rely on IEEE-754 floats anyway, so it's okay.
@@ -202,7 +202,13 @@ static const te_builtin *find_builtin(const char *name, int len) {
 static constexpr double add(double a, double b) {return a + b;}
 static constexpr double sub(double a, double b) {return a - b;}
 static constexpr double mul(double a, double b) {return a * b;}
-static constexpr double divide(double a, double b) {return a / b;}
+static constexpr double divide(double a, double b) {
+    // If b isn't zero, divide.
+    // If a isn't zero, return signed INFINITY.
+    // Else, return NAN.
+    return b ? a / b : a ? copysign(1, a) * copysign(1,b) * INFINITY : NAN;
+}
+
 static constexpr double negate(double a) {return -a;}
 
 void next_token(state *s) {

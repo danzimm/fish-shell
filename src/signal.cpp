@@ -15,6 +15,7 @@
 #include "parser.h"
 #include "proc.h"
 #include "reader.h"
+#include "topic_monitor.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 /// Struct describing an entry for the lookup table used to convert between signal names and signal
@@ -28,11 +29,8 @@ struct lookup_entry {
     const wchar_t *desc;
 };
 
-/// The number of signal blocks in place. Increased by signal_block, decreased by signal_unblock.
-static int block_count = 0;
-
 /// Lookup table used to convert between signal names and signal ids, etc.
-static const struct lookup_entry lookup[] = {
+static const struct lookup_entry signal_table[] = {
 #ifdef SIGHUP
     {SIGHUP, L"SIGHUP", N_(L"Terminal hung up")},
 #endif
@@ -141,7 +139,7 @@ static const struct lookup_entry lookup[] = {
 #ifdef SIGUNUSED
     {SIGUNUSED, L"SIGUNUSED", N_(L"Unused signal")},
 #endif
-    {0, NULL, NULL}};
+};
 
 /// Test if \c name is a string describing the signal named \c canonical.
 static int match_signal_name(const wchar_t *canonical, const wchar_t *name) {
@@ -151,9 +149,9 @@ static int match_signal_name(const wchar_t *canonical, const wchar_t *name) {
 }
 
 int wcs2sig(const wchar_t *str) {
-    for (int i = 0; lookup[i].desc; i++) {
-        if (match_signal_name(lookup[i].name, str)) {
-            return lookup[i].signal;
+    for (const auto &data : signal_table) {
+        if (match_signal_name(data.name, str)) {
+            return data.signal;
         }
     }
 
@@ -163,11 +161,9 @@ int wcs2sig(const wchar_t *str) {
 }
 
 const wchar_t *sig2wcs(int sig) {
-    int i;
-
-    for (i = 0; lookup[i].desc; i++) {
-        if (lookup[i].signal == sig) {
-            return lookup[i].name;
+    for (const auto &data : signal_table) {
+        if (data.signal == sig) {
+            return data.name;
         }
     }
 
@@ -175,15 +171,30 @@ const wchar_t *sig2wcs(int sig) {
 }
 
 const wchar_t *signal_get_desc(int sig) {
-    int i;
-
-    for (i = 0; lookup[i].desc; i++) {
-        if (lookup[i].signal == sig) {
-            return _(lookup[i].desc);
+    for (const auto &data : signal_table) {
+        if (data.signal == sig) {
+            return _(data.desc);
         }
     }
 
     return _(L"Unknown");
+}
+
+/// Store the "main" pid. This allows us to reliably determine if we are in a forked child.
+static const pid_t s_main_pid = getpid();
+
+/// It's possible that we receive a signal after we have forked, but before we have reset the signal
+/// handlers (or even run the pthread_atfork calls). In that event we will do something dumb like
+/// swallow SIGINT. Ensure that doesn't happen. Check if we are the main fish process; if not reset
+/// and re-raise the signal. \return whether we re-raised the signal.
+static bool reraise_if_forked_child(int sig) {
+    // Don't use is_forked_child, that relies on atfork handlers which maybe have not run yet.
+    if (getpid() == s_main_pid) {
+        return false;
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+    return true;
 }
 
 /// Standard signal handler.
@@ -191,7 +202,7 @@ static void default_handler(int signal, siginfo_t *info, void *context) {
     UNUSED(info);
     UNUSED(context);
     if (event_is_signal_observed(signal)) {
-        event_fire_signal(signal);
+        event_enqueue_signal(signal);
     }
 }
 
@@ -200,6 +211,7 @@ static void default_handler(int signal, siginfo_t *info, void *context) {
 static void handle_winch(int sig, siginfo_t *info, void *context) {
     UNUSED(info);
     UNUSED(context);
+    if (reraise_if_forked_child(sig)) return;
     common_handle_winch(sig);
     default_handler(sig, 0, 0);
 }
@@ -210,18 +222,20 @@ static void handle_winch(int sig, siginfo_t *info, void *context) {
 static void handle_hup(int sig, siginfo_t *info, void *context) {
     UNUSED(info);
     UNUSED(context);
+    if (reraise_if_forked_child(sig)) return;
     if (event_is_signal_observed(SIGHUP)) {
         default_handler(sig, 0, 0);
     } else {
-        reader_exit(1, 1);
+        reader_force_exit();
     }
+    topic_monitor_t::principal().post(topic_t::sighupint);
 }
 
 /// Handle sigterm. The only thing we do is restore the front process ID, then die.
 static void handle_sigterm(int sig, siginfo_t *info, void *context) {
-    UNUSED(sig);
     UNUSED(info);
     UNUSED(context);
+    if (reraise_if_forked_child(sig)) return;
     restore_term_foreground_process_group();
     signal(SIGTERM, SIG_DFL);
     raise(SIGTERM);
@@ -230,45 +244,48 @@ static void handle_sigterm(int sig, siginfo_t *info, void *context) {
 /// Interactive mode ^C handler. Respond to int signal by setting interrupted-flag and stopping all
 /// loops and conditionals.
 static void handle_int(int sig, siginfo_t *info, void *context) {
+    if (reraise_if_forked_child(sig)) return;
     reader_handle_sigint();
     default_handler(sig, info, context);
+    topic_monitor_t::principal().post(topic_t::sighupint);
 }
 
 /// Non-interactive ^C handler.
 static void handle_int_notinteractive(int sig, siginfo_t *info, void *context) {
+    if (reraise_if_forked_child(sig)) return;
     parser_t::skip_all_blocks();
     default_handler(sig, info, context);
 }
 
 /// sigchld handler. Does notification and calls the handler in proc.c.
 static void handle_chld(int sig, siginfo_t *info, void *context) {
-    job_handle_signal(sig, info, context);
+    if (reraise_if_forked_child(sig)) return;
     default_handler(sig, info, context);
+    topic_monitor_t::principal().post(topic_t::sigchld);
 }
 
 // We have a sigalarm handler that does nothing. This is used in the signal torture test, to verify
 // that we behave correctly when receiving lots of irrelevant signals.
 static void handle_sigalarm(int sig, siginfo_t *info, void *context) {
-    UNUSED(sig);
     UNUSED(info);
     UNUSED(context);
+    if (reraise_if_forked_child(sig)) return;
+    default_handler(sig, info, context);
 }
 
 void signal_reset_handlers() {
-    int i;
-
     struct sigaction act;
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
     act.sa_handler = SIG_DFL;
 
-    for (i = 0; lookup[i].desc; i++) {
-        if (lookup[i].signal == SIGHUP) {
+    for (const auto &data : signal_table) {
+        if (data.signal == SIGHUP) {
             struct sigaction oact;
             sigaction(SIGHUP, NULL, &oact);
             if (oact.sa_handler == SIG_IGN) continue;
         }
-        sigaction(lookup[i].signal, &act, NULL);
+        sigaction(data.signal, &act, NULL);
     }
 }
 
@@ -382,28 +399,15 @@ void signal_handle(int sig, int do_handle) {
 
 void get_signals_with_handlers(sigset_t *set) {
     sigemptyset(set);
-    for (int i = 0; lookup[i].desc; i++) {
+    for (const auto &data : signal_table) {
         struct sigaction act = {};
-        sigaction(lookup[i].signal, NULL, &act);
+        sigaction(data.signal, NULL, &act);
         // If SIGHUP is being ignored (e.g., because were were run via `nohup`) don't reset it.
         // We don't special case other signals because if they're being ignored that shouldn't
         // affect processes we spawn. They should get the default behavior for those signals.
-        if (lookup[i].signal == SIGHUP && act.sa_handler == SIG_IGN) continue;
-        if (act.sa_handler != SIG_DFL) sigaddset(set, lookup[i].signal);
+        if (data.signal == SIGHUP && act.sa_handler == SIG_IGN) continue;
+        if (act.sa_handler != SIG_DFL) sigaddset(set, data.signal);
     }
-}
-
-void signal_block() {
-    ASSERT_IS_MAIN_THREAD();
-    sigset_t chldset;
-
-    if (!block_count) {
-        sigfillset(&chldset);
-        DIE_ON_FAILURE(pthread_sigmask(SIG_BLOCK, &chldset, NULL));
-    }
-
-    block_count++;
-    // debug( 0, L"signal block level increased to %d", block_count );
 }
 
 /// Ensure we did not inherit any blocked signals. See issue #3964.
@@ -413,21 +417,3 @@ void signal_unblock_all() {
     sigprocmask(SIG_SETMASK, &iset, NULL);
 }
 
-void signal_unblock() {
-    ASSERT_IS_MAIN_THREAD();
-
-    block_count--;
-    if (block_count < 0) {
-        debug(0, _(L"Signal block mismatch"));
-        bugreport();
-        FATAL_EXIT();
-    }
-
-    if (!block_count) {
-        sigset_t chldset;
-        sigfillset(&chldset);
-        DIE_ON_FAILURE(pthread_sigmask(SIG_UNBLOCK, &chldset, 0));
-    }
-}
-
-bool signal_is_blocked() { return static_cast<bool>(block_count); }

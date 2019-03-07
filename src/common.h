@@ -5,33 +5,26 @@
 
 #include <errno.h>
 #include <limits.h>
-#include <pthread.h>
-#include <stdarg.h>  // IWYU pragma: keep
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <termios.h>
-#include <wchar.h>
+// Needed for va_list et al.
+#include <stdarg.h> // IWYU pragma: keep
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>  // IWYU pragma: keep
 #endif
 
 #include <algorithm>
 #include <functional>
-#include <iterator>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <string>
-#include <tuple>
-#include <type_traits>
-#include <unordered_map>
 #include <vector>
 
 #include "fallback.h"  // IWYU pragma: keep
 #include "maybe.h"
-#include "signal.h"  // IWYU pragma: keep
+
+// PATH_MAX may not exist.
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 // Define a symbol we can use elsewhere in our code to determine if we're being built on MS Windows
 // under Cygwin.
@@ -180,9 +173,8 @@ enum selection_direction_t {
 ///
 /// will print the string 'fish: Pi = 3.141', given that debug_level is 1 or higher, and that
 /// program_name is 'fish'.
-void __attribute__((noinline)) debug_impl(int level, const char *msg, ...)
-    __attribute__((format(printf, 2, 3)));
-void __attribute__((noinline)) debug_impl(int level, const wchar_t *msg, ...);
+[[gnu::noinline, gnu::format(printf, 2, 3)]] void debug_impl(int level, const char *msg, ...);
+[[gnu::noinline]] void debug_impl(int level, const wchar_t *msg, ...);
 
 /// The verbosity level of fish. If a call to debug has a severity level higher than \c debug_level,
 /// it will not be printed.
@@ -280,19 +272,6 @@ inline bool is_whitespace(const wchar_t *input) { return is_whitespace(wcstring(
 
 [[noreturn]] void __fish_assert(const char *msg, const char *file, size_t line, int error);
 
-/// Check if signals are blocked. If so, print an error message and return from the function
-/// performing this check.
-#define CHECK_BLOCK(retval)
-#if 0
-#define CHECK_BLOCK(retval)                                                \
-    if (signal_is_blocked()) {                                             \
-        debug(0, "function %s called while blocking signals. ", __func__); \
-        bugreport();                                                       \
-        show_stackframe(L'E');                                             \
-        return retval;                                                     \
-    }
-#endif
-
 /// Shorthand for wgettext call in situations where a C-style string is needed (e.g., fwprintf()).
 #define _(wstr) wgettext(wstr).c_str()
 
@@ -313,6 +292,12 @@ template <typename T>
 void vec_append(std::vector<T> &receiver, std::vector<T> &&donator) {
     receiver.insert(receiver.end(), std::make_move_iterator(donator.begin()),
                     std::make_move_iterator(donator.end()));
+}
+
+/// Move an object into a shared_ptr.
+template <typename T>
+std::shared_ptr<T> move_to_sharedptr(T &&v) {
+    return std::make_shared<T>(std::move(v));
 }
 
 /// Print a stack trace to stderr.
@@ -361,61 +346,13 @@ bool string_suffixes_string_case_insensitive(const wcstring &proposed_suffix,
 bool string_prefixes_string_case_insensitive(const wcstring &proposed_prefix,
                                              const wcstring &value);
 
-/// Case-insensitive string search, templated for use with both std::string and std::wstring.
-/// Modeled after std::string::find().
+/// Case-insensitive string search, modeled after std::string::find().
 /// \param fuzzy indicates this is being used for fuzzy matching and case insensitivity is
 /// expanded to include symbolic characters (#3584).
 /// \return the offset of the first case-insensitive matching instance of `needle` within
 /// `haystack`, or `string::npos()` if no results were found.
-template <typename T>
-size_t ifind(const T &haystack, const T &needle, bool fuzzy = false) {
-    using char_t = typename T::value_type;
-    auto locale = std::locale();
-
-    std::function<bool(char_t, char_t)> icase_eq;
-
-    if (!fuzzy) {
-        icase_eq = [&locale](char_t c1, char_t c2) {
-            return std::toupper(c1, locale) == std::toupper(c2, locale);
-        };
-    } else {
-        icase_eq = [&locale](char_t c1, char_t c2) {
-            // This `ifind()` call is being used for fuzzy string matching. Further extend case
-            // insensitivity to treat `-` and `_` as equal (#3584).
-
-            // The two lines below were tested to be 27% faster than
-            //      (c1 == '_' || c1 == '-') && (c2 == '-' || c2 == '_')
-            // while returning no false positives for all (c1, c2) combinations in the printable
-            // range (0x20-0x7E). It might return false positives outside that range, but fuzzy
-            // comparisons are typically called for file names only, which are unlikely to have
-            // such characters and this entire function is 100% broken on unicode so there's no
-            // point in worrying about anything outside of the ANSII range.
-            // ((c1 == Literal<char_t>('_') || c1 == Literal<char_t>('-')) &&
-            // ((c1 ^ c2) == (Literal<char_t>('-') ^ Literal<char_t>('_'))));
-
-            // One of the following would be an illegal comparison between a char and a wchar_t.
-            // However, placing them behind a constexpr gate results in the elision of the if
-            // statement and the incorrect branch, with the compiler's SFINAE support suppressing
-            // any errors in the branch not taken.
-            if (sizeof(char_t) == sizeof(char)) {
-                return std::toupper(c1, locale) == std::toupper(c2, locale) ||
-                ((c1 == '_' || c1 == '-') &&
-                ((c1 ^ c2) == ('-' ^ '_')));
-            } else {
-                return std::toupper(c1, locale) == std::toupper(c2, locale) ||
-                ((c1 == L'_' || c1 == L'-') &&
-                ((c1 ^ c2) == (L'-' ^ L'_')));
-            }
-        };
-    }
-
-    auto result =
-        std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(), icase_eq);
-    if (result != haystack.end()) {
-        return result - haystack.begin();
-    }
-    return T::npos;
-}
+size_t ifind(const wcstring &haystack, const wcstring &needle, bool fuzzy = false);
+size_t ifind(const std::string &haystack, const std::string &needle, bool fuzzy = false);
 
 /// Split a string by a separator character.
 wcstring_list_t split_string(const wcstring &val, wchar_t sep);
@@ -565,55 +502,40 @@ void debug_safe(int level, const char *msg, const char *param1 = NULL, const cha
 /// Writes out a long safely.
 void format_long_safe(char buff[64], long val);
 void format_long_safe(wchar_t buff[64], long val);
+void format_ullong_safe(wchar_t buff[64], unsigned long long val);
 
 /// "Narrows" a wide character string. This just grabs any ASCII characters and trunactes.
 void narrow_string_safe(char buff[64], const wchar_t *s);
 
-template <typename T>
-T from_string(const wcstring &x) {
-    T result;
-    std::wstringstream stream(x);
-    stream >> result;
-    return result;
-}
-
-template <typename T>
-T from_string(const std::string &x) {
-    T result = T();
-    std::stringstream stream(x);
-    stream >> result;
-    return result;
-}
-
-template <typename T>
-wcstring to_string(const T &x) {
-    std::wstringstream stream;
-    stream << x;
-    return stream.str();
-}
-
-// wstringstream is a huge memory pig. Let's provide some specializations where we can.
-template <>
-inline wcstring to_string(const long &x) {
-    wchar_t buff[128];
+inline wcstring to_string(long x) {
+    wchar_t buff[64];
     format_long_safe(buff, x);
     return wcstring(buff);
 }
 
-template <>
-inline bool from_string(const std::string &x) {
-    return !x.empty() && strchr("YTyt1", x.at(0));
+inline wcstring to_string(int x) { return to_string(static_cast<long>(x)); }
+
+inline wcstring to_string(size_t x) {
+    wchar_t buff[64];
+    format_ullong_safe(buff, x);
+    return wcstring(buff);
 }
 
-template <>
-inline bool from_string(const wcstring &x) {
-    return !x.empty() && wcschr(L"YTyt1", x.at(0));
+inline bool bool_from_string(const std::string &x) {
+    if (x.empty()) return false;
+    switch (x.front()) {
+        case 'Y':
+        case 'T':
+        case 'y':
+        case 't':
+        case '1':
+            return true;
+        default:
+            return false;
+    }
 }
 
-template <>
-inline wcstring to_string(const int &x) {
-    return to_string(static_cast<long>(x));
-}
+inline bool bool_from_string(const wcstring &x) { return !x.empty() && wcschr(L"YTyt1", x.at(0)); }
 
 wchar_t **make_null_terminated_array(const wcstring_list_t &lst);
 char **make_null_terminated_array(const std::vector<std::string> &lst);
@@ -786,6 +708,9 @@ class autoclose_fd_t {
         fd_ = fd;
     }
 
+    // \return if this has a valid fd.
+    bool valid() const { return fd_ >= 0; }
+
     autoclose_fd_t(const autoclose_fd_t &) = delete;
     void operator=(const autoclose_fd_t &) = delete;
     autoclose_fd_t(autoclose_fd_t &&rhs) : fd_(rhs.fd_) { rhs.fd_ = -1; }
@@ -833,8 +758,8 @@ void error_reset();
 /// initialization.
 void fish_setlocale();
 
-/// Call read while blocking the SIGCHLD signal. Should only be called if you _know_ there is data
-/// available for reading, or the program will hang until there is data.
+/// Call read, blocking and repeating on EINTR. Exits on EAGAIN.
+/// \return the number of bytes read, or 0 on EOF. On EAGAIN, returns -1 if nothing was read.
 long read_blocked(int fd, void *buf, size_t count);
 
 /// Loop a write request while failure is non-critical. Return -1 and set errno in case of critical
@@ -934,18 +859,10 @@ void assert_is_not_forked_child(const char *who);
 #define ASSERT_IS_NOT_FORKED_CHILD_TRAMPOLINE(x) assert_is_not_forked_child(x)
 #define ASSERT_IS_NOT_FORKED_CHILD() ASSERT_IS_NOT_FORKED_CHILD_TRAMPOLINE(__FUNCTION__)
 
-/// Detect if we are Windows Subsystem for Linux by inspecting /proc/sys/kernel/osrelease
-/// and checking if "Microsoft" is in the first line.
+/// Determines if we are running under Microsoft's Windows Subsystem for Linux to work around
+/// some known limitations and/or bugs.
 /// See https://github.com/Microsoft/WSL/issues/423 and Microsoft/WSL#2997
-constexpr bool is_windows_subsystem_for_linux() {
-    // This function is called after fork() and before exec() in postfork.cpp. Make sure we
-    // don't allocate any memory here!
-#ifdef WSL
-    return true;
-#else
-    return false;
-#endif
-}
+bool is_windows_subsystem_for_linux();
 
 /// Detect if we are running under Cygwin or Cgywin64
 constexpr bool is_cygwin() {
@@ -957,7 +874,7 @@ constexpr bool is_cygwin() {
 }
 
 extern "C" {
-__attribute__((noinline)) void debug_thread_error(void);
+[[gnu::noinline]] void debug_thread_error(void);
 }
 
 /// Converts from wide char to digit in the specified base. If d is not a valid digit in the
@@ -1019,23 +936,9 @@ static const wchar_t *enum_to_str(T enum_val, const enum_map<T> map[]) {
     return NULL;
 };
 
-template <typename... Args>
-using tuple_list = std::vector<std::tuple<Args...>>;
-
-// Given a container mapping one X to many Y, return a list of {X,Y}
-template <typename X, typename Y>
-inline tuple_list<X, Y> flatten(const std::unordered_map<X, std::vector<Y>> &list) {
-    tuple_list<X, Y> results(list.size() * 1.5);  // just a guess as to the initial size
-    for (auto &kv : list) {
-        for (auto &v : kv.second) {
-            results.emplace_back(std::make_tuple(kv.first, v));
-        }
-    }
-
-    return results;
-}
-
 void redirect_tty_output();
+
+std::string get_path_to_tmp_dir();
 
 // Minimum allowed terminal size and default size if the detected size is not reasonable.
 #define MIN_TERM_COL 20
@@ -1120,7 +1023,7 @@ private:
     const std::function<void()> cleanup;
 public:
     cleanup_t(std::function<void()> exit_actions)
-        : cleanup{exit_actions} {}
+        : cleanup{std::move(exit_actions)} {}
     ~cleanup_t() {
         cleanup();
     }

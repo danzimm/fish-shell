@@ -175,8 +175,8 @@ void function_add(const function_data_t &data, const parser_t &parser) {
     loaded_functions.insert(new_pair);
 
     // Add event handlers.
-    for (const event_t &event : data.events) {
-        event_add_handler(event);
+    for (const event_description_t &ed : data.events) {
+        event_add_handler(std::make_shared<event_handler_t>(ed, data.name));
     }
 }
 
@@ -224,9 +224,7 @@ static bool function_remove_ignore_autoload(const wcstring &name, bool tombstone
     if (iter->second.is_autoload && tombstone) function_tombstones.insert(name);
 
     loaded_functions.erase(iter);
-    event_t ev(EVENT_ANY);
-    ev.function_name = name;
-    event_remove(ev);
+    event_remove_function_handlers(name);
     return true;
 }
 
@@ -251,7 +249,10 @@ bool function_get_definition(const wcstring &name, wcstring &out_definition) {
     scoped_rlock locker(functions_lock);
     const function_info_t *func = function_get(name);
     if (func) {
-        out_definition = func->props->body_node.get_source(func->props->parsed_source->src);
+        auto props = func->props;
+        if (props && props->parsed_source) {
+            out_definition = props->body_node.get_source(props->parsed_source->src);
+        }
     }
     return func != NULL;
 }

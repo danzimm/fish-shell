@@ -84,11 +84,6 @@ static bool get_realpath(std::string &path) {
     return ptr != NULL;
 }
 
-// OS X function for getting the executable path.
-extern "C" {
-int _NSGetExecutablePath(char *buf, uint32_t *bufsize);
-}
-
 static struct config_paths_t determine_config_directory_paths(const char *argv0) {
     struct config_paths_t paths;
     bool done = false;
@@ -383,14 +378,13 @@ int main(int argc, char **argv) {
 
     parser_t &parser = parser_t::principal_parser();
 
-    const io_chain_t empty_ios;
     if (read_init(paths)) {
         // Stomp the exit status of any initialization commands (issue #635).
-        proc_set_last_status(STATUS_CMD_OK);
+        proc_set_last_statuses(statuses_t::just(STATUS_CMD_OK));
 
         // Run post-config commands specified as arguments, if any.
         if (!opts.postconfig_cmds.empty()) {
-            res = run_command_list(&opts.postconfig_cmds, empty_ios);
+            res = run_command_list(&opts.postconfig_cmds, {});
         }
 
         if (!opts.batch_cmds.empty()) {
@@ -400,11 +394,11 @@ int main(int argc, char **argv) {
                 fish_xdm_login_hack_hack_hack_hack(&opts.batch_cmds, argc - my_optind,
                                                    argv + my_optind);
             }
-            res = run_command_list(&opts.batch_cmds, empty_ios);
-            reader_exit(0, 0);
+            res = run_command_list(&opts.batch_cmds, {});
+            reader_set_end_loop(false);
         } else if (my_optind == argc) {
             // Implicitly interactive mode.
-            res = reader_read(STDIN_FILENO, empty_ios);
+            res = reader_read(STDIN_FILENO, {});
         } else {
             char *file = *(argv + (my_optind++));
             int fd = open(file, O_RDONLY);
@@ -424,7 +418,7 @@ int main(int argc, char **argv) {
 
                 reader_push_current_filename(rel_filename.c_str());
 
-                res = reader_read(fd, empty_ios);
+                res = reader_read(fd, {});
 
                 if (res) {
                     debug(1, _(L"Error while reading file %ls\n"),
@@ -440,10 +434,10 @@ int main(int argc, char **argv) {
 
     // TODO: The generic process-exit event is useless and unused.
     // Remove this in future.
-    proc_fire_event(L"PROCESS_EXIT", EVENT_EXIT, getpid(), exit_status);
+    proc_fire_event(L"PROCESS_EXIT", event_type_t::exit, getpid(), exit_status);
 
     // Trigger any exit handlers.
-    wcstring_list_t event_args = {to_string<int>(exit_status)};
+    wcstring_list_t event_args = {to_string(exit_status)};
     event_fire_generic(L"fish_exit", &event_args);
 
     restore_term_mode();

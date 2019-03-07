@@ -171,6 +171,10 @@ struct equal_to<completion_entry_t> {
 typedef std::unordered_set<completion_entry_t> completion_entry_set_t;
 static owning_lock<completion_entry_set_t> s_completion_set;
 
+/// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
+using wrapper_map_t = std::unordered_map<wcstring, wcstring_list_t>;
+static owning_lock<wrapper_map_t> wrapper_map;
+
 /// Comparison function to sort completions by their order field.
 static bool compare_completions_by_order(const completion_entry_t &p1,
                                          const completion_entry_t &p2) {
@@ -894,7 +898,7 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
     bool head_exists = builtin_exists(cmd);
     // Only reload environment variables if builtin_exists returned false, as an optimization
     if (head_exists == false) {
-        head_exists = function_exists_no_autoload(cmd.c_str(), vars);
+        head_exists = function_exists_no_autoload(cmd, vars);
         // While it may seem like first testing `path_get_path` before resorting to an env lookup
         // may be faster, path_get_path can potentially do a lot of FS/IO access, so env.get() +
         // function_exists() should still be faster.
@@ -1249,7 +1253,8 @@ bool completer_t::try_complete_user(const wcstring &str) {
     setpwent();
     // cppcheck-suppress getpwentCalled
     while (struct passwd *pw = getpwent()) {
-        bool interrupted = is_main_thread() ? reader_interrupted() : reader_thread_job_is_stale();
+        bool interrupted =
+            is_main_thread() ? reader_test_and_clear_interrupted() : reader_thread_job_is_stale();
         if (interrupted) {
             break;
         }
@@ -1637,21 +1642,19 @@ wcstring complete_print() {
         }
     }
 
-    // Append wraps. This is a wonky interface where even values are the commands, and odd values
-    // are the targets that they wrap.
-    auto wrap_pairs = complete_get_wrap_pairs();
-    for (const auto &entry : wrap_pairs) {
-        append_format(out, L"complete --command %ls --wraps %ls\n", std::get<0>(entry).c_str(),
-                      std::get<1>(entry).c_str());
+    // Append wraps.
+    auto locked_wrappers = wrapper_map.acquire();
+    for (const auto &entry : *locked_wrappers) {
+        const wcstring &src = entry.first;
+        for (const wcstring &target : entry.second) {
+            append_format(out, L"complete --command %ls --wraps %ls\n", src.c_str(),
+                          target.c_str());
+        }
     }
     return out;
 }
 
 void complete_invalidate_path() { completion_autoloader.invalidate(); }
-
-/// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
-using wrapper_map_t = std::unordered_map<wcstring, wcstring_list_t>;
-static owning_lock<wrapper_map_t> wrapper_map;
 
 /// Add a new target that wraps a command. Example: __fish_XYZ (function) wraps XYZ (target).
 bool complete_add_wrapper(const wcstring &command, const wcstring &new_target) {
@@ -1703,9 +1706,4 @@ wcstring_list_t complete_get_wrap_targets(const wcstring &command) {
     auto iter = wraps.find(command);
     if (iter == wraps.end()) return {};
     return iter->second;
-}
-
-tuple_list<wcstring, wcstring> complete_get_wrap_pairs() {
-    auto locked_map = wrapper_map.acquire();
-    return flatten(*locked_map);
 }

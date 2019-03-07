@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <paths.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -30,6 +31,12 @@
 #include <sys/ioctl.h>
 #endif
 
+#ifdef __linux__
+// Includes for WSL detection
+#include <cstring>
+#include <sys/utsname.h>
+#endif
+
 #ifdef __FreeBSD__
 #include <sys/sysctl.h>
 #elif __APPLE__
@@ -38,6 +45,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <locale>
 #include <memory>  // IWYU pragma: keep
 #include <type_traits>
 
@@ -146,10 +154,45 @@ long convert_hex_digit(wchar_t d) {
     return -1;
 }
 
+bool is_windows_subsystem_for_linux() {
+#if defined(WSL)
+    return true;
+#elif not defined(__linux__)
+    return false;
+#else
+    // We are purposely not using std::call_once as it may invoke locking, which is an unnecessary
+    // overhead since there's no actual race condition here - even if multiple threads call this
+    // routine simultaneously the first time around, we just end up needlessly querying uname(2) one
+    // more time.
+
+    static bool wsl_state = []() {
+        utsname info;
+        uname(&info);
+
+        // Sample utsname.release under WSL: 4.4.0-17763-Microsoft
+        if (strstr(info.release, "Microsoft") != nullptr) {
+            const char *dash = strchr(info.release, '-');
+            if (dash == nullptr || strtod(dash + 1, nullptr) < 17763) {
+                debug(1, "This version of WSL is not supported and fish will probably not work correctly!\n"
+                        "Please upgrade to Windows 10 1809 (17763) or higher to use fish!");
+            }
+
+            return true;
+        } else {
+            return false;
+        }
+    }();
+
+    // Subsequent calls to this function may take place after fork() and before exec() in
+    // postfork.cpp. Make sure we never dynamically allocate any memory in the fast path!
+    return wsl_state;
+#endif
+}
+
 #ifdef HAVE_BACKTRACE_SYMBOLS
 // This function produces a stack backtrace with demangled function & method names. It is based on
 // https://gist.github.com/fmela/591333 but adapted to the style of the fish project.
-static const wcstring_list_t __attribute__((noinline))
+[[gnu::noinline]] static const wcstring_list_t
 demangled_backtrace(int max_frames, int skip_levels) {
     void *callstack[128];
     const int n_max_frames = sizeof(callstack) / sizeof(callstack[0]);
@@ -180,8 +223,7 @@ demangled_backtrace(int max_frames, int skip_levels) {
     return backtrace_text;
 }
 
-void __attribute__((noinline))
-show_stackframe(const wchar_t msg_level, int frame_count, int skip_levels) {
+[[gnu::noinline]] void show_stackframe(const wchar_t msg_level, int frame_count, int skip_levels) {
     if (frame_count < 1) return;
 
     // TODO: Decide if this is still needed. I'm commenting it out because it caused me some grief
@@ -200,7 +242,7 @@ show_stackframe(const wchar_t msg_level, int frame_count, int skip_levels) {
 
 #else   // HAVE_BACKTRACE_SYMBOLS
 
-void __attribute__((noinline)) show_stackframe(const wchar_t msg_level, int, int) {
+[[gnu::noinline]] void show_stackframe(const wchar_t msg_level, int, int) {
     debug_shared(msg_level, L"Sorry, but your system does not support backtraces");
 }
 #endif  // HAVE_BACKTRACE_SYMBOLS
@@ -620,7 +662,7 @@ static void debug_shared(const wchar_t level, const wcstring &msg) {
 }
 
 static const wchar_t level_char[] = {L'E', L'W', L'2', L'3', L'4', L'5'};
-void __attribute__((noinline)) debug_impl(int level, const wchar_t *msg, ...) {
+[[gnu::noinline]] void debug_impl(int level, const wchar_t *msg, ...) {
     int errno_old = errno;
     va_list va;
     va_start(va, msg);
@@ -634,7 +676,7 @@ void __attribute__((noinline)) debug_impl(int level, const wchar_t *msg, ...) {
     errno = errno_old;
 }
 
-void __attribute__((noinline)) debug_impl(int level, const char *msg, ...) {
+[[gnu::noinline]] void debug_impl(int level, const char *msg, ...) {
     if (!should_debug(level)) return;
     int errno_old = errno;
     char local_msg[512];
@@ -692,56 +734,52 @@ void debug_safe(int level, const char *msg, const char *param1, const char *para
     errno = errno_old;
 }
 
-void format_long_safe(char buff[64], long val) {
-    if (val == 0) {
-        strcpy(buff, "0");
-    } else {
-        // Generate the string in reverse.
-        size_t idx = 0;
-        bool negative = (val < 0);
+// Careful to not negate LLONG_MIN.
+static unsigned long long absolute_value(long long x) {
+    if (x >= 0) return static_cast<unsigned long long>(x);
+    x = -(x + 1);
+    return static_cast<unsigned long long>(x) + 1;
+}
 
-        // Note that we can't just negate val if it's negative, because it may be the most negative
-        // value. We do rely on round-towards-zero division though.
+template <typename CharT>
+void format_safe_impl(CharT *buff, size_t size, unsigned long long val) {
+    size_t idx = 0;
+    if (val == 0) {
+        buff[idx++] = '0';
+    } else {
+        // Generate the string backwards, then reverse it.
         while (val != 0) {
-            long rem = val % 10;
-            buff[idx++] = '0' + (rem < 0 ? -rem : rem);
+            buff[idx++] = (val % 10) + '0';
             val /= 10;
         }
-        if (negative) buff[idx++] = '-';
-        buff[idx] = 0;
+        std::reverse(buff, buff + idx);
+    }
+    buff[idx++] = '\0';
+    assert(idx <= size && "Buffer overflowed");
+}
 
-        size_t left = 0, right = idx - 1;
-        while (left < right) {
-            char tmp = buff[left];
-            buff[left++] = buff[right];
-            buff[right--] = tmp;
-        }
+void format_long_safe(char buff[64], long val) {
+    unsigned long long uval = absolute_value(val);
+    if (val >= 0) {
+        format_safe_impl(buff, 64, uval);
+    } else {
+        buff[0] = '-';
+        format_safe_impl(buff + 1, 63, uval);
     }
 }
 
 void format_long_safe(wchar_t buff[64], long val) {
-    if (val == 0) {
-        wcscpy(buff, L"0");
+    unsigned long long uval = absolute_value(val);
+    if (val >= 0) {
+        format_safe_impl(buff, 64, uval);
     } else {
-        // Generate the string in reverse.
-        size_t idx = 0;
-        bool negative = (val < 0);
-
-        while (val != 0) {
-            long rem = val % 10;
-            buff[idx++] = L'0' + (wchar_t)(rem < 0 ? -rem : rem);
-            val /= 10;
-        }
-        if (negative) buff[idx++] = L'-';
-        buff[idx] = 0;
-
-        size_t left = 0, right = idx - 1;
-        while (left < right) {
-            wchar_t tmp = buff[left];
-            buff[left++] = buff[right];
-            buff[right--] = tmp;
-        }
+        buff[0] = '-';
+        format_safe_impl(buff + 1, 63, uval);
     }
+}
+
+void format_ullong_safe(wchar_t buff[64], unsigned long long val) {
+    return format_safe_impl(buff, 64, val);
 }
 
 void narrow_string_safe(char buff[64], const wchar_t *s) {
@@ -1758,16 +1796,13 @@ static void validate_new_termsize(struct winsize *new_termsize, const environmen
 
 /// Export the new terminal size as env vars and to the kernel if possible.
 static void export_new_termsize(struct winsize *new_termsize, env_stack_t &vars) {
-    wchar_t buf[64];
-
     auto cols = vars.get(L"COLUMNS", ENV_EXPORT);
-    swprintf(buf, 64, L"%d", (int)new_termsize->ws_col);
     vars.set_one(L"COLUMNS", ENV_GLOBAL | (cols.missing_or_empty() ? ENV_DEFAULT : ENV_EXPORT),
-                 buf);
+                 std::to_wstring(int(new_termsize->ws_col)));
 
     auto lines = vars.get(L"LINES", ENV_EXPORT);
-    swprintf(buf, 64, L"%d", (int)new_termsize->ws_row);
-    vars.set_one(L"LINES", ENV_GLOBAL | (lines.missing_or_empty() ? ENV_DEFAULT : ENV_EXPORT), buf);
+    vars.set_one(L"LINES", ENV_GLOBAL | (lines.missing_or_empty() ? ENV_DEFAULT : ENV_EXPORT),
+                 std::to_wstring(int(new_termsize->ws_row)));
 
 #ifdef HAVE_WINSIZE
     // Only write the new terminal size if we are in the foreground (#4477)
@@ -1956,6 +1991,36 @@ int string_fuzzy_match_t::compare(const string_fuzzy_match_t &rhs) const {
     return 0;  // equal
 }
 
+template <bool Fuzzy, typename T>
+size_t ifind_impl(const T &haystack, const T &needle) {
+    using char_t = typename T::value_type;
+    std::locale locale;
+
+    auto ieq = [&locale](char_t c1, char_t c2) {
+        if (c1 == c2 || std::toupper(c1, locale) == std::toupper(c2, locale)) return true;
+
+        // In fuzzy matching treat treat `-` and `_` as equal (#3584).
+        if (Fuzzy) {
+            if ((c1 == '-' || c1 == '_') && (c2 == '-' || c2 == '_')) return true;
+        }
+        return false;
+    };
+
+    auto result = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(), ieq);
+    if (result != haystack.end()) {
+        return result - haystack.begin();
+    }
+    return T::npos;
+}
+
+size_t ifind(const wcstring &haystack, const wcstring &needle, bool fuzzy) {
+    return fuzzy ? ifind_impl<true>(haystack, needle) : ifind_impl<false>(haystack, needle);
+}
+
+size_t ifind(const std::string &haystack, const std::string &needle, bool fuzzy) {
+    return fuzzy ? ifind_impl<true>(haystack, needle) : ifind_impl<false>(haystack, needle);
+}
+
 wcstring_list_t split_string(const wcstring &val, wchar_t sep) {
     wcstring_list_t out;
     size_t pos = 0, end = val.size();
@@ -2013,7 +2078,7 @@ int create_directory(const wcstring &d) {
     return ok ? 0 : -1;
 }
 
-__attribute__((noinline)) void bugreport() {
+[[gnu::noinline]] void bugreport() {
     debug(0, _(L"This is a bug. Break on 'bugreport' to debug."));
     debug(0, _(L"If you can reproduce it, please report: %s."), PACKAGE_BUGREPORT);
 }
@@ -2160,7 +2225,7 @@ void append_path_component(wcstring &path, const wcstring &component) {
 }
 
 extern "C" {
-__attribute__((noinline)) void debug_thread_error(void) {
+[[gnu::noinline]] void debug_thread_error(void) {
     while (1) sleep(9999999);
 }
 }
@@ -2415,3 +2480,25 @@ std::string get_executable_path(const char *argv0) {
     return std::string(argv0 ? argv0 : "");
 }
 
+/// Return a path to a directory where we can store temporary files.
+std::string get_path_to_tmp_dir() {
+    char *env_tmpdir = getenv("TMPDIR");
+    if (env_tmpdir) {
+        return env_tmpdir;
+    }
+#if defined(_CS_DARWIN_USER_TEMP_DIR)
+    char osx_tmpdir[PATH_MAX];
+    size_t n = confstr(_CS_DARWIN_USER_TEMP_DIR, osx_tmpdir, PATH_MAX);
+    if (0 < n && n <= PATH_MAX) {
+        return osx_tmpdir;
+    } else {
+        return "/tmp";
+    }
+#elif defined(P_tmpdir)
+    return P_tmpdir;
+#elif defined(_PATH_TMP)
+    return _PATH_TMP;
+#else
+    return "/tmp";
+#endif
+}
