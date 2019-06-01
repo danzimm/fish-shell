@@ -1,31 +1,38 @@
+.. _cmd-string:
+
 string - manipulate strings
 ===========================
 
 Synopsis
 --------
 
-string escape [(-n | --no-quoted)] [--style=xxx] [STRING...]
-string join [(-q | --quiet)] SEP [STRING...]
-string join0 [(-q | --quiet)] [STRING...]
-string length [(-q | --quiet)] [STRING...]
-string lower [(-q | --quiet)] [STRING...]
-string match [(-a | --all)] [(-e | --entire)] [(-i | --ignore-case)] [(-r | --regex)]
-             [(-n | --index)] [(-q | --quiet)] [(-v | --invert)] PATTERN [STRING...]
-string repeat [(-n | --count) COUNT] [(-m | --max) MAX] [(-N | --no-newline)]
-              [(-q | --quiet)] [STRING...]
-string replace [(-a | --all)] [(-f | --filter)] [(-i | --ignore-case)] [(-r | --regex)]
-               [(-q | --quiet)] PATTERN REPLACEMENT [STRING...]
-string split [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)] SEP
-             [STRING...]
-string split0 [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)]
-              [STRING...]
-string sub [(-s | --start) START] [(-l | --length) LENGTH] [(-q | --quiet)]
-           [STRING...]
-string trim [(-l | --left)] [(-r | --right)] [(-c | --chars CHARS)]
-            [(-q | --quiet)] [STRING...]
-string unescape [--style=xxx] [STRING...]
-string upper [(-q | --quiet)] [STRING...]
+``string escape [(-n | --no-quoted)] [--style=xxx] [STRING...]``
 
+``string join [(-q | --quiet)] SEP [STRING...]``
+
+``string join0 [(-q | --quiet)] [STRING...]``
+
+``string length [(-q | --quiet)] [STRING...]``
+
+``string lower [(-q | --quiet)] [STRING...]``
+
+``string match [(-a | --all)] [(-e | --entire)] [(-i | --ignore-case)] [(-r | --regex)] [(-n | --index)] [(-q | --quiet)] [(-v | --invert)] PATTERN [STRING...]``
+
+``string repeat [(-n | --count) COUNT] [(-m | --max) MAX] [(-N | --no-newline)] [(-q | --quiet)] [STRING...]``
+
+``string replace [(-a | --all)] [(-f | --filter)] [(-i | --ignore-case)] [(-r | --regex)] [(-q | --quiet)] PATTERN REPLACEMENT [STRING...]``
+
+``string split [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)] SEP [STRING...]``
+
+``string split0 [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)] [STRING...]``
+
+``string sub [(-s | --start) START] [(-l | --length) LENGTH] [(-q | --quiet)] [STRING...]``
+
+``string trim [(-l | --left)] [(-r | --right)] [(-c | --chars CHARS)] [(-q | --quiet)] [STRING...]``
+
+``string unescape [--style=xxx] [STRING...]``
+
+``string upper [(-q | --quiet)] [STRING...]``
 
 
 Description
@@ -41,8 +48,10 @@ Most subcommands accept a ``-q`` or ``--quiet`` switch, which suppresses the usu
 
 The following subcommands are available.
 
-"escape" subcommand
--------------------
+"escape" and "unescape" subcommands
+-----------------------------------
+
+``string escape [(-n | --no-quoted)] [--style=xxx] [STRING...]``
 
 ``string escape`` escapes each STRING in one of three ways. The first is ``--style=script``. This is the default. It alters the string such that it can be passed back to ``eval`` to produce the original argument again. By default, all special characters are escaped, and quotes are used to simplify the output when possible. If ``-n`` or ``--no-quoted`` is given, the simplifying quoted format is not used. Exit status: 0 if at least one string was escaped, or 1 otherwise.
 
@@ -52,29 +61,42 @@ The following subcommands are available.
 
 ``--style=regex`` escapes an input string for literal matching within a regex expression. The string is first converted to UTF-8 before being encoded.
 
+``string unescape [--style=xxx] [STRING...]``
+
 ``string unescape`` performs the inverse of the ``string escape`` command. If the string to be unescaped is not properly formatted it is ignored. For example, doing ``string unescape --style=var (string escape --style=var $str)`` will return the original string. There is no support for unescaping ``--style=regex``.
 
 "join" subcommand
 -----------------
 
+``string join [(-q | --quiet)] SEP [STRING...]``
+
 ``string join`` joins its STRING arguments into a single string separated by SEP, which can be an empty string. Exit status: 0 if at least one join was performed, or 1 otherwise.
 
-\subsection string-join0 "join0" subcommand
+"join0" subcommand
+------------------
+
+``string join0 [(-q | --quiet)] [STRING...]``
 
 ``string join`` joins its STRING arguments into a single string separated by the zero byte (NUL), and adds a trailing NUL. This is most useful in conjunction with tools that accept NUL-delimited input, such as ``sort -z``. Exit status: 0 if at least one join was performed, or 1 otherwise.
 
 "length" subcommand
 -------------------
 
+``string length [(-q | --quiet)] [STRING...]``
+
 ``string length`` reports the length of each string argument in characters. Exit status: 0 if at least one non-empty STRING was given, or 1 otherwise.
 
 "lower" subcommand
 ------------------
 
+``string lower [(-q | --quiet)] [STRING...]``
+
 ``string lower`` converts each string argument to lowercase. Exit status: 0 if at least one string was converted to lowercase, else 1. This means that in conjunction with the ``-q`` flag you can readily test whether a string is already lowercase.
 
 "match" subcommand
 ------------------
+
+``string match [(-a | --all)] [(-e | --entire)] [(-i | --ignore-case)] [(-r | --regex)] [(-n | --index)] [(-q | --quiet)] [(-v | --invert)] PATTERN [STRING...]``
 
 ``string match`` tests each STRING against PATTERN and prints matching substrings. Only the first match for each STRING is reported unless ``-a`` or ``--all`` is given, in which case all matches are reported.
 
@@ -93,10 +115,14 @@ Exit status: 0 if at least one match was found, or 1 otherwise.
 "repeat" subcommand
 -------------------
 
+``string repeat [(-n | --count) COUNT] [(-m | --max) MAX] [(-N | --no-newline)] [(-q | --quiet)] [STRING...]``
+  
 ``string repeat`` repeats the STRING ``-n`` or ``--count`` times. The ``-m`` or ``--max`` option will limit the number of outputted char (excluding the newline). This option can be used by itself or in conjunction with ``--count``. If both ``--count`` and ``--max`` are present, max char will be outputed unless the final repeated string size is less than max, in that case, the string will repeat until count has been reached. Both ``--count`` and ``--max`` will accept a number greater than or equal to zero, in the case of zero, nothing will be outputed. If ``-N`` or ``--no-newline`` is given, the output won't contain a newline character at the end. Exit status: 0 if yielded string is not empty, 1 otherwise.
 
 "replace" subcommand
 --------------------
+
+``string replace [(-a | --all)] [(-f | --filter)] [(-i | --ignore-case)] [(-r | --regex)] [(-q | --quiet)] PATTERN REPLACEMENT [STRING...]``
 
 ``string replace`` is similar to ``string match`` but replaces non-overlapping matching substrings with a replacement string and prints the result. By default, PATTERN is treated as a literal substring to be matched.
 
@@ -106,15 +132,24 @@ If you specify the ``-f`` or ``--filter`` flag then each input string is printed
 
 Exit status: 0 if at least one replacement was performed, or 1 otherwise.
 
+.. _cmd-string-split:
+
 "split" subcommand
 ------------------
+
+``string split [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)] SEP [STRING...]``
 
 ``string split`` splits each STRING on the separator SEP, which can be an empty string. If ``-m`` or ``--max`` is specified, at most MAX splits are done on each STRING. If ``-r`` or ``--right`` is given, splitting is performed right-to-left. This is useful in combination with ``-m`` or ``--max``. With ``-n`` or ``--no-empty``, empty results are excluded from consideration (e.g. ``hello\n\nworld`` would expand to two strings and not three). Exit status: 0 if at least one split was performed, or 1 otherwise.
 
 See also ``read --delimiter``.
 
-\subsection string-split0 "split0" subcommand
+.. _cmd-string-split0:
 
+"split0" subcommand
+-------------------
+
+``string split0 [(-m | --max) MAX] [(-n | --no-empty)] [(-q | --quiet)] [(-r | --right)] [STRING...]``
+  
 ``string split0`` splits each STRING on the zero byte (NUL). Options are the same as ``string split`` except that no separator is given.
 
 ``split0`` has the important property that its output is not further split when used in a command substitution, allowing for the command substitution to produce elements containing newlines. This is most useful when used with Unix tools that produce zero bytes, such as ``find -print0`` or ``sort -z``. See split0 examples below.
@@ -122,15 +157,21 @@ See also ``read --delimiter``.
 "sub" subcommand
 ----------------
 
+``string sub [(-s | --start) START] [(-l | --length) LENGTH] [(-q | --quiet)] [STRING...]``
+  
 ``string sub`` prints a substring of each string argument. The start of the substring can be specified with ``-s`` or ``--start`` followed by a 1-based index value. Positive index values are relative to the start of the string and negative index values are relative to the end of the string. The default start value is 1. The length of the substring can be specified with ``-l`` or ``--length``. If the length is not specified, the substring continues to the end of each STRING. Exit status: 0 if at least one substring operation was performed, 1 otherwise.
 
 "trim" subcommand
 -----------------
 
+``string trim [(-l | --left)] [(-r | --right)] [(-c | --chars CHARS)] [(-q | --quiet)] [STRING...]``
+  
 ``string trim`` removes leading and trailing whitespace from each STRING. If ``-l`` or ``--left`` is given, only leading whitespace is removed. If ``-r`` or ``--right`` is given, only trailing whitespace is trimmed. The ``-c`` or ``--chars`` switch causes the characters in CHARS to be removed instead of whitespace. Exit status: 0 if at least one character was trimmed, or 1 otherwise.
 
 "upper" subcommand
 ------------------
+
+``string upper [(-q | --quiet)] [STRING...]``
 
 ``string upper`` converts each string argument to uppercase. Exit status: 0 if at least one string was converted to uppercase, else 1. This means that in conjunction with the ``-q`` flag you can readily test whether a string is already uppercase.
 
@@ -142,6 +183,7 @@ Both the ``match`` and ``replace`` subcommand support regular expressions when u
 In general, special characters are special by default, so ``a+`` matches one or more "a"s, while ``a\+`` matches an "a" and then a "+". ``(a+)`` matches one or more "a"s in a capturing group (``(?:XXXX)`` denotes a non-capturing group). For the replacement parameter of ``replace``, ``$n`` refers to the n-th group of the match. In the match parameter, ``\n`` (e.g. ``\1``) refers back to groups.
 
 Some features include repetitions:
+
 - ``*`` refers to 0 or more repetitions of the previous expression
 - ``+`` 1 or more
 - ``?`` 0 or 1.
@@ -150,6 +192,7 @@ Some features include repetitions:
 - ``{n,}`` n or more
 
 Character classes, some of the more important:
+
 - ``.`` any character except newline
 - ``\d`` a decimal digit and ``\D``, not a decimal digit
 - ``\s`` whitespace and ``\S``, not whitespace
@@ -175,15 +218,32 @@ Character classes, some of the more important:
 - ``[[:xdigit:]]`` : "hexadecimal digit"
 
 Groups:
+
 - ``(...)`` is a capturing group
 - ``(?:...)`` is a non-capturing group
 - ``\n`` is a backreference (where n is the number of the group, starting with 1)
 - ``$n`` is a reference from the replacement expression to a group in the match expression.
 
 And some other things:
+
 - ``\b`` denotes a word boundary, ``\B`` is not a word boundary.
 - ``^`` is the start of the string or line, ``$`` the end.
 - ``|`` is "alternation", i.e. the "or".
+
+Comparison to other tools
+-------------------------
+
+Most operations ``string`` supports can also be done by external tools. Some of these include ``grep``, ``sed`` and ``cut``.
+
+If you are familiar with these, it is useful to know how ``string`` differs from them.
+
+In contrast to these classics, ``string`` reads input either from stdin or as arguments. ``string`` also does not deal with files, so it requires redirections to be used with them.
+
+In contrast to ``grep``, ``string``\ s `match` defaults to glob-mode, whie `replace` defaults to literal matching. If set to regex-mode, they use PCRE regular expressions, which is comparable to ``grep``\ s `-P` option. `match` defaults to printing just the match, which is like ``grep`` with `-o` (use `--entire` to enable grep-like behavior).
+
+Like ``sed``\ s `s/` command, ``string replace`` still prints strings that don't match. ``sed``\ s `-n` in combination with a `/p` modifier or command is like ``string replace -f``.
+
+``string split somedelimiter`` is a replacement for ``tr somedelimiter \\n``.
 
 Examples
 --------
@@ -193,7 +253,7 @@ Examples
 ::
 
     >_ string length 'hello, world'
-    <outp>12</outp>
+    12
     
     >_ set str foo
     >_ string length -q $str; echo $status
@@ -206,13 +266,13 @@ Examples
 ::
 
     >_ string sub --length 2 abcde
-    <outp>ab</outp>
+    ab
     
     >_ string sub -s 2 -l 2 abcde
-    <outp>bc</outp>
+    bc
     
     >_ string sub --start=-2 abcde
-    <outp>de</outp>
+    de
 
 
 
@@ -220,17 +280,17 @@ Examples
 ::
 
     >_ string split . example.com
-    <outp>example</outp>
-    <outp>com</outp>
+    example
+    com
     
     >_ string split -r -m1 / /usr/local/bin/fish
-    <outp>/usr/local/bin</outp>
-    <outp>fish</outp>
+    /usr/local/bin
+    fish
     
     >_ string split '' abc
-    <outp>a</outp>
-    <outp>b</outp>
-    <outp>c</outp>
+    a
+    b
+    c
 
 
 
@@ -238,7 +298,7 @@ Examples
 ::
 
     >_ seq 3 | string join ...
-    <outp>1...2...3</outp>
+    1...2...3
 
 
 
@@ -246,11 +306,11 @@ Examples
 ::
 
     >_ string trim ' abc  '
-    <outp>abc</outp>
+    abc
     
     >_ string trim --right --chars=yz xyzzy zany
-    <outp>x</outp>
-    <outp>zan</outp>
+    x
+    zan
 
 
 
@@ -258,7 +318,7 @@ Examples
 ::
 
     >_ echo \\x07 | string escape
-    <bs>cg</bs>
+    cg
 
 
 
@@ -266,7 +326,7 @@ Examples
 ::
 
     >_ string escape --style=var 'a1 b2'\\u6161
-    <bs>a1_20b2__c_E6_85_A1</bs>
+    a1_20b2__c_E6_85_A1
 
 
 Match Glob Examples
@@ -277,32 +337,32 @@ Match Glob Examples
 ::
 
     >_ string match '?' a
-    <outp>a</outp>
+    a
     
     >_ string match 'a*b' axxb
-    <outp>axxb</outp>
+    axxb
     
     >_ string match -i 'a??B' Axxb
-    <outp>Axxb</outp>
+    Axxb
     
     >_ echo 'ok?' | string match '*\\?'
-    <outp>ok?</outp>
+    ok?
     
     # Note that only the second STRING will match here.
     >_ string match 'foo' 'foo1' 'foo' 'foo2'
-    <outp>foo</outp>
+    foo
     
     >_ string match -e 'foo' 'foo1' 'foo' 'foo2'
-    <outp>foo1
+    foo1
     foo
     foo2
-    </outp>
+    
     
     >_ string match 'foo?' 'foo1' 'foo' 'foo2'
-    <outp>foo1
+    foo1
     foo
     foo2
-    </outp>
+    
 
 
 Match Regex Examples
@@ -313,38 +373,39 @@ Match Regex Examples
 ::
 
     >_ string match -r 'cat|dog|fish' 'nice dog'
-    <outp>dog</outp>
+    dog
     
     >_ string match -r -v "c.*[12]" {cat,dog}(seq 1 4)
-    <outp>dog1</outp>
-    <outp>dog2</outp>
-    <outp>cat3</outp>
-    <outp>dog3</outp>
-    <outp>cat4</outp>
-    <outp>dog4</outp>
+    dog1
+    dog2
+    cat3
+    dog3
+    cat4
+    dog4
     
-    >_ string match -r '(\\d\\d?):(\\d\\d):(\\d\\d)' <asis>2:34:56</asis>
-    <outp>2:34:56</outp>
-    <outp>2</outp>
-    <outp>34</outp>
-    <outp>56</outp>
+    >_ string match -r '(\\d\\d?):(\\d\\d):(\\d\\d)' 2:34:56
+    2:34:56
+    2
+    34
+    56
     
     >_ string match -r '^(\\w{{2,4}})\\g1$' papa mud murmur
-    <outp>papa</outp>
-    <outp>pa</outp>
-    <outp>murmur</outp>
-    <outp>mur</outp>
+    papa
+    pa
+    murmur
+    mur
     
     >_ string match -r -a -n at ratatat
-    <outp>2 2</outp>
-    <outp>4 2</outp>
-    <outp>6 2</outp>
+    2 2
+    4 2
+    6 2
     
     >_ string match -r -i '0x[0-9a-f]{{1,8}}' 'int magic = 0xBadC0de;'
-    <outp>0xBadC0de</outp>
+    0xBadC0de
 
 
-\subsection string-example-split0 NUL Delimited Examples
+NUL Delimited Examples
+----------------------
 
 
 
@@ -352,13 +413,13 @@ Match Regex Examples
 
     >_ # Count files in a directory, without being confused by newlines.
     >_ count (find . -print0 | string split0)
-    <outp>42</outp>
+    42
     
     >_ # Sort a list of elements which may contain newlines
     >_ set foo beta alpha\\ngamma
     >_ set foo (string join0 $foo | sort -z | string split0)
     >_ string escape $foo[1]
-    <outp>alpha\\ngamma</outp>
+    alpha\\ngamma
 
 
 Replace Literal Examples
@@ -369,15 +430,15 @@ Replace Literal Examples
 ::
 
     >_ string replace is was 'blue is my favorite'
-    <outp>blue was my favorite</outp>
+    blue was my favorite
     
     >_ string replace 3rd last 1st 2nd 3rd
-    <outp>1st</outp>
-    <outp>2nd</outp>
-    <outp>last</outp>
+    1st
+    2nd
+    last
     
     >_ string replace -a ' ' _ 'spaces to underscores'
-    <outp>spaces_to_underscores</outp>
+    spaces_to_underscores
 
 
 Replace Regex Examples
@@ -388,14 +449,14 @@ Replace Regex Examples
 ::
 
     >_ string replace -r -a '[^\\d.]+' ' ' '0 one two 3.14 four 5x'
-    <outp>0 3.14 5</outp>
+    0 3.14 5
     
     >_ string replace -r '(\\w+)\\s+(\\w+)' '$2 $1 $$' 'left right'
-    <outp>right left $</outp>
+    right left $
     
     >_ string replace -r '\\s*newline\\s*' '\\n' 'put a newline here'
-    <outp>put a</outp>
-    <outp>here</outp>
+    put a
+    here
 
 
 Repeat Examples
@@ -406,14 +467,14 @@ Repeat Examples
 ::
 
     >_ string repeat -n 2 'foo '
-    <outp>foo foo</outp>
+    foo foo
     
     >_ echo foo | string repeat -n 2
-    <outp>foofoo</outp>
+    foofoo
     
     >_ string repeat -n 2 -m 5 'foo'
-    <outp>foofo</outp>
+    foofo
     
     >_ string repeat -m 5 'foo'
-    <outp>foofo</outp>
+    foofo
 

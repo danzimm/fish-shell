@@ -3,7 +3,7 @@
 
 #include <errno.h>
 #include <stdint.h>
-#include <wchar.h>
+#include <cwchar>
 
 #include <algorithm>
 #include <random>
@@ -14,6 +14,17 @@
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
 #include "wutil.h"  // IWYU pragma: keep
+
+/// \return a random-seeded engine.
+static std::minstd_rand get_seeded_engine() {
+    std::minstd_rand engine;
+    // seed engine with 2*32 bits of random data
+    // for the 64 bits of internal state of minstd_rand
+    std::random_device rd;
+    std::seed_seq seed{rd(), rd()};
+    engine.seed(seed);
+    return engine;
+}
 
 /// The random builtin generates random numbers.
 int builtin_random(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
@@ -30,22 +41,16 @@ int builtin_random(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         return STATUS_CMD_OK;
     }
 
-    static bool seeded = false;
-    static std::minstd_rand engine;
-    if (!seeded) {
-        // seed engine with 2*32 bits of random data
-        // for the 64 bits of internal state of minstd_rand
-        std::random_device rd;
-        std::seed_seq seed{rd(), rd()};
-        engine.seed(seed);
-        seeded = true;
-    }
+    // We have a single engine which we lazily seed. Lock it here.
+    static owning_lock<std::minstd_rand> s_engine{get_seeded_engine()};
+    auto engine_lock = s_engine.acquire();
+    std::minstd_rand &engine = *engine_lock;
 
     int arg_count = argc - optind;
     long long start, end;
     unsigned long long step;
     bool choice = false;
-    if (arg_count >= 1 && !wcscmp(argv[optind], L"choice")) {
+    if (arg_count >= 1 && !std::wcscmp(argv[optind], L"choice")) {
         if (arg_count == 1) {
             streams.err.append_format(L"%ls: nothing to choose from\n", cmd);
             return STATUS_INVALID_ARGS;

@@ -4,8 +4,8 @@
 #include <errno.h>
 #include <stddef.h>
 #include <sys/time.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cwchar>
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
@@ -47,8 +47,7 @@ static int wcsfilecmp_leading_digits(const wchar_t **a, const wchar_t **b) {
 ///
 /// Returns: -1 if a < b, 0 if a == b, 1 if a > b.
 int wcsfilecmp(const wchar_t *a, const wchar_t *b) {
-    CHECK(a, 0);
-    CHECK(b, 0);
+    assert(a && b && "Null parameter");
     const wchar_t *orig_a = a;
     const wchar_t *orig_b = b;
     int retval = 0;  // assume the strings will be equal
@@ -61,8 +60,12 @@ int wcsfilecmp(const wchar_t *a, const wchar_t *b) {
             if (retval || *a == 0 || *b == 0) break;
         }
 
-        wint_t al = towlower(*a);
-        wint_t bl = towlower(*b);
+        wint_t al = towupper(*a);
+        wint_t bl = towupper(*b);
+        // Sort dashes after Z - see #5634
+        if (al == L'-') al = L'[';
+        if (bl == L'-') bl = L'[';
+
         if (al < bl) {
             retval = -1;
             break;
@@ -85,7 +88,7 @@ int wcsfilecmp(const wchar_t *a, const wchar_t *b) {
             // names are literally identical because that won't occur given how this function is
             // used. And even if it were to occur (due to being reused in some other context) it
             // would be so rare that it isn't worth optimizing for.
-            retval = wcscmp(orig_a, orig_b);
+            retval = std::wcscmp(orig_a, orig_b);
             return retval < 0 ? -1 : retval == 0 ? 0 : 1;
         }
         return -1;  // string a is a prefix of b and b is longer

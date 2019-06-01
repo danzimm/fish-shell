@@ -1,16 +1,18 @@
+.. _cmd-fish_indent:
+
 fish_indent - indenter and prettifier
 =====================================
 
 Synopsis
 --------
 
-fish_indent [OPTIONS]
+fish_indent [OPTIONS] [FILE...]
 
 
 Description
 -----------
 
-``fish_indent`` is used to indent a piece of fish code. ``fish_indent`` reads commands from standard input and outputs them to standard output or a specified file.
+``fish_indent`` is used to indent a piece of fish code. ``fish_indent`` reads commands from standard input or the given filenames and outputs them to standard output or a specified file (if `-w` is given).
 
 The following options are available:
 

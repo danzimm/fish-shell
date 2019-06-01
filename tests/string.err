@@ -177,6 +177,9 @@
 # string replace --regex -f "\d" X 1bc axc 2 d3f jk4 xyz
 
 ####################
+# string match -r with empty capture groups
+
+####################
 # string match -r "[" "a[sd"
 string match: Regular expression compile error: missing terminating ] for character class
 string match: [
@@ -185,9 +188,6 @@ string match: ^
 ####################
 # string invalidarg
 string: Subcommand 'invalidarg' is not valid
-Standard input (line 211): 
-string invalidarg; and echo "unexpected exit 0"
-^
 
 ####################
 # string length
@@ -270,9 +270,6 @@ string repeat: Expected argument
 ####################
 # string repeat -l fakearg 2>&1
 string repeat: Unknown option '-l'
-Standard input (line 287): 
-string repeat -l fakearg
-^
 
 ####################
 # string repeat ""

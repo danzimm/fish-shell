@@ -6,7 +6,7 @@
 
 #include <stdarg.h>
 #include <stdlib.h>
-#include <wchar.h>
+#include <cwchar>
 
 #include <memory>
 #include <string>
@@ -22,7 +22,6 @@
 #include "parser.h"
 #include "tnode.h"
 #include "tokenizer.h"
-#include "util.h"
 #include "wildcard.h"
 #include "wutil.h"  // IWYU pragma: keep
 
@@ -113,11 +112,11 @@ static int parse_util_locate_brackets_of_type(const wchar_t *in, wchar_t **begin
 
     wchar_t *paran_begin = 0, *paran_end = 0;
 
-    CHECK(in, 0);
+    assert(in && "null parameter");
 
     for (pos = const_cast<wchar_t *>(in); *pos; pos++) {
         if (prev != '\\') {
-            if (wcschr(L"\'\"", *pos)) {
+            if (std::wcschr(L"\'\"", *pos)) {
                 wchar_t *q_end = quote_end(pos);
                 if (q_end && *q_end) {
                     pos = q_end;
@@ -165,7 +164,7 @@ static int parse_util_locate_brackets_of_type(const wchar_t *in, wchar_t **begin
     }
 
     if (end) {
-        *end = paran_count ? (wchar_t *)in + wcslen(in) : paran_end;
+        *end = paran_count ? (wchar_t *)in + std::wcslen(in) : paran_end;
     }
 
     return 1;
@@ -186,7 +185,7 @@ static int parse_util_locate_brackets_range(const wcstring &str, size_t *inout_c
                                             size_t *out_end, bool accept_incomplete,
                                             wchar_t open_type, wchar_t close_type) {
     // Clear the return values.
-    out_contents->clear();
+    if (out_contents != nullptr) out_contents->clear();
     *out_start = 0;
     *out_end = str.size();
 
@@ -214,7 +213,9 @@ static int parse_util_locate_brackets_range(const wcstring &str, size_t *inout_c
 
     // Assign the substring to the out_contents.
     const wchar_t *interior_begin = bracket_range_begin + 1;
-    out_contents->assign(interior_begin, bracket_range_end - interior_begin);
+    if (out_contents != nullptr) {
+        out_contents->assign(interior_begin, bracket_range_end - interior_begin);
+    }
 
     // Return the start and end.
     *out_start = bracket_range_begin - buff;
@@ -235,11 +236,10 @@ int parse_util_locate_cmdsubst_range(const wcstring &str, size_t *inout_cursor_o
 
 void parse_util_cmdsubst_extent(const wchar_t *buff, size_t cursor_pos, const wchar_t **a,
                                 const wchar_t **b) {
+    assert(buff && "Null buffer");
     const wchar_t *const cursor = buff + cursor_pos;
 
-    CHECK(buff, );
-
-    const size_t bufflen = wcslen(buff);
+    const size_t bufflen = std::wcslen(buff);
     assert(cursor_pos <= bufflen);
 
     // ap and bp are the beginning and end of the tightest command substitition found so far.
@@ -284,11 +284,10 @@ void parse_util_cmdsubst_extent(const wchar_t *buff, size_t cursor_pos, const wc
 /// Get the beginning and end of the job or process definition under the cursor.
 static void job_or_process_extent(const wchar_t *buff, size_t cursor_pos, const wchar_t **a,
                                   const wchar_t **b, int process) {
+    assert(buff && "Null buffer");
     const wchar_t *begin, *end;
     wchar_t *buffcpy;
     int finished = 0;
-
-    CHECK(buff, );
 
     if (a) *a = 0;
     if (b) *b = 0;
@@ -327,7 +326,9 @@ static void job_or_process_extent(const wchar_t *buff, size_t cursor_pos, const 
                 }
                 break;
             }
-            default: { break; }
+            default: {
+                break;
+            }
         }
     }
 
@@ -346,9 +347,8 @@ void parse_util_job_extent(const wchar_t *buff, size_t pos, const wchar_t **a, c
 void parse_util_token_extent(const wchar_t *buff, size_t cursor_pos, const wchar_t **tok_begin,
                              const wchar_t **tok_end, const wchar_t **prev_begin,
                              const wchar_t **prev_end) {
+    assert(buff && "Null buffer");
     const wchar_t *a = NULL, *b = NULL, *pa = NULL, *pb = NULL;
-
-    CHECK(buff, );
 
     const wchar_t *cmdsubst_begin, *cmdsubst_end;
     parse_util_cmdsubst_extent(buff, cursor_pos, &cmdsubst_begin, &cmdsubst_end);
@@ -360,7 +360,7 @@ void parse_util_token_extent(const wchar_t *buff, size_t cursor_pos, const wchar
     // pos is equivalent to cursor_pos within the range of the command substitution {begin, end}.
     size_t offset_within_cmdsubst = cursor_pos - (cmdsubst_begin - buff);
 
-    size_t bufflen = wcslen(buff);
+    size_t bufflen = std::wcslen(buff);
 
     a = cmdsubst_begin + offset_within_cmdsubst;
     b = a;
@@ -462,7 +462,7 @@ static wchar_t get_quote(const wcstring &cmd_str, size_t len) {
         } else {
             if (cmd[i] == L'\'' || cmd[i] == L'\"') {
                 const wchar_t *end = quote_end(&cmd[i]);
-                // fwprintf( stderr, L"Jump %d\n",  end-cmd );
+                // std::fwprintf( stderr, L"Jump %d\n",  end-cmd );
                 if ((end == 0) || (!*end) || (end > cmd + len)) {
                     res = cmd[i];
                     break;
@@ -500,7 +500,7 @@ void parse_util_get_parameter_info(const wcstring &cmd, const size_t pos, wchar_
     bool finished = cmdlen != 0;
     if (finished) {
         finished = (quote == NULL);
-        if (finished && wcschr(L" \t\n\r", cmd_tmp[cmdlen - 1])) {
+        if (finished && std::wcschr(L" \t\n\r", cmd_tmp[cmdlen - 1])) {
             finished = cmdlen > 1 && cmd_tmp[cmdlen - 2] == L'\\';
         }
     }
@@ -509,7 +509,8 @@ void parse_util_get_parameter_info(const wcstring &cmd, const size_t pos, wchar_
 
     if (offset != 0) {
         if (finished) {
-            while ((cmd_tmp[prev_pos] != 0) && (wcschr(L";|", cmd_tmp[prev_pos]) != 0)) prev_pos++;
+            while ((cmd_tmp[prev_pos] != 0) && (std::wcschr(L";|", cmd_tmp[prev_pos]) != 0))
+                prev_pos++;
             *offset = prev_pos;
         } else {
             *offset = pos;
@@ -673,8 +674,9 @@ std::vector<int> parse_util_compute_indents(const wcstring &src) {
     // foo ; cas', we get an invalid parse tree (since 'cas' is not valid) but we indent it as if it
     // were a case item list.
     parse_node_tree_t tree;
-    parse_tree_from_string(src, parse_flag_continue_after_error | parse_flag_include_comments |
-                                    parse_flag_accept_incomplete_tokens,
+    parse_tree_from_string(src,
+                           parse_flag_continue_after_error | parse_flag_include_comments |
+                               parse_flag_accept_incomplete_tokens,
                            &tree, NULL /* errors */);
 
     // Start indenting at the first node. If we have a parse error, we'll have to start indenting
@@ -729,7 +731,7 @@ std::vector<int> parse_util_compute_indents(const wcstring &src) {
             // indentation level if a new line starts with whitespace.
             size_t prev_char_idx = i;
             while (prev_char_idx--) {
-                if (!wcschr(L" \n\t\r", src.at(prev_char_idx))) break;
+                if (!std::wcschr(L" \n\t\r", src.at(prev_char_idx))) break;
                 indents.at(prev_char_idx) = last_indent;
             }
         }
@@ -739,7 +741,7 @@ std::vector<int> parse_util_compute_indents(const wcstring &src) {
     // indented even if it is empty.
     size_t suffix_idx = src_size;
     while (suffix_idx--) {
-        if (!wcschr(L" \n\t\r", src.at(suffix_idx))) break;
+        if (!std::wcschr(L" \n\t\r", src.at(suffix_idx))) break;
         indents.at(suffix_idx) = last_trailing_indent;
     }
 
@@ -771,7 +773,7 @@ static int parser_is_pipe_forbidden(const wcstring &word) {
 }
 
 bool parse_util_argument_is_help(const wchar_t *s) {
-    return wcscmp(L"-h", s) == 0 || wcscmp(L"--help", s) == 0;
+    return std::wcscmp(L"-h", s) == 0 || std::wcscmp(L"--help", s) == 0;
 }
 
 /// Check if the first argument under the given node is --help.
@@ -793,6 +795,7 @@ static wcstring truncate_string(const wcstring &str) {
     wcstring result(str, 0, max_len);
     if (str.size() > max_len) {
         // Truncate!
+        wchar_t ellipsis_char = get_ellipsis_char();
         if (ellipsis_char == L'\x2026') {
             result.at(max_len - 1) = ellipsis_char;
         } else {
@@ -824,7 +827,9 @@ static const wchar_t *error_format_for_character(wchar_t wc) {
         case VARIABLE_EXPAND_EMPTY: {
             return ERROR_NOT_PID;
         }
-        default: { return ERROR_BAD_VAR_CHAR1; }
+        default: {
+            return ERROR_BAD_VAR_CHAR1;
+        }
     }
 }
 
@@ -1133,8 +1138,9 @@ static bool detect_errors_in_plain_statement(const wcstring &buff_src,
         wcstring command;
         // Check that we can expand the command.
         if (expand_to_command_and_args(*unexp_command, null_environment_t{}, &command, nullptr,
-                                       parse_errors) == EXPAND_ERROR) {
+                                       parse_errors) == expand_result_t::error) {
             errored = true;
+            parse_error_offset_source_start(parse_errors, source_start);
         }
 
         // Check that pipes are sound.
@@ -1195,7 +1201,8 @@ static bool detect_errors_in_plain_statement(const wcstring &buff_src,
 
         // Check that we don't do an invalid builtin (issue #1252).
         if (!errored && decoration == parse_statement_decoration_builtin &&
-            expand_one(*unexp_command, 0, null_environment_t{}, parse_errors) &&
+            expand_one(*unexp_command, expand_flag::skip_cmdsubst, null_environment_t{}, nullptr,
+                       parse_errors) &&
             !builtin_exists(*unexp_command)) {
             errored = append_syntax_error(parse_errors, source_start, UNKNOWN_BUILTIN_ERR_MSG,
                                           unexp_command->c_str());

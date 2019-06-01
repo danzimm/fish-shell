@@ -20,7 +20,7 @@ complete -c find -o mindepth -d "Do not apply any tests or actions at levels les
 complete -c find -o mount -o xdev -d "Don't descend directories on other  filesystems"
 complete -c find -o noignore_readdir_race -d "Print error messages for files that are deleted while running find"
 complete -c find -o noleaf -d "Do not optimize by assuming that  directories  contain  2  fewer subdirectories  than  their  hard  link  count"
-complete -c find -o regextype -d "Specify regular expression type" -a "emacs posix-awk posix-basic posiz-egrep posix-extended"
+complete -c find -o regextype -d "Specify regular expression type" -a "emacs posix-awk posix-basic posix-egrep posix-extended"
 complete -c find -o version -l version -d "Display version and exit"
 complete -c find -o warn -d "Turn warnings on"
 complete -c find -o nowarn -d "Turn warnings off"
@@ -73,7 +73,7 @@ complete -c find -o true -d "Always true"
 
 set -l type_comp 'b\t"Block device" c\t"Character device" d\t"Directory" p\t"Named pipe" f\t"File" l\t"Symbolic link" s\t"Socket"'
 
-complete -c find -o type -d "File is of specified type" -x -a  $type_comp
+complete -c find -o type -d "File is of specified type" -x -a $type_comp
 
 complete -c find -o uid -d "File's owner has specified numeric user ID" -r
 complete -c find -o used -d "File was last accessed specified number of days after its status was last changed" -r

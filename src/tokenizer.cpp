@@ -5,8 +5,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <unistd.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cwchar>
 
 #include <string>
 #include <type_traits>
@@ -17,7 +17,8 @@
 #include "tokenizer.h"
 #include "wutil.h"  // IWYU pragma: keep
 
-wcstring tokenizer_get_error_message(tokenizer_error_t err) {
+// _(s) is already wgettext(s).c_str(), so let's not convert back to wcstring
+const wchar_t *tokenizer_get_error_message(tokenizer_error_t err) {
     switch (err) {
         case tokenizer_error_t::none:
             return L"";
@@ -47,7 +48,7 @@ wcstring tokenizer_get_error_message(tokenizer_error_t err) {
             return _(L"Unexpected ')' found, expecting '}'");
     }
     assert(0 && "Unexpected tokenizer error");
-    return NULL;
+    return nullptr;
 }
 
 // Whether carets redirect stderr.
@@ -111,7 +112,9 @@ static bool tok_is_string_character(wchar_t c, bool is_first) {
             // Conditional separator.
             return !caret_redirs() || !is_first;
         }
-        default: { return true; }
+        default: {
+            return true;
+        }
     }
 }
 
@@ -195,8 +198,8 @@ tok_t tokenizer_t::read_string() {
             }
             switch (brace_offsets.size()) {
                 case 0:
-                    return this->call_error(tokenizer_error_t::closing_unopened_brace, this->start,
-                                            this->buff);
+                    return this->call_error(tokenizer_error_t::closing_unopened_brace, this->buff,
+                                            this->start + wcslen(this->start));
                 case 1:
                     mode &= ~(tok_modes::curly_braces);
                 default:
@@ -223,7 +226,7 @@ tok_t tokenizer_t::read_string() {
                 this->buff = end;
             } else {
                 const wchar_t *error_loc = this->buff;
-                this->buff += wcslen(this->buff);
+                this->buff += std::wcslen(this->buff);
                 if ((!this->accept_unfinished)) {
                     return this->call_error(tokenizer_error_t::unterminated_quote, buff_start,
                                             error_loc);
@@ -240,7 +243,7 @@ tok_t tokenizer_t::read_string() {
         } else {
             msg.push_back(L'\n');
         }
-        debug(0, msg.c_str(), c, c, int(mode_begin), int(mode));
+        FLOGF(error, msg.c_str(), c, c, int(mode_begin), int(mode));
 #endif
 
         this->buff++;
@@ -408,7 +411,10 @@ int oflags_for_redirection_type(redirection_type_t type) {
         case redirection_type_t::input: {
             return O_RDONLY;
         }
-        default: { return -1; }
+        case redirection_type_t::fd:
+        default: {
+            return -1;
+        }
     }
 }
 
@@ -625,7 +631,9 @@ bool move_word_state_machine_t::consume_char_punctuation(wchar_t c) {
                 break;
             }
             case s_end:
-            default: { break; }
+            default: {
+                break;
+            }
         }
     }
     return consumed;
@@ -634,7 +642,7 @@ bool move_word_state_machine_t::consume_char_punctuation(wchar_t c) {
 bool move_word_state_machine_t::is_path_component_character(wchar_t c) {
     // Always treat separators as first. All this does is ensure that we treat ^ as a string
     // character instead of as stderr redirection, which I hypothesize is usually what is desired.
-    return tok_is_string_character(c, true) && !wcschr(L"/={,}'\"", c);
+    return tok_is_string_character(c, true) && !std::wcschr(L"/={,}'\":@", c);
 }
 
 bool move_word_state_machine_t::consume_char_path_components(wchar_t c) {
@@ -647,7 +655,7 @@ bool move_word_state_machine_t::consume_char_path_components(wchar_t c) {
         s_end
     };
 
-    // fwprintf(stdout, L"state %d, consume '%lc'\n", state, c);
+    // std::fwprintf(stdout, L"state %d, consume '%lc'\n", state, c);
     bool consumed = false;
     while (state != s_end && !consumed) {
         switch (state) {
@@ -693,7 +701,9 @@ bool move_word_state_machine_t::consume_char_path_components(wchar_t c) {
                 break;
             }
             case s_end:
-            default: { break; }
+            default: {
+                break;
+            }
         }
     }
     return consumed;
@@ -727,7 +737,9 @@ bool move_word_state_machine_t::consume_char_whitespace(wchar_t c) {
                 break;
             }
             case s_end:
-            default: { break; }
+            default: {
+                break;
+            }
         }
     }
     return consumed;

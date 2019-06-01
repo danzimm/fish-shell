@@ -104,3 +104,25 @@ argparse: Value 'a1' for flag 'm' is not an integer
 # Explicit int flag validation
 argparse: Value '2' for flag 'm' greater than max allowed of '1'
 argparse: Value '-1' for flag 'max' less than min allowed of '0'
+
+####################
+# Errors use function name by default
+notargparse: Unknown option '--banana'
+Standard input (line 353): 
+    argparse a/alpha -- --banana
+    ^
+in function 'notargparse'
+
+####################
+# Ignoring unknown options
+
+####################
+# Check for crash when last option is unknown
+
+####################
+# Checking arguments after --
+
+####################
+# Checking validation for short flags only
+argparse: Value 'banana' for flag 'o' is not an integer
+argparse: Value '-o' for flag 'i' is not an integer

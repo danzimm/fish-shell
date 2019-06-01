@@ -4,17 +4,19 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
-#include <string.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <atomic>
+#include <cstring>
 
 #include <condition_variable>
 #include <queue>
 
 #include "common.h"
+#include "flog.h"
+#include "global_safety.h"
 #include "iothread.h"
 #include "wutil.h"
 
@@ -76,26 +78,27 @@ static owning_lock<std::queue<spawn_request_t>> s_result_queue;
 // "Do on main thread" support.
 static std::mutex s_main_thread_performer_lock;               // protects the main thread requests
 static std::condition_variable s_main_thread_performer_cond;  // protects the main thread requests
-static std::mutex s_main_thread_request_q_lock;               // protects the queue
-static std::queue<main_thread_request_t *> s_main_thread_request_queue;
 
-// Notifying pipes.
-static int s_read_pipe, s_write_pipe;
+/// The queue of main thread requests. This queue contains pointers to structs that are
+/// stack-allocated on the requesting thread.
+static owning_lock<std::queue<main_thread_request_t *>> s_main_thread_request_queue;
 
-static void iothread_init() {
-    static bool inited = false;
-    if (!inited) {
-        inited = true;
+// Pipes used for notifying.
+struct notify_pipes_t {
+    int read;
+    int write;
+};
 
-        // Initialize the completion pipes.
+/// \return the (immortal) set of pipes used for notifying of completions.
+static const notify_pipes_t &get_notify_pipes() {
+    static const notify_pipes_t s_notify_pipes = [] {
         int pipes[2] = {0, 0};
         assert_with_errno(pipe(pipes) != -1);
-        s_read_pipe = pipes[0];
-        s_write_pipe = pipes[1];
-
-        set_cloexec(s_read_pipe);
-        set_cloexec(s_write_pipe);
-    }
+        set_cloexec(pipes[0]);
+        set_cloexec(pipes[1]);
+        return notify_pipes_t{pipes[0], pipes[1]};
+    }();
+    return s_notify_pipes;
 }
 
 static bool dequeue_spawn_request(spawn_request_t *result) {
@@ -130,7 +133,8 @@ static void *iothread_worker(void *unused) {
             // Enqueue the result, and tell the main thread about it.
             enqueue_thread_result(std::move(req));
             const char wakeup_byte = IO_SERVICE_RESULT_QUEUE;
-            assert_with_errno(write_loop(s_write_pipe, &wakeup_byte, sizeof wakeup_byte) != -1);
+            int notify_fd = get_notify_pipes().write;
+            assert_with_errno(write_loop(notify_fd, &wakeup_byte, sizeof wakeup_byte) != -1);
         }
     }
 
@@ -164,7 +168,6 @@ static void iothread_spawn() {
 int iothread_perform_impl(void_function_t &&func, void_function_t &&completion) {
     ASSERT_IS_MAIN_THREAD();
     ASSERT_IS_NOT_FORKED_CHILD();
-    iothread_init();
 
     struct spawn_request_t req(std::move(func), std::move(completion));
     int local_thread_count = -1;
@@ -187,10 +190,7 @@ int iothread_perform_impl(void_function_t &&func, void_function_t &&completion) 
     return local_thread_count;
 }
 
-int iothread_port() {
-    iothread_init();
-    return s_read_pipe;
-}
+int iothread_port() { return get_notify_pipes().read; }
 
 void iothread_service_completion() {
     ASSERT_IS_MAIN_THREAD();
@@ -202,7 +202,7 @@ void iothread_service_completion() {
     } else if (wakeup_byte == IO_SERVICE_RESULT_QUEUE) {
         iothread_service_result_queue();
     } else {
-        debug(0, "Unknown wakeup byte %02x in %s", wakeup_byte, __FUNCTION__);
+        FLOGF(error, L"Unknown wakeup byte %02x in %s", wakeup_byte, __FUNCTION__);
     }
 }
 
@@ -246,8 +246,8 @@ void iothread_drain_all() {
     }
 #if TIME_DRAIN
     double after = timef();
-    fwprintf(stdout, L"(Waited %.02f msec for %d thread(s) to drain)\n", 1000 * (after - now),
-             thread_count);
+    std::fwprintf(stdout, L"(Waited %.02f msec for %d thread(s) to drain)\n", 1000 * (after - now),
+                  thread_count);
 #endif
 }
 
@@ -257,10 +257,7 @@ static void iothread_service_main_thread_requests() {
 
     // Move the queue to a local variable.
     std::queue<main_thread_request_t *> request_queue;
-    {
-        scoped_lock queue_lock(s_main_thread_request_q_lock);
-        request_queue.swap(s_main_thread_request_queue);
-    }
+    s_main_thread_request_queue.acquire()->swap(request_queue);
 
     if (!request_queue.empty()) {
         // Perform each of the functions. Note we are NOT responsible for deleting these. They are
@@ -312,16 +309,13 @@ void iothread_perform_on_main(void_function_t &&func) {
     // Make a new request. Note we are synchronous, so this can be stack allocated!
     main_thread_request_t req(std::move(func));
 
-    // Append it. Do not delete the nested scope as it is crucial to the proper functioning of this
-    // code by virtue of the lock management.
-    {
-        scoped_lock queue_lock(s_main_thread_request_q_lock);
-        s_main_thread_request_queue.push(&req);
-    }
+    // Append it. Ensure we don't hold the lock after.
+    s_main_thread_request_queue.acquire()->push(&req);
 
     // Tell the pipe.
     const char wakeup_byte = IO_SERVICE_MAIN_THREAD_REQUEST_QUEUE;
-    assert_with_errno(write_loop(s_write_pipe, &wakeup_byte, sizeof wakeup_byte) != -1);
+    int notify_fd = get_notify_pipes().write;
+    assert_with_errno(write_loop(notify_fd, &wakeup_byte, sizeof wakeup_byte) != -1);
 
     // Wait on the condition, until we're done.
     std::unique_lock<std::mutex> perform_lock(s_main_thread_performer_lock);
@@ -363,6 +357,8 @@ bool make_pthread(pthread_t *result, void *(*func)(void *), void *param) {
 using void_func_t = std::function<void(void)>;
 
 static void *func_invoker(void *param) {
+    // Acquire a thread id for this thread.
+    (void)thread_id();
     void_func_t *vf = static_cast<void_func_t *>(param);
     (*vf)();
     delete vf;
@@ -378,4 +374,16 @@ bool make_pthread(pthread_t *result, void_func_t &&func) {
     // Thread spawning failed, clean up our heap allocation.
     delete vf;
     return false;
+}
+
+static uint64_t next_thread_id() {
+    // Note 0 is an invalid thread id.
+    static owning_lock<uint64_t> s_last_thread_id{};
+    auto tid = s_last_thread_id.acquire();
+    return ++*tid;
+}
+
+uint64_t thread_id() {
+    static thread_local uint64_t tl_tid = next_thread_id();
+    return tl_tid;
 }

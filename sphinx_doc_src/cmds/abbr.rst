@@ -1,3 +1,5 @@
+.. _cmd-abbr:
+
 abbr - manage fish abbreviations
 ================================
 
@@ -16,7 +18,7 @@ Description
 
 ``abbr`` manages abbreviations - user-defined words that are replaced with longer phrases after they are entered.
 
-For example, a frequently-run command like ``git checkout`` can be abbreviated to ``gco``. After entering ``gco`` and pressing @key{Space} or @key{Enter}, the full text ``git checkout`` will appear in the command line.
+For example, a frequently-run command like ``git checkout`` can be abbreviated to ``gco``. After entering ``gco`` and pressing :kbd:`Space` or :kbd:`Enter`, the full text ``git checkout`` will appear in the command line.
 
 Options
 -------

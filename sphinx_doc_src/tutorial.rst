@@ -1,4 +1,4 @@
-.. highlight:: fish
+.. highlight:: fish-docs-samples
 
 Tutorial
 ========
@@ -20,9 +20,9 @@ You will be greeted by the standard fish prompt,
 which means you are all set up and can start using fish::
 
     > fish
-    <outp>Welcome to fish, the friendly interactive shell</outp>
-    <outp>Type <span class="cwd">help</span> for instructions on how to use fish</outp>
-    <asis>you@hostname</asis> ~>____
+    Welcome to fish, the friendly interactive shell
+    Type help for instructions on how to use fish
+    you@hostname ~>____
 
 
 This prompt that you see above is the ``fish`` default prompt: it shows your username, hostname, and working directory.
@@ -37,7 +37,7 @@ Learning fish
 
 This tutorial assumes a basic understanding of command line shells and Unix commands, and that you have a working copy of ``fish``.
 
-If you have a strong understanding of other shells, and want to know what ``fish`` does differently, search for the magic phrase <em>unlike other shells</em>, which is used to call out important differences.
+If you have a strong understanding of other shells, and want to know what ``fish`` does differently, search for the magic phrase *unlike other shells*, which is used to call out important differences.
 
 
 Running Commands
@@ -46,7 +46,7 @@ Running Commands
 ``fish`` runs commands like other shells: you type a command, followed by its arguments. Spaces are separators::
 
     >_ echo hello world
-    <outp>hello world</outp>
+    hello world
 
 
 You can include a literal space in an argument with a backslash, or by using single or double quotes::
@@ -54,7 +54,7 @@ You can include a literal space in an argument with a backslash, or by using sin
     >_ mkdir My\ Files
     >_ cp ~/Some\ File 'My Files'
     >_ ls "My Files"
-    <outp>Some File</outp>
+    Some File
 
 
 Commands can be chained with semicolons.
@@ -70,8 +70,8 @@ Getting Help
 ::
 
     >_ man set
-    <outp>set - handle shell variables</outp>
-    <outp>  Synopsis...</outp>
+    set - handle shell variables
+      Synopsis...
 
 
 
@@ -104,26 +104,26 @@ Wildcards
 ``fish`` supports the familiar wildcard ``*``. To list all JPEG files::
 
     >_ ls *.jpg
-    <outp>lena.jpg</outp>
-    <outp>meena.jpg</outp>
-    <outp>santa maria.jpg</outp>
+    lena.jpg
+    meena.jpg
+    santa maria.jpg
 
 
 You can include multiple wildcards::
 
     >_ ls l*.p*
-    <outp>lena.png</outp>
-    <outp>lesson.pdf</outp>
+    lena.png
+    lesson.pdf
 
 
 Especially powerful is the recursive wildcard ** which searches directories recursively::
 
     >_ ls /var/**.log
-    <outp>/var/log/system.log</outp>
-    <outp>/var/run/sntp.log</outp>
+    /var/log/system.log
+    /var/run/sntp.log
 
 
-If that directory traversal is taking a long time, you can @key{Control,C} out of it.
+If that directory traversal is taking a long time, you can :kbd:`Control+C` out of it.
 
 
 Pipes and Redirections
@@ -132,10 +132,10 @@ Pipes and Redirections
 You can pipe between commands with the usual vertical bar::
 
     >_ echo hello world | wc
-    <outp>       1       2      12</outp>
+           1       2      12
 
 
-stdin and stdout can be redirected via the familiar &lt; and &gt;. stderr is redirected with a 2&gt;.
+stdin and stdout can be redirected via the familiar `<` and `<`. stderr is redirected with a `2>`.
 
 
 
@@ -163,31 +163,31 @@ And history too. Type a command once, and you can re-summon it by just typing a 
     >_ <eror>r<</eror><s>___sync -avze ssh . myname@somelonghost.com:/some/long/path/doo/dee/doo/dee/doo</s>
 
 
-To accept the autosuggestion, hit @cursor_key{&rarr;,right arrow} or @key{Control,F}. To accept a single word of the autosuggestion, @key{Alt,&rarr;} (right arrow). If the autosuggestion is not what you want, just ignore it.
+To accept the autosuggestion, hit :kbd:`→` (right arrow) or :kbd:`Control+F`. To accept a single word of the autosuggestion, :kbd:`Alt+→` (right arrow). If the autosuggestion is not what you want, just ignore it.
 
 Tab Completions
 ---------------
 
 ``fish`` comes with a rich set of tab completions, that work "out of the box."
 
-Press @key{Tab}, and ``fish`` will attempt to complete the command, argument, or path::
+Press :kbd:`Tab`, and ``fish`` will attempt to complete the command, argument, or path::
 
-    >_ <eror>/pri</eror> @key{Tab} &rarr; /private/
+    >_ <eror>/pri</eror> :kbd:`Tab` => /private/
 
 
 If there's more than one possibility, it will list them::
 
-    >_ <eror>~/stuff/s</eror> @key{Tab}
-    <outp><mtch>~/stuff/s</outp>cript.sh  <i>(Executable, 4.8kB)</i>  \mtch{~/stuff/s</mtch>ources/  <i>(Directory)</i>}
+    >_ <eror>~/stuff/s</eror> :kbd:`Tab`
+    <mtch>~/stuff/script.sh  <i>(Executable, 4.8kB)</i>  \mtch{~/stuff/s</mtch>ources/  <i>(Directory)</i>}
 
 
 Hit tab again to cycle through the possibilities.
 
 ``fish`` can also complete many commands, like git branches::
 
-    >_ git merge pr @key{Tab} &rarr; git merge prompt_designer
-    >_ git checkout b @key{Tab}
-    <outp><mtch>b</outp>uiltin_list_io_merge <i>(Branch)</i> \mtch{b</mtch>uiltin_set_color <i>(Branch)</i> <mtch>b</mtch>usted_events <i>(Tag)</i>}
+    >_ git merge pr :kbd:`Tab` => git merge prompt_designer
+    >_ git checkout b :kbd:`Tab`
+    <mtch>builtin_list_io_merge <i>(Branch)</i> \mtch{b</mtch>uiltin_set_color <i>(Branch)</i> <mtch>b</mtch>usted_events <i>(Tag)</i>}
 
 
 Try hitting tab and see what ``fish`` can do!
@@ -198,15 +198,15 @@ Variables
 Like other shells, a dollar sign performs variable substitution::
 
     >_ echo My home directory is $HOME
-    <outp>My home directory is /home/tutorial</outp>
+    My home directory is /home/tutorial
 
 
 Variable substitution also occurs in double quotes, but not single quotes::
 
     >_ echo "My current directory is $PWD"
-    <outp>My current directory is /home/tutorial</outp>
+    My current directory is /home/tutorial
     >_ echo 'My current directory is $PWD'
-    <outp>My current directory is $PWD</outp>
+    My current directory is $PWD
 
 
 Unlike other shells, ``fish`` has no dedicated syntax for setting variables. Instead it has an ordinary command: ``set``, which takes a variable name, and then its value.
@@ -217,7 +217,7 @@ Unlike other shells, ``fish`` has no dedicated syntax for setting variables. Ins
 
     >_ set name 'Mister Noodle'
     >_ echo $name
-    <outp>Mister Noodle</outp>
+    Mister Noodle
 
 
 (Notice the quotes: without them, ``Mister`` and ``Noodle`` would have been separate arguments, and ``$name`` would have been made into a list of two elements.)
@@ -226,7 +226,7 @@ Unlike other shells, variables are not further split after substitution::
 
     >_ mkdir $name
     >_ ls
-    <outp>Mister Noodle</outp>
+    Mister Noodle
 
 
 In bash, this would have created two directories "Mister" and "Noodle". In ``fish``, it created only one: the variable had the value "Mister Noodle", so that is the argument that was passed to ``mkdir``, spaces and all. Other shells use the term "arrays", rather than lists.
@@ -243,10 +243,10 @@ Unlike other shells, ``fish`` stores the exit status of the last command in ``$s
 
     >_ false
     >_ echo $status
-    <outp>1</outp>
+    1
 
 
-Zero is considered success, and non-zero is failure. There is also a ``$pipestatus`` array variable for the exit statues of processes in a pipe.
+Zero is considered success, and non-zero is failure. There is also a ``$pipestatus`` list variable for the exit statues of processes in a pipe.
 
 
 Exports (Shell Variables)
@@ -260,7 +260,7 @@ Unlike other shells, ``fish`` does not have an export command. Instead, a variab
 
     >_ set -x MyVariable SomeValue
     >_ env | grep MyVariable
-    <outp><m>MyVariable</outp>=SomeValue</m>
+    MyVariable=SomeValue
 
 
 You can erase a variable with ``-e`` or ``--erase``
@@ -271,7 +271,7 @@ You can erase a variable with ``-e`` or ``--erase``
 
     >_ set -e MyVariable
     >_ env | grep MyVariable
-    <outp>(no output)</outp>
+    (no output)
 
 
 
@@ -285,17 +285,17 @@ Some variables, like ``$PWD``, only have one value. By convention, we talk about
 Other variables, like ``$PATH``, really do have multiple values. During variable expansion, the variable expands to become multiple arguments::
 
     >_ echo $PATH
-    <outp>/usr/bin /bin /usr/sbin /sbin /usr/local/bin</outp>
+    /usr/bin /bin /usr/sbin /sbin /usr/local/bin
 
 
-Note that there are three environment variables that are automatically split on colons to become lists when fish starts running: ``PATH``, ``CDPATH``, ``MANPATH``. Conversely, they are joined on colons when exported to subcommands. All other environment variables (e.g., ``LD_LIBRARY_PATH``) which have similar semantics are treated as simple strings.
+Variables whose name ends in "PATH" are automatically split on colons to become lists. They are joined using colons when exported to subcommands. This is for compatibility with other tools, which expect $PATH to use colons. You can also explicitly add this quirk to a variable with `set --path`, or remove it with `set --unpath`.
 
 Lists cannot contain other lists: there is no recursion.  A variable is a list of strings, full stop.
 
 Get the length of a list with ``count``::
 
     >_ count $PATH
-    <outp>5</outp>
+    5
 
 
 You can append (or prepend) to a list by setting the list to itself, with some additional arguments. Here we append /usr/local/bin to $PATH::
@@ -307,11 +307,11 @@ You can append (or prepend) to a list by setting the list to itself, with some a
 You can access individual elements with square brackets. Indexing starts at 1 from the beginning, and -1 from the end::
 
     >_ echo $PATH
-    <outp>/usr/bin /bin /usr/sbin /sbin /usr/local/bin</outp>
+    /usr/bin /bin /usr/sbin /sbin /usr/local/bin
     >_ echo $PATH[1]
-    <outp>/usr/bin</outp>
+    /usr/bin
     >_ echo $PATH[-1]
-    <outp>/usr/local/bin</outp>
+    /usr/local/bin
 
 
 You can also access ranges of elements, known as "slices:"
@@ -321,9 +321,9 @@ You can also access ranges of elements, known as "slices:"
 ::
 
     >_ echo $PATH[1..2]
-    <outp>/usr/bin /bin</outp>
+    /usr/bin /bin
     >_ echo $PATH[-1..2]
-    <outp>/usr/local/bin /sbin /usr/sbin /bin</outp>
+    /usr/local/bin /sbin /usr/sbin /bin
 
 
 You can iterate over a list (or a slice) with a for loop::
@@ -331,26 +331,26 @@ You can iterate over a list (or a slice) with a for loop::
     >_ for val in $PATH
         echo "entry: $val"
       end
-    <outp>entry: /usr/bin/</outp>
-    <outp>entry: /bin</outp>
-    <outp>entry: /usr/sbin</outp>
-    <outp>entry: /sbin</outp>
-    <outp>entry: /usr/local/bin</outp>
+    entry: /usr/bin/
+    entry: /bin
+    entry: /usr/sbin
+    entry: /sbin
+    entry: /usr/local/bin
 
 
-Lists adjacent to other lists or strings are expanded as <a href="index.html#cartesian-product">cartesian products</a> unless quoted (see <a href="index.html#expand-variable">Variable expansion</a>)::
+Lists adjacent to other lists or strings are expanded as :ref:`cartesian products <cartesian-product>` unless quoted (see :ref:`Variable expansion <expand-variable>`)::
 
     >_ set a 1 2 3
     >_ set 1 a b c
     >_ echo $a$1
-    <outp>1a 2a 3a 1b 2b 3b 1c 2c 3c</outp>
+    1a 2a 3a 1b 2b 3b 1c 2c 3c
     >_ echo $a" banana"
-    <outp>1 banana 2 banana 3 banana</outp>
+    1 banana 2 banana 3 banana
     >_ echo "$a banana"
-    <outp>1 2 3 banana</outp>
+    1 2 3 banana
 
 
-This is similar to <a href="index.html#expand-brace">Brace expansion</a>.
+This is similar to `Brace expansion <index#expand-brace>`__.
 
 Command Substitutions
 ---------------------
@@ -358,21 +358,21 @@ Command Substitutions
 Command substitutions use the output of one command as an argument to another. Unlike other shells, ``fish`` does not use backticks `` for command substitutions. Instead, it uses parentheses::
 
     >_ echo In (pwd), running (uname)
-    <outp>In /home/tutorial, running FreeBSD</outp>
+    In /home/tutorial, running FreeBSD
 
 
 A common idiom is to capture the output of a command in a variable::
 
     >_ set os (uname)
     >_ echo $os
-    <outp>Linux</outp>
+    Linux
 
 
 Command substitutions are not expanded within quotes. Instead, you can temporarily close the quotes, add the command substitution, and reopen them, all in the same argument::
 
-    >_ touch <i class="quote">"testing_"</i>(date +%s)<i class="quote">".txt"</i>
+    >_ touch "testing_"(date +%s)".txt"
     >_ ls *.txt
-    <outp>testing_1360099791.txt</outp>
+    testing_1360099791.txt
 
 
 Unlike other shells, fish does not split command substitutions on any whitespace (like spaces or tabs), only newlines. This can be an issue with commands like ``pkg-config`` that print what is meant to be multiple arguments on a single line. To split it on spaces too, use ``string split``.
@@ -382,11 +382,11 @@ Unlike other shells, fish does not split command substitutions on any whitespace
 ::
 
     >_ printf '%s\n' (pkg-config --libs gio-2.0)
-    <outp>-lgio-2.0 -lgobject-2.0 -lglib-2.0</outp>
+    -lgio-2.0 -lgobject-2.0 -lglib-2.0
     >_ printf '%s\n' (pkg-config --libs gio-2.0 | string split " ")
-    <outp>-lgio-2.0
+    -lgio-2.0
     -lgobject-2.0
-    -lglib-2.0</outp>
+    -lglib-2.0
 
 
 
@@ -408,7 +408,7 @@ To write them on the same line, use the semicolon (";"). That means the followin
 Combiners (And, Or, Not)
 ------------------------
 
-fish supports the familiar ``&amp;&amp;`` and ``||`` to combine commands, and ``!`` to negate them::
+fish supports the familiar ``&&`` and ``||`` to combine commands, and ``!`` to negate them::
 
     >_ ./configure && make && sudo make install
 
@@ -416,10 +416,10 @@ fish supports the familiar ``&amp;&amp;`` and ``||`` to combine commands, and ``
 fish also supports ``and``, ``or``, and ``not``. The first two are job modifiers and have lower precedence. Example usage::
 
     >_ cp file1.txt file1_bak.txt && cp file2.txt file2_bak.txt ; and echo "Backup successful"; or echo "Backup failed"
-    <outp>Backup failed</outp>
+    Backup failed
 
 
-As mentioned in <a href="#tut_semicolon">the section on the semicolon</a>, this can also be written in multiple lines, like so::
+As mentioned in `the section on the semicolon <#tut_semicolon>`__, this can also be written in multiple lines, like so::
 
     cp file1.txt file1_bak.txt && cp file2.txt file2_bak.txt
     and echo "Backup successful"
@@ -445,7 +445,7 @@ Use ``if``, ``else if``, and ``else`` to conditionally execute code, based on th
     end
 
 
-To compare strings or numbers or check file properties (whether a file exists or is writeable and such), use <a href="commands.html#test">test</a>, like
+To compare strings or numbers or check file properties (whether a file exists or is writeable and such), use :ref:`test <cmd-test>`, like
 
 
 
@@ -464,7 +464,7 @@ To compare strings or numbers or check file properties (whether a file exists or
     end
 
 
-<a href="#tut_combiners">Combiners</a> can also be used to make more complex conditions, like
+`Combiners <#tut_combiners>`__ can also be used to make more complex conditions, like
 
 
 
@@ -503,9 +503,9 @@ A ``fish`` function is a list of commands, which may optionally take arguments. 
          echo Hello $argv
       end
     >_ say_hello
-    <outp>Hello</outp>
+    Hello
     >_ say_hello everybody!
-    <outp>Hello everybody!</outp>
+    Hello everybody!
 
 
 Unlike other shells, ``fish`` does not have aliases or special prompt syntax. Functions take their place.
@@ -513,7 +513,7 @@ Unlike other shells, ``fish`` does not have aliases or special prompt syntax. Fu
 You can list the names of all functions with the ``functions`` keyword (note the plural!). ``fish`` starts out with a number of functions::
 
     >_ functions
-    <outp>alias, cd, delete-or-exit, dirh, dirs, down-or-search, eval, export, fish_command_not_found_setup, fish_config, fish_default_key_bindings, fish_prompt, fish_right_prompt, fish_sigtrap_handler, fish_update_completions, funced, funcsave, grep, help, history, isatty, ls, man, math, nextd, nextd-or-forward-word, open, popd, prevd, prevd-or-backward-word, prompt_pwd, psub, pushd, seq, setenv, trap, type, umask, up-or-search, vared</outp>
+    alias, cd, delete-or-exit, dirh, dirs, down-or-search, eval, export, fish_command_not_found_setup, fish_config, fish_default_key_bindings, fish_prompt, fish_right_prompt, fish_sigtrap_handler, fish_update_completions, funced, funcsave, grep, help, history, isatty, ls, man, math, nextd, nextd-or-forward-word, open, popd, prevd, prevd-or-backward-word, prompt_pwd, psub, pushd, seq, setenv, trap, type, umask, up-or-search, vared
 
 
 You can see the source for any function by passing its name to ``functions``::
@@ -531,12 +531,12 @@ Loops
 While loops::
 
     >_ while true
-        echo <i class="quote">"Loop forever"</i>
+        echo "Loop forever"
     end
-    <outp>Loop forever</outp>
-    <outp>Loop forever</outp>
-    <outp>Loop forever</outp>
-    <outp>...</outp>
+    Loop forever
+    Loop forever
+    Loop forever
+    ...
 
 
 For loops can be used to iterate over a list. For example, a list of files::
@@ -564,8 +564,11 @@ You can define your own prompt::
     >_ function fish_prompt
         echo "New Prompt % "
     end
-    <asis>New Prompt % </asis>___
+    New Prompt % 
 
+
+.. role:: purple
+.. role:: yellow
 
 Multiple lines are OK. Colors can be set via ``set_color``, passing it named ANSI colors, or hex RGB values::
 
@@ -573,12 +576,13 @@ Multiple lines are OK. Colors can be set via ``set_color``, passing it named ANS
           set_color purple
           date "+%m/%d/%y"
           set_color FF0
-          echo (pwd) '>'
-          set_color normal
+          echo (pwd) '>' (set_color normal)
       end
-    <span style="color: purple">02/06/13</span>
-    <span style="color: #FF0">/home/tutorial ></span>___
 
+will look like
+
+| :purple:`02/06/13`
+| :yellow:`/home/tutorial >`
 
 You can choose among some sample prompts by running ``fish_config prompt``. ``fish`` also supports RPROMPT through ``fish_right_prompt``.
 
@@ -597,7 +601,7 @@ To remove /usr/local/bin from ``$PATH``, you can write::
     >_ set PATH (string match -v /usr/local/bin $PATH)
 
 
-You can do so directly in ``config.fish``, like you might do in other shells with ``.profile``. See [this example](#path_example).
+You can do so directly in ``config.fish``, like you might do in other shells with ``.profile``. See :ref:`this example <path_example>`.
 
 A faster way is to modify the ``$fish_user_paths`` [universal variable](#tut_universal), which is automatically prepended to ``$PATH``. For example, to permanently add ``/usr/local/bin`` to your ``$PATH``, you could write::
 
@@ -613,8 +617,7 @@ Startup (Where's .bashrc?)
 
 It is possible to directly create functions and variables in ``config.fish`` file, using the commands shown above. For example:
 
-<a name="path_example"></a>
-
+.. _path_example:
 
 ::
 
@@ -650,7 +653,7 @@ This is the preferred way to define your prompt as well::
     end
 
 
-See the documentation for <a href="commands.html#funced">funced</a> and <a href="commands.html#funcsave">funcsave</a> for ways to create these files automatically.
+See the documentation for :ref:`funced <cmd-funced>` and :ref:`funcsave <cmd-funcsave>` for ways to create these files automatically.
 
 Universal Variables
 -------------------
@@ -696,4 +699,4 @@ with ``/bin/bash``, ``/bin/tcsh`` or ``/bin/zsh`` as appropriate in the steps ab
 Ready for more?
 ---------------
 
-If you want to learn more about fish, there is <a href="index.html">lots of detailed documentation</a>, an <a href="https://lists.sourceforge.net/lists/listinfo/fish-users">official mailing list</a>, the IRC channel \#fish on ``irc.oftc.net``, and the <a href="https://github.com/fish-shell/fish-shell/">github page</a>.
+If you want to learn more about fish, there is :ref:`lots of detailed documentation <intro>`, an `official mailing list <https://lists.sourceforge.net/lists/listinfo/fish-users>`__, the IRC channel \#fish on ``irc.oftc.net``, and the `github page <https://github.com/fish-shell/fish-shell/>`__.

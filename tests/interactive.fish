@@ -10,7 +10,7 @@ if test "$TRAVIS_OS_NAME" = osx
 end
 
 # This is a list of flakey tests that often succeed when rerun.
-set -l TESTS_TO_RETRY bind.expect
+set -l TESTS_TO_RETRY bind.expect pipeline.expect
 
 # Set this var to modify behavior of the code being tests. Such as avoiding running
 # `fish_update_completions` when running tests.
@@ -69,11 +69,11 @@ function test_file
         say red "fail"
         if test $out_status -ne 0
             say yellow "Output differs for file $file. Diff follows:"
-            colordiff -u $file.tmp.out $file.out
+            colordiff -u $file.out $file.tmp.out
         end
         if test $err_status -ne 0
             say yellow "Error output differs for file $file. Diff follows:"
-            colordiff -u $file.tmp.err $file.err
+            colordiff -u $file.err $file.tmp.err
         end
         if test $exit_status -ne 0
             say yellow "Exit status differs for file $file."

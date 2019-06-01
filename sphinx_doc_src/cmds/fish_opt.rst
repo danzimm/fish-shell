@@ -1,18 +1,21 @@
+.. _cmd-fish_opt:
+
 fish_opt - create an option spec for the argparse command
 =========================================================
 
 Synopsis
 --------
 
-fish_opt [ -h | --help ]
-fish_opt ( -s X | --short=X ) [ -l LONG | --long=LONG ] [ --long-only ] \
-    [ -o | --optional-val ] [ -r | --required-val ] [ --multiple-vals ]
+::
+
+  fish_opt [ -h | --help ]
+  fish_opt ( -s X | --short=X ) [ -l LONG | --long=LONG ] [ --long-only ] [ -o | --optional-val ] [ -r | --required-val ] [ --multiple-vals ]
 
 
 Description
 -----------
 
-This command provides a way to produce option specifications suitable for use with the <a href="#argparse">``argparse``</a> command. You can, of course, write the option specs by hand without using this command. But you might prefer to use this for the clarity it provides.
+This command provides a way to produce option specifications suitable for use with the :ref:`argparse <cmd-argparse>` command. You can, of course, write the option specs by hand without using this command. But you might prefer to use this for the clarity it provides.
 
 The following ``argparse`` options are available:
 

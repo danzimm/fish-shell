@@ -1,7 +1,7 @@
 // Implementation of the pwd builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <string.h>
+#include <cstring>
 
 #include "builtin.h"
 #include "builtin_pwd.h"
@@ -13,7 +13,7 @@
 #include "wutil.h"  // IWYU pragma: keep
 
 /// The pwd builtin. Respect -P to resolve symbolic links. Respect -L to not do that (the default).
-static const wchar_t * const short_options = L"LPh";
+static const wchar_t *const short_options = L"LPh";
 static const struct woption long_options[] = {{L"help", no_argument, NULL, 'h'},
                                               {NULL, 0, NULL, 0}};
 int builtin_pwd(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
@@ -58,7 +58,7 @@ int builtin_pwd(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         if (auto real_pwd = wrealpath(pwd)) {
             pwd = std::move(*real_pwd);
         } else {
-            const char *error = strerror(errno);
+            const char *error = std::strerror(errno);
             streams.err.append_format(L"%ls: realpath failed:", cmd, error);
             return STATUS_CMD_ERROR;
         }

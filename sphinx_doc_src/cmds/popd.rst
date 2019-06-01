@@ -1,3 +1,5 @@
+.. _cmd-popd:
+
 popd - move through directory stack
 ===================================
 
@@ -10,9 +12,9 @@ popd
 Description
 -----------
 
-``popd`` removes the top directory from the directory stack and changes the working directory to the new top directory. Use <a href="#pushd">``pushd``</a> to add directories to the stack.
+``popd`` removes the top directory from the directory stack and changes the working directory to the new top directory. Use :ref:`pushd <cmd-pushd>` to add directories to the stack.
 
-You may be interested in the <a href="commands.html#cdh">``cdh``</a> command which provides a more intuitive way to navigate to recently visited directories.
+You may be interested in the :ref:`cdh <cmd-cdh>` command which provides a more intuitive way to navigate to recently visited directories.
 
 Example
 -------

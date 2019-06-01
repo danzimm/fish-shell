@@ -3,32 +3,63 @@
 ## Deprecations
 - The vcs-prompt functions have been renamed to names without double-underscore, so __fish_git_prompt is now fish_git_prompt, __fish_vcs_prompt is now fish_vcs_prompt, __fish_hg_prompt is now fish_hg_prompt and __fish_svn_prompt is now fish_svn_prompt. Shims at the old names have been added, and the variables have kept their old names (#5586).
 
-## Notable fixes and improvements
+## Notable Fixes and improvements
+- fish no longer requires buffering for the last function in a pipeline.
 - Add `$pipestatus` support
-- `string split0` now returns 0 if it split something (#5701).
+- $PATH is no longer reordered in child fishes (#5456).
+- `eval` is now implemented internally rather than being a function; as such, the evaluated code now shares the same argument scope as `eval` rather than being executed in a new scope (#4443).
+- macOS Mojave: fish.app can actually run (#5727), 10.14.4's Terminal.app no longer causes an error on launch (#5725)
+- cd now always checks the current directory, even if $CDPATH does not include it or "." (#4484).
+- Error messages no longer include a (rather large) help summary and the stacktrace has been shortened (#3404, #5434).
+- fish now underlines every valid entered path instead of just the last one.
+- The `--debug` option has been extended to allow specifying categories. Categories may be listed via `fish --print-debug-categories`.
+- `string replace` had an additional round of escaping in the replacement (not the match!), so escaping backslashes would require `string replace -ra '([ab])' '\\\\\\\$1' a`. A new feature flag `string-replace-fewer-backslashes` can be used to disable this, so that it becomes `string replace -ra '([ab])' '\\\\$1' a` (#5556).
+- Some parser errors did not set `$status` to non-zero. This has been corrected (b2a1da602f79878f4b0adc4881216c928a542608).
 
 ### Syntax changes and new commands
-- None yet.
+- Brace expansion now only takes place if the braces include a "," or a variable expansion, so things like `git reset HEAD@{0}` now work (#5869).
+
+### Scripting improvements
+- `string split0` now returns 0 if it split something (#5701).
+- mandoc can now be used to format the output from `--help` if nroff is not installed.
+- In the interest of consistency, `builtin -q` and `command -q` can now be used to query if a builtin or command exists (#5631).
+- `math` now accepts `--scale=max` for the maximum scale (#5579).
+- `complete --do-complete` now also does fuzzy matches (#5467).
+- `count` now also counts lines fed on stdin (#5744).
+- `printf` prints what it can when input hasn't been fully converted to a number, but still prints an error (#5532).
+- `complete -C foo` now works instead of erroring out and requiring `complete -Cfoo`.
+- `complete` gained a new `--force-files` (short `-F`) switch to reenable file completions. This allows `sudo -E` and `pacman -Qo` to complete correctly (#5646).
+- `argparse` now defaults to showing the current function name (instead of `argparse`) in its errors, making `--name` often superfluous (#5835).
+- `argparse` learned a new `--ignore-unknown` flag to keep unrecognized options, allowing multiple argparse passes to parse options (#5367).
+- `fish_indent` now handles semicolons better, including leaving them in place for `; and` and `; or` instead of breaking the line.
+- `test` (aka `[`) now prints a stacktrace on error, making the offending call easier to find (#5771).
+- The default read limit has been increased to 100MiB (#5267).
 
 ### Interactive improvements
 - Major improvements in performance and functionality to the 'sorin' sample prompt (#5411).
-- Added completions for:
- - nothing yet...
-- Lots of improvements to completions.
 - fish_clipboard_* now supports wayland by means of [wl-clipboard](https://github.com/bugaevc/wl-clipboard).
-- mandoc can now be used to format the output from `--help` if nroff is not installed
+- Pasting will now strip leading spaces if they would trigger history ignoring (#4327).
 - New color options for the pager have been added (#5524).
+- Better detection and support for using fish from the system console, where limited colors and special characters are supported (#5552 and others)
 - The default escape delay (to differentiate between the escape key and an alt-combination) has been reduced to 30ms, down from 300ms for the default mode and 100ms for vi-mode (#3904).
-- In the interest of consistency, `builtin -q` and `command -q` can now be used to query if a builtin or command exists (#5631).
 - The `path_helper` on macOS now only runs in login shells, matching the bash implementation.
-- `math` now accepts `--scale=max` for the maximum scale (#5579).
 - The `forward-bigword` binding now interacts correctly with autosuggestions (#5336)
+- Fish now tries to guess if the system supports Unicode 9 (and displays emoji as wide), hopefully making setting $fish_emoji_width superfluous in most cases (#5722).
+- The locale is now reloaded when the `LOCPATH` variable is changed (#5815).
+- Lots of improvements to completions.
 - Added completions for
   - `cf`
   - `bosh`
+  - `vagrant`
+- The git prompt in informative mode now shows the number of stashes if enabled.
+- The nextd and prevd functions no longer print "Hit end of history", instead using a BEL.
+- If fish_mode_prompt exists, vi-mode will only execute it on mode-switch instead of the entire prompt. This should make it much more responsive with slow prompts (#5783).
+- The path-component bindings (like ctrl-w) now also stop at ":" and "@" because those are used to denote user and host in ssh-likes (#5841).
 
 ### For distributors and developers
 - The autotools-based build system and legacy Xcode build systems have been removed, leaving only the CMake build system. All distributors and developers must migrate to the CMake build.
+- The doxygen-based documentation system has been removed and replaced with one based on sphinx. All distributors and developers must migrate to that.
+- The INTERNAL_WCWIDTH build option to use the system wcwidth has been removed. We believe our wcwidth is a better choice, as it has a number of configuration options that the other path never gained (#5777).
 
 ---
 

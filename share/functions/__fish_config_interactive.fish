@@ -135,17 +135,10 @@ function __fish_config_interactive -d "Initializations that should be performed 
 
     #
     # This event handler makes sure the prompt is repainted when
-    # fish_color_cwd changes value. Like all event handlers, it can't be
+    # fish_color_cwd{,_root} changes value. Like all event handlers, it can't be
     # autoloaded.
     #
-    function __fish_repaint --on-variable fish_color_cwd --description "Event handler, repaints the prompt when fish_color_cwd changes"
-        if status --is-interactive
-            set -e __fish_prompt_cwd
-            commandline -f repaint 2>/dev/null
-        end
-    end
-
-    function __fish_repaint_root --on-variable fish_color_cwd_root --description "Event handler, repaints the prompt when fish_color_cwd_root changes"
+    function __fish_repaint -v fish_color_cwd -v fish_color_cwd_root -d "Event handler, repaints the prompt when fish_color_cwd* changes"
         if status --is-interactive
             set -e __fish_prompt_cwd
             commandline -f repaint 2>/dev/null
@@ -170,6 +163,11 @@ function __fish_config_interactive -d "Initializations that should be performed 
     # the user tries [ interactively.
     #
     complete -c [ --wraps test
+
+    #
+    # Only a few builtins take filenames; initialize the rest with no file completions
+    #
+    complete -c(builtin -n | string match -rv 'source|cd|exec|realpath') --no-files
 
     # Reload key bindings when binding variable change
     function __fish_reload_key_bindings -d "Reload key bindings when binding variable change" --on-variable fish_key_bindings
@@ -254,7 +252,11 @@ function __fish_config_interactive -d "Initializations that should be performed 
         function __fish_disable_focus --on-event fish_preexec
             echo -n \e\[\?1004l
         end
-        __fish_enable_focus
+        # Note: Don't call this initially because, even though we're in a fish_prompt event,
+        # tmux reacts sooo quickly that we'll still get a sequence before we're prepared for it.
+        # So this means that we won't get focus events until you've run at least one command, but that's preferable
+        # to always seeing `^[[I` when starting fish.
+        # __fish_enable_focus
     end
 
     function __fish_winch_handler --on-signal WINCH -d "Repaint screen when window changes size"

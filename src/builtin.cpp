@@ -19,9 +19,9 @@
 
 #include <errno.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <wchar.h>
+#include <cstring>
+#include <cwchar>
 
 #include <algorithm>
 #include <memory>
@@ -41,6 +41,7 @@
 #include "builtin_disown.h"
 #include "builtin_echo.h"
 #include "builtin_emit.h"
+#include "builtin_eval.h"
 #include "builtin_exit.h"
 #include "builtin_fg.h"
 #include "builtin_functions.h"
@@ -65,6 +66,7 @@
 #include "complete.h"
 #include "exec.h"
 #include "fallback.h"  // IWYU pragma: keep
+#include "flog.h"
 #include "intern.h"
 #include "io.h"
 #include "parse_constants.h"
@@ -76,11 +78,11 @@
 #include "wutil.h"  // IWYU pragma: keep
 
 bool builtin_data_t::operator<(const wcstring &other) const {
-    return wcscmp(this->name, other.c_str()) < 0;
+    return std::wcscmp(this->name, other.c_str()) < 0;
 }
 
 bool builtin_data_t::operator<(const builtin_data_t *other) const {
-    return wcscmp(this->name, other->name) < 0;
+    return std::wcscmp(this->name, other->name) < 0;
 }
 
 /// Counts the number of arguments in the specified null-terminated array
@@ -97,7 +99,7 @@ int builtin_count_args(const wchar_t *const *argv) {
 /// This function works like wperror, but it prints its result into the streams.err string instead
 /// to stderr. Used by the builtin commands.
 void builtin_wperror(const wchar_t *s, io_streams_t &streams) {
-    char *err = strerror(errno);
+    char *err = std::strerror(errno);
     if (s != NULL) {
         streams.err.append(s);
         streams.err.append(L": ");
@@ -143,15 +145,6 @@ int parse_help_only_cmd_opts(struct help_only_cmd_opts_t &opts, int *optind, int
     return STATUS_CMD_OK;
 }
 
-/// Count the number of times the specified character occurs in the specified string.
-static int count_char(const wchar_t *str, wchar_t c) {
-    int res = 0;
-    for (; *str; str++) {
-        res += (*str == c);
-    }
-    return res;
-}
-
 /// Obtain help/usage information for the specified builtin from manpage in subshell
 ///
 /// @param  name
@@ -164,7 +157,7 @@ wcstring builtin_help_get(parser_t &parser, io_streams_t &streams, const wchar_t
     UNUSED(parser);
     UNUSED(streams);
     // This won't ever work if no_exec is set.
-    if (no_exec) return wcstring();
+    if (no_exec()) return wcstring();
 
     wcstring_list_t lst;
     wcstring out;
@@ -187,92 +180,33 @@ wcstring builtin_help_get(parser_t &parser, io_streams_t &streams, const wchar_t
 ///
 void builtin_print_help(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
                         output_stream_t &b) {
-    bool is_stderr = &b == &streams.err;
-    if (is_stderr) {
-        b.append(parser.current_line());
-    }
-
-    const wcstring h = builtin_help_get(parser, streams, cmd);
-
-    if (!h.size()) return;
-
-    wchar_t *str = wcsdup(h.c_str());
-    if (str) {
-        bool is_short = false;
-        if (is_stderr) {
-            // Interactive mode help to screen - only print synopsis if the rest won't fit.
-            int screen_height, my_lines;
-
-            screen_height = common_get_height();
-            my_lines = count_char(str, L'\n');
-            if (!shell_is_interactive() || (my_lines > 2 * screen_height / 3)) {
-                wchar_t *pos;
-                int cut = 0;
-                int i;
-
-                is_short = true;
-
-                // First move down 4 lines.
-                pos = str;
-                for (i = 0; (i < 4) && pos && *pos; i++) {
-                    pos = wcschr(pos + 1, L'\n');
-                }
-
-                if (pos && *pos) {
-                    // Then find the next empty line.
-                    for (; *pos; pos++) {
-                        if (*pos != L'\n') {
-                            continue;
-                        }
-
-                        int is_empty = 1;
-                        wchar_t *pos2;
-                        for (pos2 = pos + 1; *pos2; pos2++) {
-                            if (*pos2 == L'\n') break;
-
-                            if (*pos2 != L'\t' && *pos2 != L' ') {
-                                is_empty = 0;
-                                break;
-                            }
-                        }
-                        if (is_empty) {
-                            // And cut it.
-                            *(pos2 + 1) = L'\0';
-                            cut = 1;
-                            break;
-                        }
-                    }
-                }
-
-                // We did not find a good place to cut message to shorten it - so we make sure we
-                // don't print anything.
-                if (!cut) {
-                    *str = 0;
-                }
-            }
-        }
-
-        b.append(str);
-        if (is_short) {
-            b.append_format(_(L"%ls: Type 'help %ls' for related documentation\n\n"), cmd, cmd);
-        }
-
-        free(str);
-    }
+    b.append(builtin_help_get(parser, streams, cmd));
 }
 
 /// Perform error reporting for encounter with unknown option.
 void builtin_unknown_option(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
                             const wchar_t *opt) {
     streams.err.append_format(BUILTIN_ERR_UNKNOWN, cmd, opt);
-    builtin_print_help(parser, streams, cmd, streams.err);
+    builtin_print_error_trailer(parser, streams.err, cmd);
 }
 
 /// Perform error reporting for encounter with missing argument.
 void builtin_missing_argument(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
                               const wchar_t *opt) {
     streams.err.append_format(BUILTIN_ERR_MISSING, cmd, opt);
-    builtin_print_help(parser, streams, cmd, streams.err);
+    builtin_print_error_trailer(parser, streams.err, cmd);
+}
+
+/// Print the backtrace and call for help that we use at the end of error messages.
+void builtin_print_error_trailer(parser_t &parser, output_stream_t &b, const wchar_t *cmd) {
+    b.append(L"\n");
+    const wcstring stacktrace = parser.current_line();
+    // Don't print two empty lines if we don't have a stacktrace.
+    if (!stacktrace.empty()) {
+        b.append(stacktrace);
+        b.append(L"\n");
+    }
+    b.append_format(_(L"(Type 'help %ls' for related documentation)\n"), cmd);
 }
 
 /// A generic bultin that only supports showing a help message. This is only a placeholder that
@@ -300,18 +234,40 @@ static int builtin_generic(parser_t &parser, io_streams_t &streams, wchar_t **ar
     return STATUS_CMD_ERROR;
 }
 
+// How many bytes we read() at once.
+// Since this is just for counting, it can be massive.
+#define COUNT_CHUNK_SIZE 512 * 256
 /// Implementation of the builtin count command, used to count the number of arguments sent to it.
 static int builtin_count(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
-    int argc = builtin_count_args(argv);
-    streams.out.append_format(L"%d\n", argc - 1);
-    return argc - 1 == 0 ? STATUS_CMD_ERROR : STATUS_CMD_OK;
+    int argc = 0;
+
+    // Count the newlines coming in via stdin like `wc -l`.
+    if (streams.stdin_is_directly_redirected) {
+        char buf[COUNT_CHUNK_SIZE];
+        while (true) {
+            long n = read_blocked(streams.stdin_fd, buf, COUNT_CHUNK_SIZE);
+            // Ignore all errors for now.
+            if (n <= 0) break;
+            for (int i = 0; i < n; i++) {
+                if (buf[i] == L'\n') {
+                    argc++;
+                }
+            }
+        }
+    }
+
+    // Always add the size of argv.
+    // That means if you call `something | count a b c`, you'll get the count of something _plus 3_.
+    argc += builtin_count_args(argv) - 1;
+    streams.out.append_format(L"%d\n", argc);
+    return argc == 0 ? STATUS_CMD_ERROR : STATUS_CMD_OK;
 }
 
 /// This function handles both the 'continue' and the 'break' builtins that are used for loop
 /// control.
 static int builtin_break_continue(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
-    int is_break = (wcscmp(argv[0], L"break") == 0);
+    int is_break = (std::wcscmp(argv[0], L"break") == 0);
     int argc = builtin_count_args(argv);
 
     if (argc != 1) {
@@ -321,29 +277,21 @@ static int builtin_break_continue(parser_t &parser, io_streams_t &streams, wchar
         return STATUS_INVALID_ARGS;
     }
 
-    // Find the index of the enclosing for or while loop. Recall that incrementing loop_idx goes
-    // 'up' to outer blocks.
-    size_t loop_idx;
-    for (loop_idx = 0; loop_idx < parser.block_count(); loop_idx++) {
+    // Paranoia: ensure we have a real loop.
+    bool has_loop = false;
+    for (size_t loop_idx = 0; loop_idx < parser.block_count() && !has_loop; loop_idx++) {
         const block_t *b = parser.block_at_index(loop_idx);
-        if (b->type() == WHILE || b->type() == FOR) break;
+        if (b->type() == WHILE || b->type() == FOR) has_loop = true;
+        if (b->type() == FUNCTION_CALL) break;
     }
-
-    if (loop_idx >= parser.block_count()) {
+    if (!has_loop) {
         streams.err.append_format(_(L"%ls: Not inside of loop\n"), argv[0]);
         builtin_print_help(parser, streams, argv[0], streams.err);
         return STATUS_CMD_ERROR;
     }
 
-    // Skip blocks interior to the loop (but not the loop itself)
-    size_t block_idx = loop_idx;
-    while (block_idx--) {
-        parser.block_at_index(block_idx)->skip = true;
-    }
-
-    // Mark the loop's status
-    block_t *loop_block = parser.block_at_index(loop_idx);
-    loop_block->loop_status = is_break ? LOOP_BREAK : LOOP_CONTINUE;
+    // Mark the status in the libdata.
+    parser.libdata().loop_status = is_break ? loop_status_t::breaks : loop_status_t::continues;
     return STATUS_CMD_OK;
 }
 
@@ -368,10 +316,10 @@ static int builtin_breakpoint(parser_t &parser, io_streams_t &streams, wchar_t *
         return STATUS_ILLEGAL_CMD;
     }
 
-    const breakpoint_block_t *bpb = parser.push_block<breakpoint_block_t>();
-    reader_read(STDIN_FILENO, streams.io_chain ? *streams.io_chain : io_chain_t());
+    const block_t *bpb = parser.push_block(block_t::breakpoint_block());
+    reader_read(parser, STDIN_FILENO, streams.io_chain ? *streams.io_chain : io_chain_t());
     parser.pop_block(bpb);
-    return proc_get_last_status();
+    return parser.get_last_status();
 }
 
 int builtin_true(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
@@ -427,6 +375,7 @@ static const builtin_data_t builtin_datas[] = {
     {L"else", &builtin_generic, N_(L"Evaluate block if condition is false")},
     {L"emit", &builtin_emit, N_(L"Emit an event")},
     {L"end", &builtin_generic, N_(L"End a block of commands")},
+    {L"eval", &builtin_eval, N_(L"Evaluate a string as a statement")},
     {L"exec", &builtin_generic, N_(L"Run command in current process")},
     {L"exit", &builtin_exit, N_(L"Exit the shell")},
     {L"false", &builtin_false, N_(L"Return an unsuccessful result")},
@@ -482,7 +431,7 @@ void builtin_init() {
     for (size_t i = 0; i < BUILTIN_COUNT; i++) {
         const wchar_t *name = builtin_datas[i].name;
         intern_static(name);
-        assert((i == 0 || wcscmp(builtin_datas[i - 1].name, name) < 0) &&
+        assert((i == 0 || std::wcscmp(builtin_datas[i - 1].name, name) < 0) &&
                "builtins are not sorted alphabetically");
     }
 }
@@ -512,7 +461,7 @@ proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_str
     if (const builtin_data_t *data = builtin_lookup(argv[0])) {
         // If we are interactive, save the foreground pgroup and restore it after in case the
         // builtin needs to read from the terminal. See #4540.
-        bool grab_tty = is_interactive_session && isatty(streams.stdin_fd);
+        bool grab_tty = is_interactive_session() && isatty(streams.stdin_fd);
         pid_t pgroup_to_restore = grab_tty ? terminal_acquire_before_builtin(job_pgid) : -1;
         int ret = data->func(parser, streams, argv);
         if (pgroup_to_restore >= 0) {
@@ -521,7 +470,7 @@ proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_str
         return proc_status_t::from_exit_code(ret);
     }
 
-    debug(0, UNKNOWN_BUILTIN_ERR_MSG, argv[0]);
+    FLOGF(error, UNKNOWN_BUILTIN_ERR_MSG, argv[0]);
     return proc_status_t::from_exit_code(STATUS_CMD_ERROR);
 }
 
@@ -545,8 +494,8 @@ void builtin_get_names(std::vector<completion_t> *list) {
 }
 
 /// Return a one-line description of the specified builtin.
-wcstring builtin_get_desc(const wcstring &name) {
-    wcstring result;
+const wchar_t *builtin_get_desc(const wcstring &name) {
+    const wchar_t *result = L"";
     const builtin_data_t *builtin = builtin_lookup(name);
     if (builtin) {
         result = _(builtin->desc);

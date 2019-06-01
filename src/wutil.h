@@ -3,11 +3,12 @@
 #define FISH_WUTIL_H
 
 #include <dirent.h>
+#include <locale.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <time.h>
-#include <locale.h>
+#include <wctype.h>
 #include <string>
 
 #ifdef HAVE_XLOCALE_H
@@ -26,6 +27,9 @@ bool set_cloexec(int fd);
 /// Wide character version of open() that also sets the close-on-exec flag (atomically when
 /// possible).
 int wopen_cloexec(const wcstring &pathname, int flags, mode_t mode = 0);
+
+/// Narrow version of wopen_cloexec.
+int open_cloexec(const std::string &cstring, int flags, mode_t mode = 0, bool cloexec = true);
 
 /// Mark an fd as nonblocking; returns errno or 0 on success.
 int make_fd_nonblocking(int fd);
@@ -59,7 +63,7 @@ void wperror(const wchar_t *s);
 /// Async-safe version of perror().
 void safe_perror(const char *message);
 
-/// Async-safe version of strerror().
+/// Async-safe version of std::strerror().
 const char *safe_strerror(int err);
 
 /// Wide character version of getcwd().
@@ -180,20 +184,21 @@ struct dir_t {
 #ifndef HASH_FILE_ID
 #define HASH_FILE_ID 1
 namespace std {
-    template<>
-    struct hash<file_id_t> {
-        size_t operator()(const file_id_t &f) const {
-            std::hash<decltype(f.device)> hasher1;
-            std::hash<decltype(f.inode)> hasher2;
+template <>
+struct hash<file_id_t> {
+    size_t operator()(const file_id_t &f) const {
+        std::hash<decltype(f.device)> hasher1;
+        std::hash<decltype(f.inode)> hasher2;
 
-            return hasher1(f.device) ^ hasher2(f.inode);
-        }
-    };
-}
+        return hasher1(f.device) ^ hasher2(f.inode);
+    }
+};
+}  // namespace std
 #endif
 
 file_id_t file_id_for_fd(int fd);
 file_id_t file_id_for_path(const wcstring &path);
+file_id_t file_id_for_path(const std::string &path);
 
 extern const file_id_t kInvalidFileID;
 

@@ -23,15 +23,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cstring>
 
+#include <cwchar>
 #include <memory>
-#include <string>
-#include <vector>
 #include <stack>
+#include <string>
 #include <tuple>
+#include <vector>
 
 #include "color.h"
 #include "common.h"
@@ -55,15 +55,15 @@ static int ret = 0;
 static wcstring read_file(FILE *f) {
     wcstring result;
     while (1) {
-        wint_t c = fgetwc(f);
+        wint_t c = std::fgetwc(f);
 
         if (c == WEOF) {
             if (ferror(f)) {
                 if (errno == EILSEQ) {
                     // Illegal byte sequence. Try to skip past it.
                     clearerr(f);
-                    int ch = fgetc(f); // for printing the warning, and seeks forward 1 byte.
-                    debug(1, "%s (byte=%X)", strerror(errno), ch);
+                    int ch = fgetc(f);  // for printing the warning, and seeks forward 1 byte.
+                    debug(1, "%s (byte=%X)", std::strerror(errno), ch);
                     ret = 1;
                     continue;
                 } else {
@@ -91,6 +91,9 @@ struct prettifier_t {
     // Whether we are at the beginning of a new line.
     bool has_new_line = true;
 
+    // Whether the last token was a semicolon.
+    bool last_was_semicolon = false;
+
     // Whether we need to append a continuation new line before continuing.
     bool needs_continuation_newline = false;
 
@@ -99,9 +102,8 @@ struct prettifier_t {
 
     prettifier_t(const wcstring &source, bool do_indent) : source(source), do_indent(do_indent) {}
 
-    void prettify_node_nrecursive(const parse_node_tree_t &tree,
-                                 node_offset_t node_idx, indent_t node_indent,
-                                 parse_token_type_t parent_type);
+    void prettify_node(const parse_node_tree_t &tree, node_offset_t node_idx, indent_t node_indent,
+                       parse_token_type_t parent_type);
 
     void maybe_prepend_escaped_newline(const parse_node_t &node) {
         if (node.has_preceding_escaped_newline()) {
@@ -117,8 +119,8 @@ struct prettifier_t {
         line_continuation_indent = is_continuation ? 1 : 0;
     }
 
-    // Append whitespace as necessary. If we have a newline, append the appropriate indent. Otherwise,
-    // append a space.
+    // Append whitespace as necessary. If we have a newline, append the appropriate indent.
+    // Otherwise, append a space.
     void append_whitespace(indent_t node_indent) {
         if (needs_continuation_newline) {
             append_newline(true);
@@ -129,7 +131,6 @@ struct prettifier_t {
             output.append((node_indent + line_continuation_indent) * SPACES_PER_INDENT, L' ');
         }
     }
-
 };
 
 // Dump a parse tree node in a form helpful to someone debugging the behavior of this program.
@@ -157,39 +158,44 @@ static void dump_node(indent_t node_indent, const parse_node_t &node, const wcst
         nextc_str[1] = L'c';
         nextc_str[2] = nextc + '@';
     }
-    fwprintf(stderr, L"{off %4u, len %4u, indent %2u, kw %ls, %ls} [%ls|%ls|%ls]\n",
-             node.source_start, node.source_length, node_indent, keyword_description(node.keyword),
-             token_type_description(node.type), prevc_str, source_txt.c_str(), nextc_str);
+    std::fwprintf(stderr, L"{off %4u, len %4u, indent %2u, kw %ls, %ls} [%ls|%ls|%ls]\n",
+                  node.source_start, node.source_length, node_indent,
+                  keyword_description(node.keyword), token_type_description(node.type), prevc_str,
+                  source_txt.c_str(), nextc_str);
 }
 
-void prettifier_t::prettify_node_nrecursive(const parse_node_tree_t &tree,
-                                            node_offset_t node_idx, indent_t node_indent,
-                                            parse_token_type_t parent_type) {
+void prettifier_t::prettify_node(const parse_node_tree_t &tree, node_offset_t node_idx,
+                                 indent_t node_indent, parse_token_type_t parent_type) {
+    // Use an explicit stack to avoid stack overflow.
+    struct pending_node_t {
+        node_offset_t index;
+        indent_t indent;
+        parse_token_type_t parent_type;
+    };
+    std::stack<pending_node_t> pending_node_stack;
 
-    using call_tuple_t = std::tuple<node_offset_t, indent_t, parse_token_type_t>;
-    std::stack<call_tuple_t> explicit_stack;
-    explicit_stack.push(std::make_tuple(node_idx, node_indent, parent_type));
-    while(!explicit_stack.empty()){
-
-        call_tuple_t arguments = explicit_stack.top();
-        explicit_stack.pop();
-        auto node_idx = std::get<0>(arguments);
-        auto node_indent = std::get<1>(arguments);
-        auto parent_type = std::get<2>(arguments);
+    pending_node_stack.push({node_idx, node_indent, parent_type});
+    while (!pending_node_stack.empty()) {
+        pending_node_t args = pending_node_stack.top();
+        pending_node_stack.pop();
+        auto node_idx = args.index;
+        auto node_indent = args.indent;
+        auto parent_type = args.parent_type;
 
         const parse_node_t &node = tree.at(node_idx);
         const parse_token_type_t node_type = node.type;
         const parse_token_type_t prev_node_type =
-                node_idx > 0 ? tree.at(node_idx - 1).type : token_type_invalid;
+            node_idx > 0 ? tree.at(node_idx - 1).type : token_type_invalid;
 
-        // Increment the indent if we are either a root job_list, or root case_item_list, or in an if or
-        // while header (#1665).
-        const bool is_root_job_list = node_type == symbol_job_list && parent_type != symbol_job_list;
+        // Increment the indent if we are either a root job_list, or root case_item_list, or in an
+        // if or while header (#1665).
+        const bool is_root_job_list =
+            node_type == symbol_job_list && parent_type != symbol_job_list;
         const bool is_root_case_list =
-                node_type == symbol_case_item_list && parent_type != symbol_case_item_list;
+            node_type == symbol_case_item_list && parent_type != symbol_case_item_list;
         const bool is_if_while_header =
-                (node_type == symbol_job_conjunction || node_type == symbol_andor_job_list) &&
-                (parent_type == symbol_if_clause || parent_type == symbol_while_header);
+            (node_type == symbol_job_conjunction || node_type == symbol_andor_job_list) &&
+            (parent_type == symbol_if_clause || parent_type == symbol_while_header);
 
         if (is_root_job_list || is_root_case_list || is_if_while_header) {
             node_indent += 1;
@@ -213,14 +219,32 @@ void prettifier_t::prettify_node_nrecursive(const parse_node_tree_t &tree,
         }
 
         if (node_type == parse_token_type_end) {
-            append_newline();
+            // For historical reasons, semicolon also get "TOK_END".
+            // We need to distinguish between them, because otherwise `a;;;;` gets extra lines
+            // instead of the semicolons. Semicolons are just ignored, unless they are followed by a
+            // command. So `echo;` removes the semicolon, but `echo; echo` removes it and adds a
+            // newline.
+            last_was_semicolon = false;
+            if (node.get_source(source) == L"\n") {
+                append_newline();
+            } else if (!has_new_line) {
+                // The semicolon is only useful if we haven't just had a newline.
+                last_was_semicolon = true;
+            }
         } else if ((node_type >= FIRST_PARSE_TOKEN_TYPE && node_type <= LAST_PARSE_TOKEN_TYPE) ||
                    node_type == parse_special_type_parse_error) {
-            if (node.keyword != parse_keyword_none) {
-                append_whitespace(node_indent);
-                output.append(keyword_description(node.keyword));
-                has_new_line = false;
-            } else if (node.has_source()) {
+            if (last_was_semicolon) {
+                // We keep the semicolon for `; and` and `; or`,
+                // others we turn into newlines.
+                if (node.keyword != parse_keyword_and && node.keyword != parse_keyword_or) {
+                    append_newline();
+                } else {
+                    output.push_back(L';');
+                }
+                last_was_semicolon = false;
+            }
+
+            if (node.has_source()) {
                 // Some type representing a particular token.
                 if (prev_node_type != parse_token_type_redirection) {
                     append_whitespace(node_indent);
@@ -235,10 +259,93 @@ void prettifier_t::prettify_node_nrecursive(const parse_node_tree_t &tree,
         for (node_offset_t idx = node.child_count; idx > 0; idx--) {
             // Note: We pass our type to our child, which becomes its parent node type.
             // Note: While node.child_start could be -1 (NODE_OFFSET_INVALID) the addition is safe
-            // because we won't execute this call in that case since node.child_count should be zero.
-            explicit_stack.push(std::make_tuple(node.child_start + (idx - 1), node_indent, node_type));
+            // because we won't execute this call in that case since node.child_count should be
+            // zero.
+            pending_node_stack.push({node.child_start + (idx - 1), node_indent, node_type});
         }
     }
+}
+
+static const char *highlight_role_to_string(highlight_role_t role) {
+#define TEST_ROLE(x)          \
+    case highlight_role_t::x: \
+        return #x;
+    switch (role) {
+        TEST_ROLE(normal)
+        TEST_ROLE(error)
+        TEST_ROLE(command)
+        TEST_ROLE(statement_terminator)
+        TEST_ROLE(param)
+        TEST_ROLE(comment)
+        TEST_ROLE(match)
+        TEST_ROLE(search_match)
+        TEST_ROLE(operat)
+        TEST_ROLE(escape)
+        TEST_ROLE(quote)
+        TEST_ROLE(redirection)
+        TEST_ROLE(autosuggestion)
+        TEST_ROLE(selection)
+        TEST_ROLE(pager_progress)
+        TEST_ROLE(pager_background)
+        TEST_ROLE(pager_prefix)
+        TEST_ROLE(pager_completion)
+        TEST_ROLE(pager_description)
+        TEST_ROLE(pager_secondary_background)
+        TEST_ROLE(pager_secondary_prefix)
+        TEST_ROLE(pager_secondary_completion)
+        TEST_ROLE(pager_secondary_description)
+        TEST_ROLE(pager_selected_background)
+        TEST_ROLE(pager_selected_prefix)
+        TEST_ROLE(pager_selected_completion)
+        TEST_ROLE(pager_selected_description)
+        default:
+            DIE("UNKNOWN ROLE");
+    }
+#undef TEST_ROLE
+}
+
+// Entry point for Pygments CSV output.
+// Our output is a newline-separated string.
+// Each line is of the form `start,end,role`
+// start and end is the half-open token range, value is a string from highlight_role_t.
+// Example:
+// 3,7,command
+static std::string make_pygments_csv(const wcstring &src) {
+    const size_t len = src.size();
+    std::vector<highlight_spec_t> colors;
+    highlight_shell_no_io(src, colors, src.size(), nullptr, env_stack_t::globals());
+    assert(colors.size() == len && "Colors and src should have same size");
+
+    struct token_range_t {
+        unsigned long start;
+        unsigned long end;
+        highlight_role_t role;
+    };
+
+    std::vector<token_range_t> token_ranges;
+    for (size_t i = 0; i < len; i++) {
+        highlight_role_t role = colors.at(i).foreground;
+        // See if we can extend the last range.
+        if (!token_ranges.empty()) {
+            auto &last = token_ranges.back();
+            if (last.role == role && last.end == i) {
+                last.end = i + 1;
+                continue;
+            }
+        }
+        // We need a new range.
+        token_ranges.push_back(token_range_t{i, i + 1, role});
+    }
+
+    // Now render these to a string.
+    std::string result;
+    for (const auto &range : token_ranges) {
+        char buff[128];
+        snprintf(buff, sizeof buff, "%lu,%lu,%s\n", range.start, range.end,
+                 highlight_role_to_string(range.role));
+        result.append(buff);
+    }
+    return result;
 }
 
 // Entry point for prettification.
@@ -252,7 +359,7 @@ static wcstring prettify(const wcstring &src, bool do_indent) {
 
     if (dump_parse_tree) {
         const wcstring dump = parse_dump_tree(parse_tree, src);
-        fwprintf(stderr, L"%ls\n", dump.c_str());
+        std::fwprintf(stderr, L"%ls\n", dump.c_str());
     }
 
     // We may have a forest of disconnected trees on a parse failure. We have to handle all nodes
@@ -262,7 +369,7 @@ static wcstring prettify(const wcstring &src, bool do_indent) {
         const parse_node_t &node = parse_tree.at(i);
         if (node.parent == NODE_OFFSET_INVALID || node.type == parse_special_type_parse_error) {
             // A root node.
-            prettifier.prettify_node_nrecursive(parse_tree, i, 0, symbol_job_list);
+            prettifier.prettify_node(parse_tree, i, 0, symbol_job_list);
         }
     }
     return std::move(prettifier.output);
@@ -335,7 +442,9 @@ static const wchar_t *html_class_name_for_color(highlight_spec_t spec) {
         case highlight_role_t::selection: {
             return P(selection);
         }
-        default: { return P(other); }
+        default: {
+            return P(other);
+        }
     }
 }
 
@@ -412,6 +521,7 @@ int main(int argc, char *argv[]) {
         output_type_plain_text,
         output_type_file,
         output_type_ansi,
+        output_type_pygments_csv,
         output_type_html
     } output_type = output_type_plain_text;
     const char *output_location = "";
@@ -427,6 +537,7 @@ int main(int argc, char *argv[]) {
                                        {"write", no_argument, NULL, 'w'},
                                        {"html", no_argument, NULL, 1},
                                        {"ansi", no_argument, NULL, 2},
+                                       {"pygments", no_argument, NULL, 3},
                                        {NULL, 0, NULL, 0}};
 
     int opt;
@@ -442,7 +553,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
             case 'v': {
-                fwprintf(stderr, _(L"%ls, version %s\n"), program_name, get_fish_version());
+                std::fwprintf(stderr, _(L"%ls, version %s\n"), program_name, get_fish_version());
                 exit(0);
                 break;
             }
@@ -462,6 +573,10 @@ int main(int argc, char *argv[]) {
                 output_type = output_type_ansi;
                 break;
             }
+            case 3: {
+                output_type = output_type_pygments_csv;
+                break;
+            }
             case 'd': {
                 char *end;
                 long tmp;
@@ -472,7 +587,7 @@ int main(int argc, char *argv[]) {
                 if (tmp >= 0 && tmp <= 10 && !*end && !errno) {
                     debug_level = (int)tmp;
                 } else {
-                    fwprintf(stderr, _(L"Invalid value '%s' for debug-level flag"), optarg);
+                    std::fwprintf(stderr, _(L"Invalid value '%s' for debug-level flag"), optarg);
                     exit(1);
                 }
                 break;
@@ -485,9 +600,10 @@ int main(int argc, char *argv[]) {
                 tmp = strtol(optarg, &end, 10);
 
                 if (tmp > 0 && tmp <= 128 && !*end && !errno) {
-                    debug_stack_frames = (int)tmp;
+                    set_debug_stack_frames((int)tmp);
                 } else {
-                    fwprintf(stderr, _(L"Invalid value '%s' for debug-stack-frames flag"), optarg);
+                    std::fwprintf(stderr, _(L"Invalid value '%s' for debug-stack-frames flag"),
+                                  optarg);
                     exit(1);
                 }
                 break;
@@ -504,66 +620,76 @@ int main(int argc, char *argv[]) {
     argv += optind;
 
     wcstring src;
-    if (argc == 0) {
-        if (output_type == output_type_file) {
-            fwprintf(stderr, _(L"Expected file path to read/write for -w:\n\n $ %ls -w foo.fish\n"),
-                     program_name);
-            exit(1);
-        }
-        src = read_file(stdin);
-    } else if (argc == 1) {
-        FILE *fh = fopen(*argv, "r");
-        if (fh) {
-            src = read_file(fh);
-            fclose(fh);
-            output_location = *argv;
-        } else {
-            fwprintf(stderr, _(L"Opening \"%s\" failed: %s\n"), *argv, strerror(errno));
-            exit(1);
-        }
-    } else {
-        fwprintf(stderr, _(L"Too many arguments\n"));
-        exit(1);
-    }
-
-    const wcstring output_wtext = prettify(src, do_indent);
-
-    // Maybe colorize.
-    std::vector<highlight_spec_t> colors;
-    if (output_type != output_type_plain_text) {
-        highlight_shell_no_io(output_wtext, colors, output_wtext.size(), NULL,
-                              env_stack_t::globals());
-    }
-
-    std::string colored_output;
-    switch (output_type) {
-        case output_type_plain_text: {
-            colored_output = no_colorize(output_wtext);
-            break;
-        }
-        case output_type_file: {
-            FILE *fh = fopen(output_location, "w");
-            if (fh) {
-                fputws(output_wtext.c_str(), fh);
-                fclose(fh);
-                exit(0);
-            } else {
-                fwprintf(stderr, _(L"Opening \"%s\" failed: %s\n"), output_location,
-                         strerror(errno));
+    for (int i = 0; i < argc || (argc == 0 && i == 0); i++) {
+        if (argc == 0 && i == 0) {
+            if (output_type == output_type_file) {
+                std::fwprintf(
+                    stderr, _(L"Expected file path to read/write for -w:\n\n $ %ls -w foo.fish\n"),
+                    program_name);
                 exit(1);
             }
-            break;
+            src = read_file(stdin);
+        } else {
+            FILE *fh = fopen(argv[i], "r");
+            if (fh) {
+                src = read_file(fh);
+                fclose(fh);
+                output_location = argv[i];
+            } else {
+                std::fwprintf(stderr, _(L"Opening \"%s\" failed: %s\n"), *argv,
+                              std::strerror(errno));
+                exit(1);
+            }
         }
-        case output_type_ansi: {
-            colored_output = ansi_colorize(output_wtext, colors);
-            break;
-        }
-        case output_type_html: {
-            colored_output = html_colorize(output_wtext, colors);
-            break;
-        }
-    }
 
-    fputws(str2wcstring(colored_output).c_str(), stdout);
-    return ret;
+        if (output_type == output_type_pygments_csv) {
+            std::string output = make_pygments_csv(src);
+            fputs(output.c_str(), stdout);
+            continue;
+        }
+
+        const wcstring output_wtext = prettify(src, do_indent);
+
+        // Maybe colorize.
+        std::vector<highlight_spec_t> colors;
+        if (output_type != output_type_plain_text) {
+            highlight_shell_no_io(output_wtext, colors, output_wtext.size(), NULL,
+                                  env_stack_t::globals());
+        }
+
+        std::string colored_output;
+        switch (output_type) {
+            case output_type_plain_text: {
+                colored_output = no_colorize(output_wtext);
+                break;
+            }
+            case output_type_file: {
+                FILE *fh = fopen(output_location, "w");
+                if (fh) {
+                    std::fputws(output_wtext.c_str(), fh);
+                    fclose(fh);
+                } else {
+                    std::fwprintf(stderr, _(L"Opening \"%s\" failed: %s\n"), output_location,
+                                  std::strerror(errno));
+                    exit(1);
+                }
+                break;
+            }
+            case output_type_ansi: {
+                colored_output = ansi_colorize(output_wtext, colors);
+                break;
+            }
+            case output_type_html: {
+                colored_output = html_colorize(output_wtext, colors);
+                break;
+            }
+            case output_type_pygments_csv: {
+                DIE("pygments_csv should have been handled above");
+                break;
+            }
+        }
+
+        std::fputws(str2wcstring(colored_output).c_str(), stdout);
+    }
+    return 0;
 }

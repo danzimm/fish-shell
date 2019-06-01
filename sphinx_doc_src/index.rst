@@ -1,4 +1,5 @@
-.. highlight:: fish
+.. highlight:: fish-docs-samples
+.. _intro:
 
 Introduction
 ============
@@ -33,7 +34,7 @@ Shell Standards
 
 A shell is an interface to the operating system that reads from the commandline of a terminal. A shell's task is to identify and interpret commands. The commands can come from different applications and can be written in different programming languages.
 
-This can only work smoothly if shells adapt to some common standards. For shells there is the POSIX standard, see `Command-line interpreters  <https://en.wikipedia.org/wiki/Command-line_interface#Command-line_interpreter>`_. ``fish`` tries to satisfy the POSIX standard wherever it does not get into the way of its own design principles, see `Design <design.html>`_.
+This can only work smoothly if shells adapt to some common standards. For shells there is the POSIX standard, see `Command-line interpreters  <https://en.wikipedia.org/wiki/Command-line_interface#Command-line_interpreter>`_. ``fish`` tries to satisfy the POSIX standard wherever it does not get into the way of its own design principles, see :ref:`Design <Design>`.
 
 Manual Pages
 ------------
@@ -51,7 +52,7 @@ This convention helps to make sure help can be found on commands no matter where
 Command Syntax
 --------------
 
-Shells also support some common syntax for executing commands. That way a command can be started in the same way, regardless of the application, where it comes from, and the shell, where it is executed in. 
+Shells also support some common syntax for executing commands. That way a command can be started in the same way, regardless of the application, where it comes from, and the shell, where it is executed in.
 
 The pattern below is a basic pattern:
 
@@ -90,20 +91,15 @@ Example:
 Commands versus Programs
 ------------------------
 
-**Programs** in other languages can often be regarded as black boxes: they get complex input and return complex output. Sometimes they produce side effects such as writing to a file or reporting an error, but the emphasis is on: arguments in and return values out: 
+**Programs** in other languages can often be regarded as black boxes: they get complex input and return complex output. Sometimes they produce side effects such as writing to a file or reporting an error, but the emphasis is on: arguments in and return values out:
 
-Arguments &rarr; |Program| &rarr; Return Values
+Arguments → Program → Return Values
 
 **Shell commands** are different:
 
 - the side effects take the center of the stage: they transform an **input stream of data** into an **output stream of data**. Both of these streams are usually the terminal, but they can be redirected.
 - the arguments become options or switches paired with data: the switches influence the behaviour of the command
 - the return value shrinks to an **exit code**: this exit code is 0 when the command executes normally and between 1 and 255 otherwise.
-
-<table with=100%>
-<tr><td>Input Stream &rArr;<td rowspan="2">|Shell Command|<td>&rArr; Output Stream
-<tr><td>switch and data as arguments &rarr;<td>&rarr; exit code
-</table>
 
 This leads to another way of programming and especially of combining commands:
 
@@ -117,7 +113,7 @@ Example::
     >ls -l | grep "my topic"
 
 
-- Commands can pass on all their output as a chunk</b>: the output stream of one command is bundled and taken as data argument for the second command. This is called command substitution, see `Command Substitution`_.
+- Commands can pass on all their output as a chunk: the output stream of one command is bundled and taken as data argument for the second command. This is called command substitution, see `Command Substitution`_.
 
 Example::
 
@@ -130,7 +126,7 @@ Shebang Line
 
 Since script for shell commands can be written in many different languages, they need to carry information about what interpreter is needed to execute them: For this they are expected to have a first line, the shebang line, which names an executable for this purpose:
 
-Example: 
+Example:
 
 A scripts written in ``bash`` it would need a first line like this::
 
@@ -158,7 +154,7 @@ This section is on how to install, uninstall, start and exit a *fish* shell and 
 Installation
 ------------
 
-Instructions for installing fish are on the `fish homepage <https://fishshell.com/>`_. Search that page for "Go fish". 
+Instructions for installing fish are on the `fish homepage <https://fishshell.com/>`_. Search that page for "Go fish".
 
 To install the development version of *fish* see the instructions at the `project's GitHub page <https://github.com/fish-shell/fish-shell>`_.
 
@@ -174,7 +170,7 @@ For for detailed instructions see `Switching to fish <tutorial.html#tut_switchin
 Uninstalling
 ------------
 
-For uninstalling *fish*: see `FAQ: Uninstalling fish <faq.html#faq-uninstalling>`_.
+For uninstalling *fish*: see :ref:`FAQ: Uninstalling fish <faq-uninstalling>`.
 
 Starting and Exiting
 --------------------
@@ -203,7 +199,7 @@ Consider, that ``bash`` is also a command. With ``man bash`` you can see that th
     > bash -c SomeBashCommand
 
 
-or ``bash`` without a switch, opens a *bash* shell that you can use and ``exit`` afterwards. 
+or ``bash`` without a switch, opens a *bash* shell that you can use and ``exit`` afterwards.
 
 
 .. _syntax:
@@ -237,17 +233,42 @@ Here is a list of some useful commands:
 - ``open``, open files with the default application associated with each filetype
 - ``less``, list the contents of files
 
-Commands and parameters are separated by the space character '&nbsp;'. Every command ends with either a newline (i.e. by pressing the return key) or a semicolon '``;``'. More than one command can be written on the same line by separating them with semicolons.
+Commands and parameters are separated by the space character `' '`. Every command ends with either a newline (i.e. by pressing the return key) or a semicolon '``;``'. More than one command can be written on the same line by separating them with semicolons.
 
 A switch is a very common special type of argument. Switches almost always start with one or more hyphens '``-``' and alter the way a command operates. For example, the '``ls``' command usually lists all the files and directories in the current working directory, but by using the '``-l``' switch, the behavior of '``ls``' is changed to not only display the filename, but also the size, permissions, owner and modification time of each file.
 
 Switches differ between commands and are documented in the manual page for each command. Some switches are common to most command though, for example '``--help``' will usually display a help text, '``-i``' will often turn on interactive prompting before taking action, while '``-f``' will turn it off.
 
+.. _syntax-words:
+
+Some common words
+-----------------
+
+This is a short explanation of some of the commonly used words in fish.
+
+- **argument** a parameter given to a command
+
+- **builtin** a command that is implemented in the shell. Builtins are commands that are so closely tied to the shell that it is impossible to implement them as external commands.
+
+- **command** a program that the shell can run.
+
+- **function** a block of commands that can be called as if they were a single command. By using functions, it is possible to string together multiple smaller commands into one more advanced command.
+
+- **job** a running pipeline or command
+
+- **pipeline** a set of commands stringed together so that the output of one command is the input of the next command
+
+- **redirection** an operation that changes one of the input/output streams associated with a job
+
+- **switch** a special flag sent as an argument to a command that will alter the behavior of the command. A switch almost always begins with one or two hyphens.
+
 
 Quotes
 ------
 
-Sometimes features such as `parameter expansion <#expand>`_ and `character escapes <#escapes>`_ get in the way. When that happens, the user can write a parameter within quotes, either ``'`` (single quote) or ``"`` (double quote). There is one important difference between single quoted and double quoted strings: When using double quoted string, `variable expansion <#expand-variable>`_ still takes place. Other than that, no other kind of expansion (including `brace expansion <#expand-brace>`_ and parameter expansion) will take place, the parameter may contain spaces, and escape sequences are ignored. The only backslash escape accepted within single quotes is ``\'``, which escapes a single quote and ``\\``, which escapes the backslash symbol. The only backslash escapes accepted within double quotes are ``\"``, which escapes a double quote, ``\$``, which escapes a dollar character, ``\`` followed by a newline, which deletes the backslash and the newline, and lastly ``\\``, which escapes the backslash symbol. Single quotes have no special meaning within double quotes and vice versa.
+Sometimes features such as `parameter expansion <#expand>`_ and `character escapes <#escapes>`_ get in the way. When that happens, the user can write a parameter within quotes, either ``'`` (single quote) or ``"`` (double quote). There is one important difference between single quoted and double quoted strings: When using double quoted string, `variable expansion <#expand-variable>`_ still takes place. Other than that, no other kind of expansion (including `brace expansion <#expand-brace>`_ and parameter expansion) will take place, the parameter may contain spaces, and escape sequences are ignored.
+
+The only backslash escape accepted within single quotes is ``\'``, which escapes a single quote and ``\\``, which escapes the backslash symbol. The only backslash escapes accepted within double quotes are ``\"``, which escapes a double quote, ``\$``, which escapes a dollar character, ``\`` followed by a newline, which deletes the backslash and the newline, and lastly ``\\``, which escapes the backslash symbol. Single quotes have no special meaning within double quotes and vice versa.
 
 Example::
 
@@ -282,7 +303,7 @@ Some characters can not be written directly on the command line. For these chara
 - ``\$`` escapes the dollar character
 - ``\\`` escapes the backslash character
 - ``\*`` escapes the star character
-- ``\?`` escapes the question mark character
+- ``\?`` escapes the question mark character (this is not necessary if the `qmark-noglob` :ref:`feature flag<featureflags>` is enabled)
 - ``\~`` escapes the tilde character
 - ``\#`` escapes the hash character
 - ``\(`` escapes the left parenthesis character
@@ -398,11 +419,11 @@ will start the emacs text editor in the background.
 Job control
 -----------
 
-Most programs allow you to suspend the program's execution and return control to ``fish`` by pressing @key{Control,Z} (also referred to as ``^Z``). Once back at the ``fish`` commandline, you can start other programs and do anything you want. If you then want you can go back to the suspended command by using the `fg <cmds/fg.html>`_ (foreground) command.
+Most programs allow you to suspend the program's execution and return control to ``fish`` by pressing :kbd:`Control+Z` (also referred to as ``^Z``). Once back at the ``fish`` commandline, you can start other programs and do anything you want. If you then want you can go back to the suspended command by using the :ref:`fg <cmd-fg>` (foreground) command.
 
-If you instead want to put a suspended job into the background, use the `bg <cmds/bg.html>`_ command.
+If you instead want to put a suspended job into the background, use the :ref:`bg <cmd-bg>` command.
 
-To get a listing of all currently started jobs, use the `jobs <cmds/jobs.html>`_ command.
+To get a listing of all currently started jobs, use the :ref:`jobs <cmd-jobs>` command.
 
 
 .. _syntax-function:
@@ -418,7 +439,7 @@ For example, the following is a function definition that calls the command ``ls`
       ls -l $argv
   end
 
-The first line tells fish that a function by the name of ``ll`` is to be defined. To use it, simply write ``ll`` on the commandline. The second line tells fish that the command ``ls -l $argv`` should be called when ``ll`` is invoked. '``$argv``' is an array variable, which always contains all arguments sent to the function. In the example above, these are simply passed on to the ``ls`` command. For more information on functions, see the documentation for the `function <cmds/function.html>`_ builtin.
+The first line tells fish that a function by the name of ``ll`` is to be defined. To use it, simply write ``ll`` on the commandline. The second line tells fish that the command ``ls -l $argv`` should be called when ``ll`` is invoked. '``$argv``' is a list variable, which always contains all arguments sent to the function. In the example above, these are simply passed on to the ``ls`` command. For more information on functions, see the documentation for the :ref:`function <cmd-function>` builtin.
 
 .. _syntax-function-wrappers:
 
@@ -439,7 +460,7 @@ There are a few important things that need to be noted about aliases:
 
 - Autoloading isn't applicable to aliases. Since, by definition, the function is created at the time the alias command is executed. You cannot autoload aliases.
 
-To easily create a function of this form, you can use the `alias <cmds/alias.html>`_ command.
+To easily create a function of this form, you can use the :ref:`alias <cmd-alias>` command.
 
 .. _syntax-function-autoloading:
 
@@ -448,13 +469,14 @@ Autoloading functions
 
 Functions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. This method of defining functions has several advantages. An autoloaded function becomes available automatically to all running shells. If the function definition is changed, all running shells will automatically reload the altered version. Startup time and memory usage is improved, etc.
 
-Fish automatically searches through any directories in the array variable ``$fish_function_path``, and any functions defined are automatically loaded when needed. A function definition file must have a filename consisting of the name of the function plus the suffix '``.fish``'.
+Fish automatically searches through any directories in the list variable ``$fish_function_path``, and any functions defined are automatically loaded when needed. A function definition file must have a filename consisting of the name of the function plus the suffix '``.fish``'.
 
 By default, Fish searches the following for functions, using the first available file that it finds:
+
 - A directory for end-users to keep their own functions, usually ``~/.config/fish/functions`` (controlled by the ``XDG_CONFIG_HOME`` environment variable).
-- A directory for systems administrators to install functions for all users on the system, usually ``/etc/fish/functions``.
-- A directory for third-party software vendors to ship their own functions for their software, usually ``/usr/share/fish/vendor_functions.d``.
-- The functions shipped with fish, usually installed in ``/usr/share/fish/functions``.
+- A directory for systems administrators to install functions for all users on the system, usually ``/etc/fish/functions`` (really ``$__fish_sysconfdir/functions``).
+- A directory for third-party software vendors to ship their own functions for their software, usually ``/usr/share/fish/vendor_functions.d``. (set at compile time; by default, ``$__fish_data_dir/vendor_functions.d``)
+- The functions shipped with fish, usually installed in ``/usr/share/fish/functions`` (really ``$__fish_data_dir/functions``).
 
 These paths are controlled by parameters set at build, install, or run time, and may vary from the defaults listed above.
 
@@ -473,64 +495,28 @@ If you are developing another program, you may wish to install functions which a
 Conditional execution of code and flow control
 ----------------------------------------------
 
-There are four fish builtins that let you execute commands only if a specific criterion is met. These builtins are `if <cmds/if.html>`_, `switch <cmds/switch.html>`_, `and <cmds/and.html>`_ and `or <cmds/or.html>`_.
+There are four fish builtins that let you execute commands only if a specific criterion is met. These builtins are :ref:`if <cmd-if>`, :ref:`switch <cmd-switch>`, :ref:`and <cmd-and>` and :ref:`or <cmd-or>`.
 
-The ``switch`` command is used to execute one of possibly many blocks of commands depending on the value of a string. See the documentation for `switch <cmds/switch.html>`_ for more information.
+The ``switch`` command is used to execute one of possibly many blocks of commands depending on the value of a string. See the documentation for :ref:`switch <cmd-switch>` for more information.
 
-The other conditionals use the `exit status <#variables-status>`_ of a command to decide if a command or a block of commands should be executed. See the documentation for `if <cmds/if.html>`_, `and <cmds/and.html>`_ and `or <cmds/or.html>`_ for more information.
-
-.. _syntax-words:
-
-Some common words
------------------
-
-This is a short explanation of some of the commonly used words in fish.
-
-- **argument** a parameter given to a command
-
-- **builtin** a command that is implemented in the shell. Builtins are commands that are so closely tied to the shell that it is impossible to implement them as external commands.
-
-- **command** a program that the shell can run.
-
-- **function** a block of commands that can be called as if they were a single command. By using functions, it is possible to string together multiple smaller commands into one more advanced command.
-
-- **job** a running pipeline or command
-
-- **pipeline** a set of commands stringed together so that the output of one command is the input of the next command
-
-- **redirection** an operation that changes one of the input/output streams associated with a job
-
-- **switch** a special flag sent as an argument to a command that will alter the behavior of the command. A switch almost always begins with one or two hyphens.
+The other conditionals use the `exit status <#variables-status>`_ of a command to decide if a command or a block of commands should be executed. See their documentation for more information.
 
 
 Help
 ====
 
-``fish`` has an extensive help system. Use the `help <cmds/help.html>`_ command to obtain help on a specific subject or command. For instance, writing ``help syntax`` displays the `syntax section <#syntax>`_ of this documentation.
+``fish`` has an extensive help system. Use the :ref:`help <cmd-help>` command to obtain help on a specific subject or command. For instance, writing ``help syntax`` displays the `syntax section <#syntax>`_ of this documentation.
 
 ``fish`` also has man pages for its commands. For example, ``man set`` will show the documentation for ``set`` as a man page.
 
 Help on a specific builtin can also be obtained with the ``-h`` parameter. For instance, to obtain help on the ``fg`` builtin, either type ``fg -h`` or ``help fg``.
-
-Commands
-========
-
-.. toctree::
-   :maxdepth: 1
-   
-   commands
-   design
-   tutorial
-   faq
-   license
-
 
 Autosuggestions
 ===============
 
 fish suggests commands as you type, based on command history, completions, and valid file paths. As you type commands, you will see a suggestion offered after the cursor, in a muted gray color (which can be changed with the ``fish_color_autosuggestion`` variable).
 
-To accept the autosuggestion (replacing the command line contents), press right arrow or @key{Control,F}. To accept the first suggested word, press @key{Alt,&rarr;,Right} or @key{Alt,F}. If the autosuggestion is not what you want, just ignore it: it won't execute unless you accept it.
+To accept the autosuggestion (replacing the command line contents), press right arrow or :kbd:`Control+F`. To accept the first suggested word, press :kbd:`Alt+→,Right` or :kbd:`Alt+F`. If the autosuggestion is not what you want, just ignore it: it won't execute unless you accept it.
 
 Autosuggestions are a powerful way to quickly summon frequently entered commands, by typing the first few characters. They are also an efficient technique for navigating through directory hierarchies.
 
@@ -549,7 +535,7 @@ These are the general purpose tab completions that ``fish`` provides:
 
 - Completion of usernames for tilde expansion.
 
-- Completion of filenames, even on strings with wildcards such as '``*``', '``**``' and '``?``'.
+- Completion of filenames, even on strings with wildcards such as '``*``' and '``**``'.
 
 ``fish`` provides a large number of program specific completions. Most of these completions are simple options like the ``-l`` option for ``ls``, but some are more advanced. The latter include:
 
@@ -580,7 +566,58 @@ To provide a list of possible completions for myprog, use the ``-a`` switch. If 
   complete -c myprog -s o -l output -a "yes no"
 
 
-There are also special switches for specifying that a switch requires an argument, to disable filename completion, to create completions that are only available in some combinations, etc..  For a complete description of the various switches accepted by the ``complete`` command, see the documentation for the `complete <cmds/complete.html>`_ builtin, or write ``complete --help`` inside the ``fish`` shell.
+There are also special switches for specifying that a switch requires an argument, to disable filename completion, to create completions that are only available in some combinations, etc..  For a complete description of the various switches accepted by the ``complete`` command, see the documentation for the :ref:`complete <cmd-complete>` builtin, or write ``complete --help`` inside the ``fish`` shell.
+
+As a simple example, here's an excerpt of the completions for systemd's ``timedatectl``::
+
+  # All subcommands that timedatectl knows - this is useful for later.
+  set -l commands status set-time set-timezone list-timezones set-local-rtc set-ntp
+
+  # Disable file completions for the entire command
+  # because it does not take files anywhere
+  # Note that this can't be undone,
+  # so it's often better to only disable it for certain completions.
+  #
+  # File completions also need to be disabled
+  # if you wish to offer a certain set of files (e.g. just directories).
+  complete -c timedatectl -f
+
+  # This line offers the subcommands
+  # -"status",
+  # -"set-timezone",
+  # -"set-time"
+  # -"list-timezones"
+  # if no subcommand has been given so far.
+  #
+  # The `-n`/`--condition` option takes script as a string, which it executes.
+  # If it returns true, the completion is offered.
+  # Here the condition is the `__fish_seen_subcommands_from` helper function.
+  # If returns true if any of the given commands is used on the commandline,
+  # as determined by a simple heuristic.
+  # For more complex uses, you can write your own function.
+  # See e.g. the git completions for an example.
+  #
+  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "status set-time set-timezone list-timezones"
+
+  # If the "set-timezone" subcommand is used,
+  # offer the output of `timedatectl list-timezones` as completions.
+  # Each line of output is used as a separate candidate,
+  # and anything after a tab is taken as the description.
+  # It's often useful to transform command output with `string` into that form.
+  complete -c timedatectl -n "__fish_seen_subcommand_from set-timezone" -a "(timedatectl list-timezones)"
+
+  # Completion candidates can also be described via `-d`,
+  # which is useful if the description is constant.
+  # Try to keep these short, because that means the user gets to see more at once.
+  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "set-local-rtc" -d "Maintain RTC in local time"
+
+  # We can also limit options to certain subcommands by using conditions.
+  complete -c timedatectl -n "__fish_seen_subcommand_from set-local-rtc" -l adjust-system-clock -d 'Synchronize system clock from the RTC'
+
+  # These are simple options that can be used everywhere.
+  complete -c timedatectl -s h -l help -d 'Print a short help text and exit'
+  complete -c timedatectl -l version -d 'Print a short version string and exit'
+  complete -c timedatectl -l no-pager -d 'Do not pipe output into a pager'
 
 For examples of how to write your own complex completions, study the completions in ``/usr/share/fish/completions``. (The exact path depends on your chosen installation prefix and may be slightly different)
 
@@ -591,7 +628,7 @@ Useful functions for writing completions
 
 ``fish`` ships with several functions that are very useful when writing command specific completions. Most of these functions name begins with the string '``__fish_``'. Such functions are internal to ``fish`` and their name and interface may change in future fish versions. Still, some of them may be very useful when writing completions. A few of these functions are described here. Be aware that they may be removed or changed in future versions of fish.
 
-Functions beginning with the string ``__fish_print_`` print a newline separated list of strings. For example, ``__fish_print_filesystems` prints a list of all known file systems. Functions beginning with ``__fish_complete_``` print out a newline separated list of completions with descriptions. The description is separated from the completion by a tab character.
+Functions beginning with the string ``__fish_print_`` print a newline separated list of strings. For example, ``__fish_print_filesystems`` prints a list of all known file systems. Functions beginning with ``__fish_complete_`` print out a newline separated list of completions with descriptions. The description is separated from the completion by a tab character.
 
 - ``__fish_complete_directories STRING DESCRIPTION`` performs path completion on STRING, allowing only directories, and giving them the description DESCRIPTION.
 
@@ -607,7 +644,7 @@ Functions beginning with the string ``__fish_print_`` print a newline separated 
 
 - ``__fish_print_filesystems`` prints a list of all known file systems. Currently, this is a static list, and not dependent on what file systems the host operating system actually understands.
 
-- ``__fish_print_hostnames` prints a list of all known hostnames. This functions searches the fstab for nfs servers, ssh for known hosts and checks the ``/etc/hosts``` file.
+- ``__fish_print_hostnames`` prints a list of all known hostnames. This functions searches the fstab for nfs servers, ssh for known hosts and checks the ``/etc/hosts`` file.
 
 - ``__fish_print_interfaces`` prints a list of all known network interfaces.
 
@@ -618,9 +655,10 @@ Functions beginning with the string ``__fish_print_`` print a newline separated 
 Where to put completions
 ------------------------
 
-Completions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. Fish automatically searches through any directories in the array variable ``$fish_complete_path``, and any completions defined are automatically loaded when needed. A completion file must have a filename consisting of the name of the command to complete and the suffix '``.fish``'.
+Completions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. Fish automatically searches through any directories in the list variable ``$fish_complete_path``, and any completions defined are automatically loaded when needed. A completion file must have a filename consisting of the name of the command to complete and the suffix '``.fish``'.
 
 By default, Fish searches the following for completions, using the first available file that it finds:
+
 - A directory for end-users to keep their own completions, usually ``~/.config/fish/completions`` (controlled by the ``XDG_CONFIG_HOME`` environment variable);
 - A directory for systems administrators to install completions for all users on the system, usually ``/etc/fish/completions``;
 - A directory for third-party software vendors to ship their own completions for their software, usually ``/usr/share/fish/vendor_completions.d``;
@@ -650,11 +688,11 @@ Wildcards
 
 If a star (``*``) or a question mark (``?``) is present in the parameter, ``fish`` attempts to match the given parameter to any files in such a way that:
 
-- ``?`` can match any single character except '/'.
-
 - ``*`` can match any string of characters not containing '/'. This includes matching an empty string.
 
 - ``**`` matches any string of characters. This includes matching an empty string. The matched string may include the ``/`` character; that is, it recurses into subdirectories. Note that augmenting this wildcard with other strings will not match files in the current working directory (``$PWD``) if you separate the strings with a slash ("/"). This is unlike other shells such as zsh. For example, ``**\/*.fish`` in zsh will match ``.fish`` files in the PWD but in fish will only match such files in a subdirectory. In fish you should type ``**.fish`` to match files in the PWD as well as subdirectories.
+
+- ``?`` can match any single character except '/'. This is deprecated and can be disabled via the `qmark-noglob` :ref:`feature flag<featureflags>`, so `?` will just be an ordinary character.
 
 Other shells, such as zsh, provide a rich glob syntax for restricting the files matched by globs. For example, ``**(.)``, to only match regular files. Fish prefers to defer such features to programs, such as ``find``, rather than reinventing the wheel. Thus, if you want to limit the wildcard expansion to just regular files the fish approach is to define and use a function. For example,
 
@@ -681,7 +719,7 @@ Examples:
 
 - ``**`` matches any files and directories in the current directory and all of its subdirectories.
 
-Note that for most commands, if any wildcard fails to expand, the command is not executed, ```$status`` <#variables-status>`_ is set to nonzero, and a warning is printed. This behavior is consistent with setting ``shopt -s failglob`` in bash. There are exactly 3 exceptions, namely `set <cmds/set.html>`_, `count <cmds/count.html>`_ and `for <cmds/for.html>`_. Their globs are permitted to expand to zero arguments, as with ``shopt -s nullglob`` in bash.
+Note that for most commands, if any wildcard fails to expand, the command is not executed, :ref:`$status <variables-status>` is set to nonzero, and a warning is printed. This behavior is consistent with setting ``shopt -s failglob`` in bash. There are exactly 3 exceptions, namely :ref:`set <cmd-set>`, :ref:`count <cmd-count>` and :ref:`for <cmd-for>`. Their globs are permitted to expand to zero arguments, as with ``shopt -s nullglob`` in bash.
 
 Examples::
 
@@ -701,11 +739,13 @@ Command substitution
 
 The output of a series of commands can be used as the parameters to another command. If a parameter contains a set of parenthesis, the text enclosed by the parenthesis will be interpreted as a list of commands. On expansion, this list is executed, and substituted by the output. If the output is more than one line long, each line will be expanded to a new parameter. Setting ``IFS`` to the empty string will disable line splitting.
 
+If the output is piped to :ref:`string split <cmd-string-split>` or `string split0 <cmd-string-split0>` as the last step, those splits are used as they appear and no additional splitting on newlines takes place.
+
 The exit status of the last run command substitution is available in the `status <#variables-status>`_ variable if the substitution occurs in the context of a ``set`` command.
 
 Only part of the output can be used, see `index range expansion <#expand-index-range>`_ for details.
 
-Fish has a default limit of 10 MiB on the amount of data a command substitution can output. If the limit is exceeded the entire command, not just the substitution, is failed and ``$status`` is set to 122. You can modify the limit by setting the ``fish_read_limit`` variable at any time including in the environment before fish starts running. If you set it to zero then no limit is imposed. This is a safety mechanism to keep the shell from consuming too much memory if a command outputs an unreasonable amount of data. Note that this limit also affects how much data the ``read`` command will process.
+Fish has a default limit of 100 MiB on the amount of data a command substitution can output. If the limit is exceeded the entire command, not just the substitution, is failed and ``$status`` is set to 122. You can modify the limit by setting the ``fish_read_limit`` variable at any time including in the environment before fish starts running. If you set it to zero then no limit is imposed. This is a safety mechanism to keep the shell from consuming too much memory if a command outputs an unreasonable amount of data, typically your operating system also has a limit, and it's often much lower. Note that this limit also affects how much data the ``read`` command will process.
 
 Examples::
 
@@ -718,38 +758,51 @@ Examples::
 
     begin; set -l IFS; set data (cat data.txt); end
     # Set the ``data`` variable to the contents of 'data.txt'
-    # without splitting it into an array.
+    # without splitting it into a list.
 
+    set data (cat data | string split0)
+    # Set ``$data`` to the contents of data, splitting on NUL-bytes.
 
 .. _expand-brace:
 
 Brace expansion
 ---------------
 
-A comma separated list of characters enclosed in curly braces will be expanded so each element of the list becomes a new parameter.
+A comma separated list of characters enclosed in curly braces will be expanded so each element of the list becomes a new parameter. This is useful to save on typing, and to separate a variable name from surrounding text.
 
 Examples::
 
-  echo input.{c,h,txt}
-  # Outputs 'input.c input.h input.txt'
+  > echo input.{c,h,txt}
+  input.c input.h input.txt
 
-  mv *.{c,h} src/
+  > mv *.{c,h} src/
   # Moves all files with the suffix '.c' or '.h' to the subdirectory src.
 
-A literal "{}" will not be used as a brace expansion::
+  > cp file{,.bak}
+  # Make a copy of `file` at `file.bak`.
 
-    echo foo-{}
-    # Outputs foo-{}
+  > set -l dogs hot cool cute
+  > echo {$dogs}dog
+  hotdog cooldog cutedog
 
-    echo foo-{$undefinedvar}
-    # Output is an empty line - see `the cartesian product section <#cartesian-product>`_
+If two braces do not contain a "," or a variable expansion, they will not be expanded in this manner::
 
+    > echo foo-{}
+    foo-{}
+    > git reset --hard HEAD@{2}
+    # passes "HEAD@{2}" to git
+    > echo {{a,b}}
+    {a} {b} # because the inner brace pair is expanded, but the outer isn't.
 
-If there is nothing between a brace and a comma or two commas, it's interpreted as an empty element.
+If after expansion there is nothing between the braces, the argument will be removed (see :ref:`the cartesian product section <cartesian-product>`)::
 
-So::
-    echo {,,/usr}/bin
-    # Output /bin /bin /usr/bin
+    > echo foo-{$undefinedvar}
+    # Output is an empty line, just like a bare `echo`.
+
+If there is nothing between a brace and a comma or two commas, it's interpreted as an empty element::
+
+    > echo {,,/usr}/bin
+    /bin /bin /usr/bin
 
 To use a "," as an element, `quote <#quotes>`_ or `escape <#escapes>`_ it.
 
@@ -782,7 +835,7 @@ Note that without the quotes or braces, fish will try to expand a variable calle
 The latter syntax ``{$WORD}`` works by exploiting `brace expansion <#expand-brace>`_.
 
 
-In these cases, the expansion eliminates the string, as a result of the implicit `cartesian product <#cartesian-product>`_.
+In these cases, the expansion eliminates the string, as a result of the implicit :ref:`cartesian product <cartesian-product>`.
 
 If, in the example above, $WORD is undefined or an empty list, the "s" is not printed. However, it is printed, if $WORD is the empty string.
 
@@ -790,7 +843,7 @@ Unlike all other expanions, variable expansion also happens in double quoted str
 
 Outside of double quotes, variables will expand to as many arguments as they have elements. That means an empty list will expand to nothing, a variable with one element will expand to that element, and a variable with multiple elements will expand to each of those elements separately.
 
-When two unquoted expansions directly follow each other, you need to watch out for expansions that expand to nothing. This includes undefined variables and empty lists, but also command substitutions with no output. See the `cartesian product <#cartesian-product>`_ section for more information.
+When two unquoted expansions directly follow each other, you need to watch out for expansions that expand to nothing. This includes undefined variables and empty lists, but also command substitutions with no output. See the :ref:`cartesian product <cartesian-product>` section for more information.
 
 The ``$`` symbol can also be used multiple times, as a kind of "dereference" operator (the ``*`` in C or C++), like in the following code::
 
@@ -805,7 +858,7 @@ The ``$`` symbol can also be used multiple times, as a kind of "dereference" ope
     # 20
     # 30
 
-When using this feature together with array brackets, the brackets will always match the innermost ``$`` dereference. Thus, ``$$foo[5]`` will always mean the fifth element of the ``foo`` variable should be dereferenced, not the fifth element of the doubly dereferenced variable ``foo``. The latter can instead be expressed as ``$$foo[1][5]``.
+When using this feature together with list brackets, the brackets will always match the innermost ``$`` dereference. Thus, ``$$foo[5]`` will always mean the fifth element of the ``foo`` variable should be dereferenced, not the fifth element of the doubly dereferenced variable ``foo``. The latter can instead be expressed as ``$$foo[1][5]``.
 
 
 .. _cartesian-product:
@@ -818,25 +871,25 @@ Lists adjacent to other lists or strings are expanded as cartesian products:
 Examples::
 
     >_ echo {good,bad}" apples"
-    <outp>good apples bad apples</outp>
+    good apples bad apples
 
     >_ set -l a x y z
     >_ set -l b 1 2 3
 
     >_ echo $a$b
-    <outp>x1 y1 z1 x2 y2 z2 x3 y3 z3</outp>
+    x1 y1 z1 x2 y2 z2 x3 y3 z3
 
     >_ echo $a"-"$b
-    <outp>x-1 y-1 z-1 x-2 y-2 z-2 x-3 y-3 z-3</outp>
+    x-1 y-1 z-1 x-2 y-2 z-2 x-3 y-3 z-3
 
     >_ echo {x,y,z}$b
-    <outp>x1 y1 z1 x2 y2 z2 x3 y3 z3</outp>
+    x1 y1 z1 x2 y2 z2 x3 y3 z3
 
     >_ echo {$b}word
-    <outp>1word 2word 3word</outp>
+    1word 2word 3word
 
     >_ echo {$c}word
-    <outp># Output is an empty line</outp>
+    # Output is an empty line
 
 Be careful when you try to use braces to separate variable names from text. The problem shown above can be avoided by wrapping the variable in double quotes instead of braces (``echo "$c"word``).
 
@@ -848,7 +901,7 @@ E.g.
 
     >_ echo (printf '%s' '')banana # the printf prints literally nothing
     >_ echo (printf '%s\n' '')banana # the printf prints just a newline, so the command substitution expands to an empty string
-    <outp>banana</outp>
+    banana
     # After command substitution, the previous line looks like:
     >_ echo ""banana
 
@@ -856,14 +909,14 @@ Examples::
 
     >_ set b 1 2 3
     >_ echo (echo x)$b
-    <outp>x1 x2 x3</outp>
+    x1 x2 x3
 
 .. _expand-index-range:
 
 Index range expansion
 ---------------------
 
-Both command substitution and shell variable expansion support accessing only specific items by providing a set of indices in square brackets. It's often needed to access a sequence of elements. To do this, use the range operator '``..``' for this. A range '``a..b``', where range limits 'a' and 'b' are integer numbers, is expanded into a sequence of indices '``a a+1 a+2 ... b``' or '``a a-1 a-2 ... b``' depending on which of 'a' or 'b' is higher. The negative range limits are calculated from the end of the array or command substitution. Note that invalid indexes for either end are silently clamped to one or the size of the array as appropriate.
+Both command substitution and shell variable expansion support accessing only specific items by providing a set of indices in square brackets. It's often needed to access a sequence of elements. To do this, use the range operator '``..``' for this. A range '``a..b``', where range limits 'a' and 'b' are integer numbers, is expanded into a sequence of indices '``a a+1 a+2 ... b``' or '``a a-1 a-2 ... b``' depending on which of 'a' or 'b' is higher. The negative range limits are calculated from the end of the list or command substitution. Note that invalid indexes for either end are silently clamped to one or the size of the list as appropriate.
 
 Range expansion will go in reverse if the end element is earlier in the list than the start and forward if the end is later than the start, unless exactly one of the given indices is negative. This is to enable clamping without changing direction if the list has fewer elements than expected.
 
@@ -912,7 +965,7 @@ Variables can be used as indices for expansion of variables, like so::
 However using variables as indices for command substitution is currently not supported, so::
 
     echo (seq 5)[$index] # This won't work
-    
+
     set sequence (seq 5) # It needs to be written on two lines like this.
     echo $sequence[$index] # returns '2'
 
@@ -964,7 +1017,7 @@ Shell variables
 
 Shell variables are named pieces of data, which can be created, deleted and their values changed and used by the user.  Variables may optionally be "exported", so that a copy of the variable is available to any subprocesses the shell creates. An exported variable is referred to as an "environment variable".
 
-To set a variable value, use the `set <cmds/set.html>`_ command</a>. A variable name can not be empty and can contain only letters, digits, and underscores. It may begin and end with any of those characters.
+To set a variable value, use the :ref:`set <cmd-set>` command. A variable name can not be empty and can contain only letters, digits, and underscores. It may begin and end with any of those characters.
 
 Example:
 
@@ -1014,9 +1067,9 @@ Universal variables are variables that are shared between all the users' fish se
 
 To see universal variables in action, start two fish sessions side by side, and issue the following command in one of them ``set fish_color_cwd blue``. Since ``fish_color_cwd`` is a universal variable, the color of the current working directory listing in the prompt will instantly change to blue on both terminals.
 
-`Universal variables <#variables-universal>`_ are stored in the file ``.config/fish/fishd.MACHINE_ID``, where MACHINE_ID is typically your MAC address. Do not edit this file directly, as your edits may be overwritten. Edit them through fish scripts or by using fish interactively instead.
+`Universal variables <#variables-universal>`_ are stored in the file ``.config/fish/fish_variables``. Do not edit this file directly, as your edits may be overwritten. Edit the variables through fish scripts or by using fish interactively instead.
 
-Do not append to universal variables in `config.fish <#initialization>`_, because these variables will then get longer with each new shell instance. Instead, simply set them once at the command line.
+Do not append to universal variables in :ref:`config.fish <initialization>`, because these variables will then get longer with each new shell instance. Instead, simply set them once at the command line.
 
 
 .. _variables-functions:
@@ -1064,18 +1117,18 @@ Variables can be explicitly set to be exported with the ``-x`` or ``--export`` s
 
 -# If a variable has global scope, it is accessible read-write to functions whether it is exported or not.
 
-.. _variables-arrays:
+.. _variables-lists:
 
-Arrays
+Lists
 -------
 
-``fish`` can store a list of multiple strings inside of a variable. To access one element of an array, use the index of the element inside of square brackets, like this:
+``fish`` can store a list (or an "array" if you wish) of multiple strings inside of a variable. To access one element of a list, use the index of the element inside of square brackets, like this:
 
 ``echo $PATH[3]``
 
-Note that array indices start at 1 in ``fish``, not 0, as is more common in other languages. This is because many common Unix tools like ``seq`` are more suited to such use. An invalid index is silently ignored resulting in no value being substituted (not an empty string).
+Note that list indices start at 1 in ``fish``, not 0, as is more common in other languages. This is because many common Unix tools like ``seq`` are more suited to such use. An invalid index is silently ignored resulting in no value being substituted (not an empty string).
 
-If you do not use any brackets, all the elements of the array will be written as separate items. This means you can easily iterate over an array using this syntax::
+If you do not use any brackets, all the elements of the list will be written as separate items. This means you can easily iterate over a list using this syntax::
 
     for i in $PATH; echo $i is in the path; end
 
@@ -1083,9 +1136,9 @@ To create a variable ``smurf``, containing the items ``blue`` and ``small``, sim
 
     set smurf blue small
 
-It is also possible to set or erase individual elements of an array::
+It is also possible to set or erase individual elements of a list::
 
-    # Set smurf to be an array with the elements 'blue' and 'small'
+    # Set smurf to be a list with the elements 'blue' and 'small'
     set smurf blue small
 
     # Change the second element of smurf to 'evil'
@@ -1098,24 +1151,24 @@ It is also possible to set or erase individual elements of an array::
     echo $smurf
 
 
-If you specify a negative index when expanding or assigning to an array variable, the index will be calculated from the end of the array. For example, the index -1 means the last index of an array.
+If you specify a negative index when expanding or assigning to a list variable, the index will be calculated from the end of the list. For example, the index -1 means the last index of a list.
 
 A range of indices can be specified, see `index range expansion <#expand-index-range>`_ for details.
 
-All arrays are one-dimensional and cannot contain other arrays, although it is possible to fake nested arrays using the dereferencing rules of `variable expansion <#expand-variable>`_.
+All lists are one-dimensional and cannot contain other lists, although it is possible to fake nested lists using the dereferencing rules of `variable expansion <#expand-variable>`_.
 
-When an array is exported as an environment variable, it is either space or colon delimited, depending on whether it is a path variable::
+When a list is exported as an environment variable, it is either space or colon delimited, depending on whether it is a path variable::
 
     set -x smurf blue small
     set -x smurf_PATH forest mushroom
     env | grep smurf
-    <outp>
+
     # smurf=blue small
     # smurf_PATH=forest:mushroom
-    </outp>
 
 
-``fish`` automatically creates arrays from all environment variables whose name ends in PATH, by splitting them on colons. Other variables are not automatically split.
+
+``fish`` automatically creates lists from all environment variables whose name ends in PATH, by splitting them on colons. Other variables are not automatically split.
 
 .. _variables-path:
 
@@ -1124,18 +1177,18 @@ PATH variables
 
 Path variables are a special kind of variable used to support colon-delimited path lists including PATH, CDPATH, MANPATH, PYTHONPATH, etc. All variables that end in ``PATH`` (case-sensitive) become PATH variables.
 
-PATH variables act as normal arrays, except they are are implicitly joined and split on colons.
+PATH variables act as normal lists, except they are are implicitly joined and split on colons.
 
 ::
 
     set MYPATH 1 2 3
     echo "$MYPATH"
-    <outp># 1:2:3</outp>
+    # 1:2:3
     set MYPATH "$MYPATH:4:5"
     echo $MYPATH
     # 1 2 3 4 5
     echo "$MYPATH"
-    <outp># 1:2:3:4:5</outp>
+    # 1:2:3:4:5
 
 Variables can be marked or unmarked as PATH variables via the ``--path`` and ``--unpath`` options to ``set``.
 
@@ -1147,13 +1200,19 @@ Special variables
 
 The user can change the settings of ``fish`` by changing the values of certain variables.
 
-- A large number of variable starting with the prefixes ``fish_color`` and ``fish_pager_color``. See `Variables for changing highlighting colors <#variables-color>`_ for more information.
+- ``PATH``, a list of directories in which to search for commands
+
+- ``CDPATH``, a list of directories in which to search for the new directory for the ``cd`` builtin.
+
+- ``LANG``, ``LC_ALL``, ``LC_COLLATE``, ``LC_CTYPE``, ``LC_MESSAGES``, ``LC_MONETARY``, ``LC_NUMERIC`` and ``LC_TIME`` set the language option for the shell and subprograms. See the section `Locale variables <#variables-locale>`_ for more information.
+
+- A large number of variable starting with the prefixes ``fish_color`` and ``fish_pager_color``. See `Variables for changing highlighting colors <#variables-color>`__ for more information.
 
 - ``fish_emoji_width`` controls the computed width of certain characters, in particular emoji, whose rendered width varies across terminal emulators. This should be set to 1 if your terminal emulator renders emoji single-width, or 2 if double-width. Set this only if you see graphical glitching when printing emoji.
 
 - ``fish_ambiguous_width`` controls the computed width of ambiguous East Asian characters. This should be set to 1 if your terminal emulator renders these characters as single-width (typical), or 2 if double-width.
 
-- ``fish_escape_delay_ms`` overrides the default timeout of 30ms after seeing an escape character before giving up on matching a key binding. See the documentation for the `bind <cmds/special.html-case-escape>`_ builtin command. This delay facilitates using escape as a meta key.
+- ``fish_escape_delay_ms`` overrides the default timeout of 30ms after seeing an escape character before giving up on matching a key binding. See the documentation for the `bind <cmds/bind.html#special-case-the-escape-character>`__ builtin command. This delay facilitates using escape as a meta key.
 
 - ``fish_greeting``, the greeting message printed on startup.
 
@@ -1163,37 +1222,31 @@ The user can change the settings of ``fish`` by changing the values of certain v
   empty string, history is not saved to disk (but is still available within the interactive
   session).
 
-- ``fish_user_paths``, an array of directories that are prepended to ``PATH``. This can be a universal variable.
+- ``fish_user_paths``, a list of directories that are prepended to ``PATH``. This can be a universal variable.
 
-- ``umask``, the current file creation mask. The preferred way to change the umask variable is through the `umask <cmds/umask.html>`_ function. An attempt to set umask to an invalid value will always fail.
+- ``umask``, the current file creation mask. The preferred way to change the umask variable is through the :ref:`umask <cmd-umask>` function. An attempt to set umask to an invalid value will always fail.
 
 - ``BROWSER``, the user's preferred web browser. If this variable is set, fish will use the specified browser instead of the system default browser to display the fish documentation.
-
-- ``CDPATH``, an array of directories in which to search for the new directory for the ``cd`` builtin.
-
-- ``LANG``, ``LC_ALL``, ``LC_COLLATE``, ``LC_CTYPE``, ``LC_MESSAGES``, ``LC_MONETARY``, ``LC_NUMERIC`` and ``LC_TIME`` set the language option for the shell and subprograms. See the section `Locale variables <#variables-locale>`_ for more information.
-
-- ``PATH``, an array of directories in which to search for commands
 
 ``fish`` also sends additional information to the user through the values of certain environment variables. The user cannot change the values of most of these variables.
 
 - ``_``, the name of the currently running command (though this is deprecated, and the use of ``status current-command`` is preferred).
 
-- ``argv``, an array of arguments to the shell or function. ``argv`` is only defined when inside a function call, or if fish was invoked with a list of arguments, like ``fish myscript.fish foo bar``. This variable can be changed by the user.
+- ``argv``, a list of arguments to the shell or function. ``argv`` is only defined when inside a function call, or if fish was invoked with a list of arguments, like ``fish myscript.fish foo bar``. This variable can be changed by the user.
 
-- ``history``, an array containing the last commands that were entered.
+- ``history``, a list containing the last commands that were entered.
 
 - ``HOME``, the user's home directory. This variable can be changed by the user.
 
 - ``hostname``, the machine's hostname.
 
-- ``IFS``, the internal field separator that is used for word splitting with the `read <cmds/read.html>`_ builtin. Setting this to the empty string will also disable line splitting in `command substitution <#expand-command-substitution>`_. This variable can be changed by the user.
+- ``IFS``, the internal field separator that is used for word splitting with the :ref:`read <cmd-read>` builtin. Setting this to the empty string will also disable line splitting in `command substitution <#expand-command-substitution>`_. This variable can be changed by the user.
 
 - ``PWD``, the current working directory.
 
 - ``status``, the `exit status <#variables-status>`_ of the last foreground job to exit. If the job was terminated through a signal, the exit status will be 128 plus the signal number.
 
-- ``pipestatus``, an array of exit statuses of all processes that made up the last executed pipe.
+- ``pipestatus``, a list of exit statuses of all processes that made up the last executed pipe.
 
 - ``USER``, the current username. This variable can be changed by the user.
 
@@ -1336,7 +1389,7 @@ Builtin commands
 
 Many other shells have a large library of builtin commands. Most of these commands are also available as standalone commands, but have been implemented in the shell anyway. To avoid code duplication, and to avoid the confusion of subtly differing versions of the same command, ``fish`` generally only implements builtins for actions which cannot be performed by a regular command.
 
-For a list of all builtins, functions and commands shipped with fish, see the `table of contents <#toc-commands>`_. The documentation is also available by using the ``--help`` switch of the command.
+For a list of all builtins, functions and commands shipped with fish, see the :ref:`list of commands <Commands>`. The documentation is also available by using the ``--help`` switch of the command.
 
 .. _editor:
 
@@ -1364,67 +1417,67 @@ Shared bindings
 
 Some bindings are shared between emacs- and vi-mode because they aren't text editing bindings or because what Vi/Vim does for a particular key doesn't make sense for a shell.
 
-- @key{Tab} `completes <#completion>`_ the current token. @key{Shift, Tab} completes the current token and starts the pager's search mode.
+- :kbd:`Tab` `completes <#completion>`_ the current token. :kbd:`Shift, Tab` completes the current token and starts the pager's search mode.
 
-- @key{Alt,&larr;,Left} and @key{Alt,&rarr;,Right} move the cursor one word left or right (to the next space or punctuation mark), or moves forward/backward in the directory history if the command line is empty. If the cursor is already at the end of the line, and an autosuggestion is available, @key{Alt,&rarr;,Right} (or @key{Alt,F}) accepts the first word in the suggestion.
+- :kbd:`Alt+←,Left` and :kbd:`Alt+→,Right` move the cursor one word left or right (to the next space or punctuation mark), or moves forward/backward in the directory history if the command line is empty. If the cursor is already at the end of the line, and an autosuggestion is available, :kbd:`Alt+→,Right` (or :kbd:`Alt+F`) accepts the first word in the suggestion.
 
-- @key{Shift,&larr;,Left} and @key{Shift,&rarr;,Right} move the cursor one word left or right, without stopping on punctuation.
+- :kbd:`Shift,←,Left` and :kbd:`Shift,→,Right` move the cursor one word left or right, without stopping on punctuation.
 
-- @cursor_key{&uarr;,Up} and @cursor_key{&darr;,Down} (or @key{Control,P} and @key{Control,N} for emacs aficionados) search the command history for the previous/next command containing the string that was specified on the commandline before the search was started. If the commandline was empty when the search started, all commands match. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`↑` (Up) and :kbd:`↓` (Down) (or :kbd:`Control+P` and :kbd:`Control+N` for emacs aficionados) search the command history for the previous/next command containing the string that was specified on the commandline before the search was started. If the commandline was empty when the search started, all commands match. See the `history <#history>`_ section for more information on history searching.
 
-- @key{Alt,&uarr;,Up} and @key{Alt,&darr;,Down} search the command history for the previous/next token containing the token under the cursor before the search was started. If the commandline was not on a token when the search started, all tokens match. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`Alt+↑,Up` and :kbd:`Alt+↓,Down` search the command history for the previous/next token containing the token under the cursor before the search was started. If the commandline was not on a token when the search started, all tokens match. See the `history <#history>`_ section for more information on history searching.
 
-- @key{Control,C} cancels the entire line.
+- :kbd:`Control+C` cancels the entire line.
 
-- @key{Control,D} delete one character to the right of the cursor. If the command line is empty, @key{Control,D} will exit fish.
+- :kbd:`Control+D` delete one character to the right of the cursor. If the command line is empty, :kbd:`Control+D` will exit fish.
 
-- @key{Control,U} moves contents from the beginning of line to the cursor to the `killring <#killring>`_.
+- :kbd:`Control+U` moves contents from the beginning of line to the cursor to the `killring <#killring>`__.
 
-- @key{Control,L} clears and repaints the screen.
+- :kbd:`Control+L` clears and repaints the screen.
 
-- @key{Control,W} moves the previous path component (everything up to the previous "/") to the `killring <#killring>`_.
+- :kbd:`Control+W` moves the previous path component (everything up to the previous "/", ":" or "@") to the `killring <#killring>`__.
 
-- @key{Control,X} copies the current buffer to the system's clipboard, @key{Control,V} inserts the clipboard contents.
+- :kbd:`Control+X` copies the current buffer to the system's clipboard, :kbd:`Control+V` inserts the clipboard contents.
 
-- @key{Alt,d} moves the next word to the `killring <#killring>`_.
+- :kbd:`Alt+d` moves the next word to the `killring <#killring>`__.
 
-- @key{Alt,h} (or @key{F1}) shows the manual page for the current command, if one exists.
+- :kbd:`Alt+h` (or :kbd:`F1`) shows the manual page for the current command, if one exists.
 
-- @key{Alt,l} lists the contents of the current directory, unless the cursor is over a directory argument, in which case the contents of that directory will be listed.
+- :kbd:`Alt+l` lists the contents of the current directory, unless the cursor is over a directory argument, in which case the contents of that directory will be listed.
 
-- @key{Alt,p} adds the string '``| less;``' to the end of the job under the cursor. The result is that the output of the command will be paged.
+- :kbd:`Alt+p` adds the string '``| less;``' to the end of the job under the cursor. The result is that the output of the command will be paged.
 
-- @key{Alt,w} prints a short description of the command under the cursor.
+- :kbd:`Alt+w` prints a short description of the command under the cursor.
 
-- @key{Alt,e} edit the current command line in an external editor. The editor is chosen from the first available of the ``$VISUAL`` or ``$EDITOR`` variables.
+- :kbd:`Alt+e` edit the current command line in an external editor. The editor is chosen from the first available of the ``$VISUAL`` or ``$EDITOR`` variables.
 
-- @key{Alt,v} Same as @key{Alt,e}.
+- :kbd:`Alt+v` Same as :kbd:`Alt+e`.
 
 .. _emacs-mode:
 
 Emacs mode commands
 -------------------
 
-- @key{Home} or @key{Control,A} moves the cursor to the beginning of the line.
+- :kbd:`Home` or :kbd:`Control+A` moves the cursor to the beginning of the line.
 
-- @key{End} or @key{Control,E} moves to the end of line. If the cursor is already at the end of the line, and an autosuggestion is available, @key{End} or @key{Control,E} accepts the autosuggestion.
+- :kbd:`End` or :kbd:`Control+E` moves to the end of line. If the cursor is already at the end of the line, and an autosuggestion is available, :kbd:`End` or :kbd:`Control+E` accepts the autosuggestion.
 
-- @cursor_key{&larr;,Left} (or @key{Control,B}) and @cursor_key{&rarr;,Right} (or @key{Control,F}) move the cursor left or right by one character. If the cursor is already at the end of the line, and an autosuggestion is available, the @cursor_key{&rarr;,Right} key and the @key{Control,F} combination accept the suggestion.
+- :kbd:`←` (Left) (or :kbd:`Control+B`) and :kbd:`→` (Right) (or :kbd:`Control+F`) move the cursor left or right by one character. If the cursor is already at the end of the line, and an autosuggestion is available, the :kbd:`→` (Right) key and the :kbd:`Control+F` combination accept the suggestion.
 
-- @key{Delete} and @key{Backspace} removes one character forwards or backwards respectively.
+- :kbd:`Delete` and :kbd:`Backspace` removes one character forwards or backwards respectively.
 
-- @key{Control,K} moves contents from the cursor to the end of line to the `killring <#killring>`_.
+- :kbd:`Control+K` moves contents from the cursor to the end of line to the `killring <#killring>`__.
 
-- @key{Alt,c} capitalizes the current word.
+- :kbd:`Alt+c` capitalizes the current word.
 
-- @key{Alt,u} makes the current word uppercase.
+- :kbd:`Alt+u` makes the current word uppercase.
 
-- @key{Control,t} transposes the last two characters
+- :kbd:`Control+t` transposes the last two characters
 
-- @key{Alt,t} transposes the last two words
+- :kbd:`Alt+t` transposes the last two words
 
 
-You can change these key bindings using the `bind <cmds/bind.html">`_ builtin.
+You can change these key bindings using the `bind <cmds/bind.html">`__ builtin.
 
 
 .. _vi-mode:
@@ -1432,7 +1485,7 @@ You can change these key bindings using the `bind <cmds/bind.html">`_ builtin.
 Vi mode commands
 ----------------
 
-Vi mode allows for the use of Vi-like commands at the prompt. Initially, `insert mode <#vi-mode-insert>`_ is active. @key{Escape} enters `command mode <#vi-mode-command>`_. The commands available in command, insert and visual mode are described below. Vi mode shares `some bindings <#shared-binds>`_ with `Emacs mode <#emacs-mode>`_.
+Vi mode allows for the use of Vi-like commands at the prompt. Initially, `insert mode <#vi-mode-insert>`_ is active. :kbd:`Escape` enters `command mode <#vi-mode-command>`_. The commands available in command, insert and visual mode are described below. Vi mode shares `some bindings <#shared-binds>`_ with `Emacs mode <#emacs-mode>`_.
 
 It is also possible to add all emacs-mode bindings to vi-mode by using something like::
 
@@ -1447,7 +1500,9 @@ It is also possible to add all emacs-mode bindings to vi-mode by using something
     end
 
 
-When in vi-mode, the `fish_mode_prompt <cmds/fish_mode_prompt.html>`_ function will display a mode indicator to the left of the prompt. The ``fish_vi_cursor`` function will be used to change the cursor's shape depending on the mode in supported terminals. To disable this feature, override it with an empty function. To display the mode elsewhere (like in your right prompt), use the output of the ``fish_default_mode_prompt`` function.
+When in vi-mode, the :ref:`fish_mode_prompt <cmd-fish_mode_prompt>` function will display a mode indicator to the left of the prompt. The ``fish_vi_cursor`` function will be used to change the cursor's shape depending on the mode in supported terminals. To disable this feature, override it with an empty function. To display the mode elsewhere (like in your right prompt), use the output of the ``fish_default_mode_prompt`` function.
+
+When a binding switches the mode, it will repaint the mode-prompt if it exists, and the rest of the prompt only if it doesn't. So if you want a mode-indicator in your ``fish_prompt``, you need to erase ``fish_mode_prompt`` e.g. by adding an empty file at `~/.config/fish/functions/fish_mode_prompt.fish`. (Bindings that change the mode are supposed to call the `repaint-mode` bind function, see :ref:`bind <cmd-bind>`)
 
 .. _vi-mode-command:
 
@@ -1456,62 +1511,65 @@ Command mode
 
 Command mode is also known as normal mode.
 
-- @key{h} moves the cursor left.
+- :kbd:`h` moves the cursor left.
 
-- @key{l} moves the cursor right.
+- :kbd:`l` moves the cursor right.
 
-- @key{i} enters `insert mode <#vi-mode-insert>`_ at the current cursor position.
+- :kbd:`i` enters `insert mode <#vi-mode-insert>`_ at the current cursor position.
 
-- @key{v} enters `visual mode <#vi-mode-visual>`_ at the current cursor position.
+- :kbd:`v` enters `visual mode <#vi-mode-visual>`_ at the current cursor position.
 
-- @key{a} enters `insert mode <#vi-mode-insert>`_ after the current cursor position.
+- :kbd:`a` enters `insert mode <#vi-mode-insert>`_ after the current cursor position.
 
-- @key{Shift,A} enters `insert mode <#vi-mode-insert>`_ at the end of the line.
+- :kbd:`Shift,A` enters `insert mode <#vi-mode-insert>`_ at the end of the line.
 
-- @key{0} (zero) moves the cursor to beginning of line (remaining in command mode).
+- :kbd:`0` (zero) moves the cursor to beginning of line (remaining in command mode).
 
-- @key{d}@key{d} deletes the current line and moves it to the `killring <#killring>`_.
+- :kbd:`d`:kbd:`d` deletes the current line and moves it to the `killring <#killring>`__.
 
-- @key{Shift,D} deletes text after the current cursor position and moves it to the `killring <#killring>`_.
+- :kbd:`Shift,D` deletes text after the current cursor position and moves it to the `killring <#killring>`__.
 
-- @key{p} pastes text from the `killring <#killring>`_.
+- :kbd:`p` pastes text from the `killring <#killring>`__.
 
-- @key{u} search history backwards.
+- :kbd:`u` search history backwards.
 
-- @key{[} and @key{]} search the command history for the previous/next token containing the token under the cursor before the search was started. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`[` and :kbd:`]` search the command history for the previous/next token containing the token under the cursor before the search was started. See the `history <#history>`_ section for more information on history searching.
 
-- @key{Backspace} moves the cursor left.
+- :kbd:`Backspace` moves the cursor left.
 
 .. _vi-mode-insert:
 
 Insert mode
 -----------
 
-- @key{Escape} enters `command mode <#vi-mode-command>`_.
+- :kbd:`Escape` enters `command mode <#vi-mode-command>`_.
 
-- @key{Backspace} removes one character to the left.
+- :kbd:`Backspace` removes one character to the left.
 
 .. _vi-mode-visual:
 
 Visual mode
 -----------
 
-- @cursor_key{&larr;,Left} and @cursor_key{&rarr;,Right} extend the selection backward/forward by one character.
+- :kbd:`←` (Left) and :kbd:`→` (Right) extend the selection backward/forward by one character.
 
-- @key{b} and @key{w} extend the selection backward/forward by one word.
+- :kbd:`b` and :kbd:`w` extend the selection backward/forward by one word.
 
-- @key{d} and @key{x} move the selection to the `killring <#killring>`_ and enter `command mode <#vi-mode-command>`_.
+- :kbd:`d` and :kbd:`x` move the selection to the `killring <#killring>`__ and enter `command mode <#vi-mode-command>`__.
 
-- @key{Escape} and @key{Control,C} enter `command mode <#vi-mode-command>`_.
+- :kbd:`Escape` and :kbd:`Control+C` enter `command mode <#vi-mode-command>`_.
 
 .. _killring:
 
 Copy and paste (Kill Ring)
 --------------------------
 
-``fish`` uses an Emacs style kill ring for copy and paste functionality. Use @key{Control,K} to cut from the current cursor position to the end of the line. The string that is cut (a.k.a. killed) is inserted into a linked list of kills, called the kill ring. To paste the latest value from the kill ring use @key{Control,Y}. After pasting, use @key{Alt,Y} to rotate to the previous kill.
+``fish`` uses an Emacs-style kill ring for copy and paste functionality. For example, use :kbd:`Control+K` (`kill-line`) to cut from the current cursor position to the end of the line. The string that is cut (a.k.a. killed in emacs-ese) is inserted into a list of kills, called the kill ring. To paste the latest value from the kill ring (emacs calls this "yanking") use :kbd:`Control+Y` (the `yank` input function). After pasting, use :kbd:`Alt+Y` (`yank-pop`) to rotate to the previous kill.
 
-Copy and paste from outside are also supported, both via the @key{Control,X} / @key{Control,V} bindings and via the terminal's paste function, for which fish enables "Bracketed Paste Mode". When pasting inside single quotes, pasted single quotes and backslashes are automatically escaped so that the result can be used as a single token simply by closing the quote after.
+Copy and paste from outside are also supported, both via the :kbd:`Control+X` / :kbd:`Control+V` bindings (the `fish_clipboard_copy` and `fish_clipboard_paste` functions [#]_) and via the terminal's paste function, for which fish enables "Bracketed Paste Mode", so it can tell a paste from manually entered text.
+In addition, when pasting inside single quotes, pasted single quotes and backslashes are automatically escaped so that the result can be used as a single token simply by closing the quote after.
+
+.. [#] These rely on external tools. Currently xsel, xclip, wl-copy/wl-paste and pbcopy/pbpaste are supported.
 
 .. _history-search:
 
@@ -1520,7 +1578,7 @@ Searchable history
 
 After a command has been entered, it is inserted at the end of a history list. Any duplicate history items are automatically removed. By pressing the up and down keys, the user can search forwards and backwards in the history. If the current command line is not empty when starting a history search, only the commands containing the string entered into the command line are shown.
 
-By pressing @key{Alt,&uarr;,Up} and @key{Alt,&darr;,Down}, a history search is also performed, but instead of searching for a complete commandline, each commandline is broken into separate elements just like it would be before execution, and the history is searched for an element matching that under the cursor.
+By pressing :kbd:`Alt+↑,Up` and :kbd:`Alt+↓,Down`, a history search is also performed, but instead of searching for a complete commandline, each commandline is broken into separate elements just like it would be before execution, and the history is searched for an element matching that under the cursor.
 
 History searches can be aborted by pressing the escape key.
 
@@ -1535,7 +1593,7 @@ Examples:
 
 To search for previous entries containing the word 'make', type ``make`` in the console and press the up key.
 
-If the commandline reads ``cd m``, place the cursor over the ``m`` character and press @key{Alt,&uarr;,Up} to search for previously typed words containing 'm'.
+If the commandline reads ``cd m``, place the cursor over the ``m`` character and press :kbd:`Alt+↑,Up` to search for previously typed words containing 'm'.
 
 
 .. _multiline:
@@ -1545,11 +1603,11 @@ Multiline editing
 
 The fish commandline editor can be used to work on commands that are several lines long. There are three ways to make a command span more than a single line:
 
-- Pressing the @key{Enter} key while a block of commands is unclosed, such as when one or more block commands such as ``for``, ``begin`` or ``if`` do not have a corresponding ``end`` command.
+- Pressing the :kbd:`Enter` key while a block of commands is unclosed, such as when one or more block commands such as ``for``, ``begin`` or ``if`` do not have a corresponding ``end`` command.
 
-- Pressing @key{Alt,Enter} instead of pressing the @key{Enter} key.
+- Pressing :kbd:`Alt+Enter` instead of pressing the :kbd:`Enter` key.
 
-- By inserting a backslash (``\``) character before pressing the @key{Enter} key, escaping the newline.
+- By inserting a backslash (``\``) character before pressing the :kbd:`Enter` key, escaping the newline.
 
 The fish commandline editor works exactly the same in single line mode and in multiline mode. To move between lines use the left and right arrow keys and other such keyboard shortcuts.
 
@@ -1562,9 +1620,9 @@ Normally when ``fish`` starts a program, this program will be put in the foregro
 
 -# By ending a command with the ``&`` (ampersand) symbol, the user tells ``fish`` to put the specified command into the background. A background process will be run simultaneous with ``fish``. ``fish`` will retain control of the terminal, so the program will not be able to read from the keyboard.
 
--# By pressing @key{Control,Z}, the user stops a currently running foreground  program and returns control to ``fish``. Some programs do not support this feature, or remap it to another key. GNU Emacs uses @key{Control,X} @key{z} to stop running.
+-# By pressing :kbd:`Control+Z`, the user stops a currently running foreground  program and returns control to ``fish``. Some programs do not support this feature, or remap it to another key. GNU Emacs uses :kbd:`Control+X` :kbd:`z` to stop running.
 
--# By using the `bg <cmds/bg.html>`_ and `fg <cmds/fg.html>`_ builtin commands, the user can send any currently running job into the foreground or background.
+-# By using the :ref:`bg <cmd-bg>` and :ref:`fg <cmd-fg>` builtin commands, the user can send any currently running job into the foreground or background.
 
 Note that functions cannot be started in the background. Functions that are stopped and then restarted in the background using the ``bg`` command will not execute correctly.
 
@@ -1574,19 +1632,22 @@ Note that functions cannot be started in the background. Functions that are stop
 Initialization files
 ====================
 
-On startup, Fish evaluates a number of configuration files, which can be used to control the behavior of the shell. The location of these configuration variables is controlled by a number of environment variables, and their default or usual location is given below.
+On startup, Fish evaluates a number of configuration files, which can be used to control the behavior of the shell. The location of these is controlled by a number of environment variables, and their default or usual location is given below.
 
 Configuration files are evaluated in the following order:
-- Configuration shipped with fish, which should not be edited, in ``$__fish_data_dir/config.fish`` (usually ``/usr/share/fish/config.fish`).
+
+- Configuration shipped with fish, which should not be edited, in ``$__fish_data_dir/config.fish`` (usually ``/usr/share/fish/config.fish``).
+
 - Configuration snippets in files ending in ``.fish``, in the directories:
+
   - ``$__fish_config_dir/conf.d`` (by default, ``~/.config/fish/conf.d/``)
   - ``$__fish_sysconf_dir/conf.d`` (by default, ``/etc/fish/conf.d``)
-  - ``/usr/share/fish/vendor_conf.d`` (set at compile time; by default, ``$__fish_data_dir/conf.d``)
+  - ``/usr/share/fish/vendor_conf.d`` (set at compile time; by default, ``$__fish_data_dir/vendor_conf.d``)
 
   If there are multiple files with the same name in these directories, only the first will be executed.
   They are executed in order of their filename, sorted (like globs) in a natural order (i.e. "01" sorts before "2").
 
-- System-wide configuration files, where administrators can include initialization that should be run for all users on the system - similar to ``/etc/profile`` for POSIX-style shells - in ``$__fish_sysconf_dir``` (usually ``/etc/fish/config.fish``);
+- System-wide configuration files, where administrators can include initialization that should be run for all users on the system - similar to ``/etc/profile`` for POSIX-style shells - in ``$__fish_sysconf_dir` (usually /etc/fish/config.fish``);
 - User initialization, usually in `~/.config/fish/config.fish` (controlled by the ``XDG_CONFIG_HOME`` environment variable, and accessible as ``$__fish_config_dir``).
 
 These paths are controlled by parameters set at build, install, or run time, and may vary from the defaults listed above.
@@ -1627,8 +1688,14 @@ You can see the current list of features via ``status features``::
     > status features
     stderr-nocaret  on     3.0      ^ no longer redirects stderr
     qmark-noglob    off    3.0      ? no longer globs
+    string-replace-fewer-backslashes        off     3.1     string replace -r needs fewer backslashes in the replacement
 
-There are two breaking changes in fish 3.0: caret ``^`` no longer redirects stderr, and question mark ``?`` is no longer a glob. These changes are off by default. They can be enabled on a per session basis::
+There are two breaking changes in fish 3.0: caret ``^`` no longer redirects stderr, and question mark ``?`` is no longer a glob.
+
+There is one breaking change in fish 3.1: ``string replace -r`` does a superfluous round of escaping for the replacement, so escaping backslashes would look like ``string replace -ra '([ab])' '\\\\\\\$1' a``. This flag removes that if turned on, so ``'\\\\$1'`` is enough.
+
+
+These changes are off by default. They can be enabled on a per session basis::
 
     > fish --features qmark-noglob,stderr-nocaret
 
@@ -1638,6 +1705,11 @@ or opted into globally for a user::
 
     > set -U fish_features stderr-nocaret qmark-noglob
 
+Features will only be set on startup, so this variable will only take effect if it is universal or exported.
+
+You can also use the version as a group, so ``3.0`` is equivalent to "stderr-nocaret" and "qmark-noglob".
+
+Prefixing a feature with ``no-`` turns it off instead.
 .. _other:
 
 Other features
@@ -1660,7 +1732,7 @@ Detected errors include:
 
 When the cursor is over a parenthesis or a quote, ``fish`` also highlights its matching quote or parenthesis.
 
-To customize the syntax highlighting, you can set the environment variables listed in the `Variables for changing highlighting colors <index.html#variables-color>`_ section.
+To customize the syntax highlighting, you can set the environment variables listed in the `Variables for changing highlighting colors <#variables-color>`__ section.
 
 .. _title:
 
@@ -1689,7 +1761,7 @@ To show the last command in the title::
 Programmable prompt
 -------------------
 
-When fish waits for input, it will display a prompt by evaluating the ``fish_prompt`` and `fish_right_prompt` functions. The output of the former is displayed on the left and the latter's output on the right side of the terminal. The output of ``fish_mode_prompt`` will be prepended on the left, though the default function only does this when in `vi-mode <index.html#vi-mode>`_.
+When fish waits for input, it will display a prompt by evaluating the ``fish_prompt`` and `fish_right_prompt` functions. The output of the former is displayed on the left and the latter's output on the right side of the terminal. The output of ``fish_mode_prompt`` will be prepended on the left, though the default function only does this when in `vi-mode <#vi-mode>`__.
 
 .. _greeting:
 
@@ -1703,7 +1775,7 @@ If a function named ``fish_greeting`` exists, it will be run when entering inter
 Private mode
 -------------
 
-fish supports launching in private mode via ``fish --private`` (or ``fish -P`` for short). In private mode, old history is not available and any interactive commands you execute will not be appended to the global history file, making it useful both for avoiding inadvertently leaking personal information (e.g. for screencasts) and when dealing with sensitive information to prevent it being persisted to disk. You can query the global variable `fish_private_mode`` (``if set -q fish_private_mode ...`) if you would like to respect the user's wish for privacy and alter the behavior of your own fish scripts.
+fish supports launching in private mode via ``fish --private`` (or ``fish -P`` for short). In private mode, old history is not available and any interactive commands you execute will not be appended to the global history file, making it useful both for avoiding inadvertently leaking personal information (e.g. for screencasts) and when dealing with sensitive information to prevent it being persisted to disk. You can query the global variable `fish_private_mode`` (``if set -q fish_private_mode ...``) if you would like to respect the user's wish for privacy and alter the behavior of your own fish scripts.
 
 .. _event:
 
@@ -1726,9 +1798,9 @@ To specify a signal handler for the WINCH signal, write::
         echo Got WINCH signal!
     end
 
-Please note that event handlers only become active when a function is loaded, which means you might need to otherwise `source <cmds/source.html>`_ or execute a function instead of relying on `autoloading <#syntax-function-autoloading>`_. One approach is to put it into your `initialization file <#initialization>`_.
+Please note that event handlers only become active when a function is loaded, which means you might need to otherwise :ref:`source <cmd-source>` or execute a function instead of relying on :ref:`autoloading <syntax-function-autoloading>`. One approach is to put it into your :ref:`initialization file <initialization>`.
 
-For more information on how to define new event handlers, see the documentation for the `function <cmds/function.html>`_ command.
+For more information on how to define new event handlers, see the documentation for the :ref:`function <cmd-function>` command.
 
 
 .. _debugging:
@@ -1758,3 +1830,16 @@ If you have a question not answered by this documentation, there are several ave
 
 
 If you have an improvement for fish, you can submit it via the mailing list or the GitHub page.
+
+.. _other_pages:
+
+Other help pages
+================
+.. toctree::
+   :maxdepth: 1
+
+   commands
+   design
+   tutorial
+   faq
+   license

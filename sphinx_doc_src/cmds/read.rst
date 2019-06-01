@@ -1,3 +1,5 @@
+.. _cmd-read:
+
 read - read line of input into variables
 ========================================
 
@@ -27,9 +29,9 @@ The following options are available:
 - ``-n NCHARS`` or ``--nchars=NCHARS`` makes ``read`` return after reading NCHARS characters or the end of
   the line, whichever comes first.
 
-- ``-p PROMPT_CMD`` or ``--prompt=PROMPT_CMD`` uses the output of the shell command ``PROMPT_CMD`` as the prompt for the interactive mode. The default prompt command is <code>set_color green; echo read; set_color normal; echo "> "</code>.
+- ``-p PROMPT_CMD`` or ``--prompt=PROMPT_CMD`` uses the output of the shell command ``PROMPT_CMD`` as the prompt for the interactive mode. The default prompt command is `set_color green; echo read; set_color normal; echo "> "`
 
-- ``-P PROMPT_STR`` or ``--prompt-str=PROMPT_STR`` uses the string as the prompt for the interactive mode. It is equivalent to <code>echo PROMPT_STR</code> and is provided solely to avoid the need to frame the prompt as a command. All special characters in the string are automatically escaped before being passed to the <code>echo</code> command.
+- ``-P PROMPT_STR`` or ``--prompt-str=PROMPT_STR`` uses the string as the prompt for the interactive mode. It is equivalent to `echo PROMPT_STR` and is provided solely to avoid the need to frame the prompt as a command. All special characters in the string are automatically escaped before being passed to the `echo` command.
 
 - ``-R RIGHT_PROMPT_CMD`` or ``--right-prompt=RIGHT_PROMPT_CMD`` uses the output of the shell command ``RIGHT_PROMPT_CMD`` as the right prompt for the interactive mode. There is no default right prompt command.
 
@@ -41,7 +43,7 @@ The following options are available:
 
 - ``-x`` or ``--export`` exports the variables to child processes.
 
-- ``-a`` or ``--array`` stores the result as an array in a single variable.
+- ``-a`` or ``--array`` stores the result as a list in a single variable.
 
 - ``-z`` or ``--null`` marks the end of the line with the NUL character, instead of newline. This also
   disables interactive mode.
@@ -60,7 +62,7 @@ If no variable names are provided, ``read`` enters a special case that simply pr
 
 When running in this mode, ``read`` does not split the input in any way and text is redirected to standard output without any further processing or manipulation.
 
-If ``-a`` or ``--array`` is provided, only one variable name is allowed and the tokens are stored as an array in this variable.
+If ``-a`` or ``--array`` is provided, only one variable name is allowed and the tokens are stored as a list in this variable.
 
 See the documentation for ``set`` for more details on the scoping rules for variables.
 
@@ -68,7 +70,7 @@ When ``read`` reaches the end-of-file (EOF) instead of the terminator, the exit 
 Otherwise, it is set to 0.
 
 In order to protect the shell from consuming too many system resources, ``read`` will only consume a
-maximum of 10 MiB (1048576 bytes); if the terminator is not reached before this limit then VARIABLE
+maximum of 100 MiB (104857600 bytes); if the terminator is not reached before this limit then VARIABLE
 is set to empty and the exit status is set to 122. This limit can be altered with the
 ``fish_read_limit`` variable. If set to 0 (zero), the limit is removed.
 

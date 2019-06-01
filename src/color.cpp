@@ -4,14 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <wchar.h>  // IWYU pragma: keep
+#include <cwchar>  // IWYU pragma: keep
 
 #include "color.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
 
 bool rgb_color_t::try_parse_special(const wcstring &special) {
-    memset(&data, 0, sizeof data);
+    std::memset(&data, 0, sizeof data);
     const wchar_t *name = special.c_str();
     if (!wcscasecmp(name, L"normal")) {
         this->type = type_normal;
@@ -79,7 +79,9 @@ static int parse_hex_digit(wchar_t x) {
         case L'F': {
             return 0xF;
         }
-        default: { return -1; }
+        default: {
+            return -1;
+        }
     }
 }
 
@@ -108,7 +110,7 @@ static unsigned char convert_color(const unsigned char rgb[3], const uint32_t *c
 }
 
 bool rgb_color_t::try_parse_rgb(const wcstring &name) {
-    memset(&data, 0, sizeof data);
+    std::memset(&data, 0, sizeof data);
     // We support the following style of rgb formats (case insensitive):
     //  #FA3
     //  #F3A035
@@ -185,7 +187,7 @@ wcstring_list_t rgb_color_t::named_color_names() {
 }
 
 bool rgb_color_t::try_parse_named(const wcstring &str) {
-    memset(&data, 0, sizeof data);
+    std::memset(&data, 0, sizeof data);
     size_t max = sizeof named_colors / sizeof *named_colors;
     for (size_t idx = 0; idx < max; idx++) {
         if (0 == wcscasecmp(str.c_str(), named_colors[idx].name)) {
@@ -299,7 +301,7 @@ void rgb_color_t::parse(const wcstring &str) {
     if (!success) success = try_parse_named(str);
     if (!success) success = try_parse_rgb(str);
     if (!success) {
-        memset(&this->data, 0, sizeof this->data);
+        std::memset(&this->data, 0, sizeof this->data);
         this->type = type_none;
     }
 }
@@ -329,7 +331,9 @@ wcstring rgb_color_t::description() const {
         case type_normal: {
             return L"normal";
         }
-        default: { break; }
+        default: {
+            break;
+        }
     }
     DIE("unknown color type");
 }

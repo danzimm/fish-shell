@@ -4,9 +4,9 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
-#include <wchar.h>
+#include <cstring>
+#include <cwchar>
 
 #include "common.h"
 #include "exec.h"
@@ -18,17 +18,17 @@
 
 io_data_t::~io_data_t() = default;
 
-void io_close_t::print() const { fwprintf(stderr, L"close %d\n", fd); }
+void io_close_t::print() const { std::fwprintf(stderr, L"close %d\n", fd); }
 
-void io_fd_t::print() const { fwprintf(stderr, L"FD map %d -> %d\n", old_fd, fd); }
+void io_fd_t::print() const { std::fwprintf(stderr, L"FD map %d -> %d\n", old_fd, fd); }
 
-void io_file_t::print() const { fwprintf(stderr, L"file (%s)\n", filename_cstr); }
+void io_file_t::print() const { std::fwprintf(stderr, L"file (%s)\n", filename_cstr); }
 
 void io_pipe_t::print() const {
-    fwprintf(stderr, L"pipe {%d} (input: %s)\n", pipe_fd(), is_input_ ? "yes" : "no");
+    std::fwprintf(stderr, L"pipe {%d} (input: %s)\n", pipe_fd(), is_input_ ? "yes" : "no");
 }
 
-void io_bufferfill_t::print() const { fwprintf(stderr, L"bufferfill {%d}\n", write_fd_.fd()); }
+void io_bufferfill_t::print() const { std::fwprintf(stderr, L"bufferfill {%d}\n", write_fd_.fd()); }
 
 void io_buffer_t::append_from_stream(const output_stream_t &stream) {
     if (stream.empty()) return;
@@ -49,7 +49,8 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
     // 3. read until EAGAIN (would block), appending
     // 4. release the lock
     // The purpose of holding the lock around the read calls is to ensure that data from background
-    // processes isn't weirdly interspersed with data directly transferred (from a builtin to a buffer).
+    // processes isn't weirdly interspersed with data directly transferred (from a builtin to a
+    // buffer).
 
     const int fd = readfd.fd();
 
@@ -76,6 +77,9 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
         int ret = select(fd + 1, &fds, NULL, NULL, &tv);
+        // select(2) is allowed to (and does) update `tv` to indicate how much time was left, so we
+        // need to restore the desired value each time.
+        tv.tv_usec = poll_timeout_usec;
         readable = ret > 0;
         if (ret < 0 && errno != EINTR) {
             // Surprising error.
@@ -87,7 +91,7 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
         // It's important that if select() indicated we were readable, that we call select() again
         // allowing it to time out. Note the typical case is that the fd will be closed, in which
         // case select will return immediately.
-        if (! readable) {
+        if (!readable) {
             shutdown = this->shutdown_fillthread_.load(std::memory_order_relaxed);
         }
 
@@ -188,7 +192,7 @@ io_pipe_t::~io_pipe_t() = default;
 io_bufferfill_t::~io_bufferfill_t() = default;
 
 io_buffer_t::~io_buffer_t() {
-    assert(! fillthread_ && "io_buffer_t destroyed with outstanding fillthread");
+    assert(!fillthread_ && "io_buffer_t destroyed with outstanding fillthread");
 }
 
 void io_chain_t::remove(const shared_ptr<const io_data_t> &element) {
@@ -223,27 +227,26 @@ void io_print(const io_chain_t &chain)
 {
     if (chain.empty())
     {
-        fwprintf(stderr, L"Empty chain %p\n", &chain);
+        std::fwprintf(stderr, L"Empty chain %p\n", &chain);
         return;
     }
 
-    fwprintf(stderr, L"Chain %p (%ld items):\n", &chain, (long)chain.size());
+    std::fwprintf(stderr, L"Chain %p (%ld items):\n", &chain, (long)chain.size());
     for (size_t i=0; i < chain.size(); i++)
     {
         const shared_ptr<io_data_t> &io = chain.at(i);
         if (io.get() == NULL)
         {
-            fwprintf(stderr, L"\t(null)\n");
+            std::fwprintf(stderr, L"\t(null)\n");
         }
         else
         {
-            fwprintf(stderr, L"\t%lu: fd:%d, ", (unsigned long)i, io->fd);
+            std::fwprintf(stderr, L"\t%lu: fd:%d, ", (unsigned long)i, io->fd);
             io->print();
         }
     }
 }
 #endif
-
 
 int move_fd_to_unused(int fd, const io_chain_t &io_chain, bool cloexec) {
     if (fd < 0 || io_chain.get_io_for_fd(fd).get() == NULL) {

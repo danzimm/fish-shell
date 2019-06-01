@@ -5,16 +5,17 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
+#include <cstring>
 #include <memory>
 #if FISH_USE_POSIX_SPAWN
 #include <spawn.h>
 #endif
-#include <wchar.h>
+#include <cwchar>
 
 #include "common.h"
 #include "exec.h"
+#include "flog.h"
 #include "io.h"
 #include "iothread.h"
 #include "postfork.h"
@@ -49,18 +50,18 @@ bool child_set_group(job_t *j, process_t *p) {
             // Put a cap on how many times we retry so we are never stuck here
             if (i < 100) {
                 if (errno == EPERM) {
-                    // The setpgid(2) man page says that EPERM is returned only if attempts are made to
-                    // move processes into groups across session boundaries (which can never be the case
-                    // in fish, anywhere) or to change the process group ID of a session leader (again,
-                    // can never be the case). I'm pretty sure this is a WSL bug, as we see the same
-                    // with tcsetpgrp(2) in other places and it disappears on retry.
+                    // The setpgid(2) man page says that EPERM is returned only if attempts are made
+                    // to move processes into groups across session boundaries (which can never be
+                    // the case in fish, anywhere) or to change the process group ID of a session
+                    // leader (again, can never be the case). I'm pretty sure this is a WSL bug, as
+                    // we see the same with tcsetpgrp(2) in other places and it disappears on retry.
                     debug_safe(2, "setpgid(2) returned EPERM. Retrying");
                     continue;
                 } else if (errno == EINTR) {
-                    // I don't think signals are blocked here. The parent (fish) redirected the signal
-                    // handlers and `setup_child_process()` calls `signal_reset_handlers()` after we're
-                    // done here (and not `signal_unblock()`). We're already in a loop, so let's just
-                    // handle EINTR just in case.
+                    // I don't think signals are blocked here. The parent (fish) redirected the
+                    // signal handlers and `setup_child_process()` calls `signal_reset_handlers()`
+                    // after we're done here (and not `signal_unblock()`). We're already in a loop,
+                    // so let's just handle EINTR just in case.
                     continue;
                 }
             }
@@ -84,8 +85,10 @@ bool child_set_group(job_t *j, process_t *p) {
                 pid_buff, argv0, job_id_buff, command, getpgid_buff, job_pgid_buff);
 
             if (is_windows_subsystem_for_linux() && errno == EPERM) {
-                debug_safe(1, "Please update to Windows 10 1809/17763 or higher to address known issues "
-                        "with process groups and zombie processes.");
+                debug_safe(
+                    1,
+                    "Please update to Windows 10 1809/17763 or higher to address known issues "
+                    "with process groups and zombie processes.");
             }
 
             safe_perror("setpgid");
@@ -107,8 +110,8 @@ bool child_set_group(job_t *j, process_t *p) {
 /// if it's to run in the foreground.
 bool set_child_group(job_t *j, pid_t child_pid) {
     if (j->get_flag(job_flag_t::JOB_CONTROL)) {
-        assert (j->pgid != INVALID_PID
-                && "set_child_group called with JOB_CONTROL before job pgid determined!");
+        assert(j->pgid != INVALID_PID &&
+               "set_child_group called with JOB_CONTROL before job pgid determined!");
 
         // The parent sets the child's group. This incurs the well-known unavoidable race with the
         // child exiting, so ignore ESRCH and EPERM (in case the pid was recycled).
@@ -117,14 +120,13 @@ bool set_child_group(job_t *j, pid_t child_pid) {
             if (errno != ESRCH && errno != EPERM && errno != EACCES) {
                 safe_perror("setpgid");
                 return false;
-            }
-            else {
+            } else {
                 // Just in case it's ever not right to ignore the setpgid call, (i.e. if this
                 // ever leads to a terminal hang due if both this setpgid call AND posix_spawn's
                 // internal setpgid calls failed), write to the debug log so a future developer
                 // doesn't go crazy trying to track this down.
-                debug(2, "Error %d while calling setpgid for child %d (probably harmless)",
-                        errno, child_pid);
+                debug(2, "Error %d while calling setpgid for child %d (probably harmless)", errno,
+                      child_pid);
             }
         }
     } else {
@@ -142,7 +144,7 @@ bool maybe_assign_terminal(const job_t *j) {
             // this can cause an EPERM error. In addition, if we've given control of the terminal to
             // a process group, attempting to call tcsetpgrp from the background will cause SIGTTOU
             // to be sent to everything in our process group (unless we handle it).
-            debug(4, L"Process group %d already has control of terminal\n", j->pgid);
+            FLOGF(proc_termowner, L"Process group %d already has control of terminal", j->pgid);
         } else {
             // No need to duplicate the code here, a function already exists that does just this.
             return terminal_give_to_job(j, false /*new job, so not continuing*/);
@@ -168,7 +170,6 @@ int setup_child_process(process_t *p, const dup2_list_t &dup2s) {
     signal_reset_handlers();
     return 0;
 }
-
 
 int g_fork_count = 0;
 
@@ -308,11 +309,11 @@ void safe_report_exec_error(int err, const char *actual_cmd, const char *const *
             size_t sz = 0;
             const char *const *p;
             for (p = argv; *p; p++) {
-                sz += strlen(*p) + 1;
+                sz += std::strlen(*p) + 1;
             }
 
             for (p = envv; *p; p++) {
-                sz += strlen(*p) + 1;
+                sz += std::strlen(*p) + 1;
             }
 
             format_size_safe(sz1, sz);
@@ -373,7 +374,7 @@ void safe_report_exec_error(int err, const char *actual_cmd, const char *const *
             const char *err = safe_strerror(errno);
             debug_safe(0, "exec: %s", err);
 
-            // debug(0, L"The file '%ls' is marked as an executable but could not be run by the
+            // FLOGF(error, L"The file '%ls' is marked as an executable but could not be run by the
             // operating system.", p->actual_cmd);
             break;
         }

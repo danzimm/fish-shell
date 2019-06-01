@@ -1,10 +1,18 @@
-    # If seq is not installed, then define a function that invokes __fish_fallback_seq
+# If seq is not installed, then define a function that invokes __fish_fallback_seq
 # We can't call type here because that also calls seq
 
 if not command -sq seq
-    # No seq command
-    function seq --description "Print sequences of numbers"
-        __fish_fallback_seq $argv
+    if command -sq gseq
+        # No seq provided by the OS, but GNU coreutils was apparently installed, fantastic
+        function seq --description "Print sequences of numbers (gseq)"
+            gseq $argv
+        end
+        exit
+    else
+        # No seq command
+        function seq --description "Print sequences of numbers"
+            __fish_fallback_seq $argv
+        end
     end
 
     function __fish_fallback_seq --description "Fallback implementation of the seq command"
@@ -33,16 +41,24 @@ if not command -sq seq
         end
 
         for i in $from $step $to
-            if not string match -rq '^-?[0-9]*([0-9]*|\.[0-9]+)$' $i
+            if not string match -rq -- '^-?[0-9]*([0-9]*|\.[0-9]+)$' $i
                 printf (_ "%s: '%s' is not a number\n") seq $i
                 return 1
             end
         end
 
-        if [ $step -ge 0 ]
-            echo "for( i=$from; i<=$to ; i+=$step ) i;" | bc
+        if test $step -ge 0
+            set -l i $from
+            while test $i -le $to
+                echo $i
+                set i (math -- $i + $step)
+            end
         else
-            echo "for( i=$from; i>=$to ; i+=$step ) i;" | bc
+            set -l i $from
+            while test $i -ge $to
+                echo $i
+                set i (math -- $i + $step)
+            end
         end
     end
 end

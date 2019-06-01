@@ -6,9 +6,9 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <wchar.h>
+#include <cstring>
+#include <cwchar>
 
 #include <algorithm>
 #include <memory>
@@ -55,27 +55,25 @@ struct read_cmd_opts_t {
 };
 
 static const wchar_t *const short_options = L":ac:d:ghiLlm:n:p:sSuxzP:UR:LB";
-static const struct woption long_options[] = {
-    {L"array", no_argument, NULL, 'a'},
-    {L"command", required_argument, NULL, 'c'},
-    {L"delimiter", required_argument, NULL, 'd'},
-    {L"export", no_argument, NULL, 'x'},
-    {L"global", no_argument, NULL, 'g'},
-    {L"help", no_argument, NULL, 'h'},
-    {L"line", no_argument, NULL, 'L'},
-    {L"local", no_argument, NULL, 'l'},
-    {L"mode-name", required_argument, NULL, 'm'},
-    {L"nchars", required_argument, NULL, 'n'},
-    {L"null", no_argument, NULL, 'z'},
-    {L"prompt", required_argument, NULL, 'p'},
-    {L"prompt-str", required_argument, NULL, 'P'},
-    {L"right-prompt", required_argument, NULL, 'R'},
-    {L"shell", no_argument, NULL, 'S'},
-    {L"silent", no_argument, NULL, 's'},
-    {L"unexport", no_argument, NULL, 'u'},
-    {L"universal", no_argument, NULL, 'U'},
-    {NULL, 0, NULL, 0}
-};
+static const struct woption long_options[] = {{L"array", no_argument, NULL, 'a'},
+                                              {L"command", required_argument, NULL, 'c'},
+                                              {L"delimiter", required_argument, NULL, 'd'},
+                                              {L"export", no_argument, NULL, 'x'},
+                                              {L"global", no_argument, NULL, 'g'},
+                                              {L"help", no_argument, NULL, 'h'},
+                                              {L"line", no_argument, NULL, 'L'},
+                                              {L"local", no_argument, NULL, 'l'},
+                                              {L"mode-name", required_argument, NULL, 'm'},
+                                              {L"nchars", required_argument, NULL, 'n'},
+                                              {L"null", no_argument, NULL, 'z'},
+                                              {L"prompt", required_argument, NULL, 'p'},
+                                              {L"prompt-str", required_argument, NULL, 'P'},
+                                              {L"right-prompt", required_argument, NULL, 'R'},
+                                              {L"shell", no_argument, NULL, 'S'},
+                                              {L"silent", no_argument, NULL, 's'},
+                                              {L"unexport", no_argument, NULL, 'u'},
+                                              {L"universal", no_argument, NULL, 'U'},
+                                              {NULL, 0, NULL, 0}};
 
 static int parse_cmd_opts(read_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncss method)
                           int argc, wchar_t **argv, parser_t &parser, io_streams_t &streams) {
@@ -98,8 +96,9 @@ static int parse_cmd_opts(read_cmd_opts_t &opts, int *optind,  //!OCLINT(high nc
                 break;
             }
             case 'i': {
-                streams.err.append_format(_(L"%ls: usage of -i for --silent is deprecated. Please use -s or --silent instead.\n"),
-                        cmd);
+                streams.err.append_format(_(L"%ls: usage of -i for --silent is deprecated. Please "
+                                            L"use -s or --silent instead.\n"),
+                                          cmd);
                 return STATUS_INVALID_ARGS;
             }
             case L'g': {
@@ -130,13 +129,13 @@ static int parse_cmd_opts(read_cmd_opts_t &opts, int *optind,  //!OCLINT(high nc
                     if (errno == ERANGE) {
                         streams.err.append_format(_(L"%ls: Argument '%ls' is out of range\n"), cmd,
                                                   w.woptarg);
-                        builtin_print_help(parser, streams, cmd, streams.err);
+                        builtin_print_error_trailer(parser, streams.err, cmd);
                         return STATUS_INVALID_ARGS;
                     }
 
                     streams.err.append_format(_(L"%ls: Argument '%ls' must be an integer\n"), cmd,
                                               w.woptarg);
-                    builtin_print_help(parser, streams, cmd, streams.err);
+                    builtin_print_error_trailer(parser, streams.err, cmd);
                     return STATUS_INVALID_ARGS;
                 }
                 break;
@@ -198,16 +197,15 @@ static int parse_cmd_opts(read_cmd_opts_t &opts, int *optind,  //!OCLINT(high nc
 
 /// Read from the tty. This is only valid when the stream is stdin and it is attached to a tty and
 /// we weren't asked to split on null characters.
-static int read_interactive(wcstring &buff, int nchars, bool shell, bool silent,
+static int read_interactive(parser_t &parser, wcstring &buff, int nchars, bool shell, bool silent,
                             const wchar_t *prompt, const wchar_t *right_prompt,
                             const wchar_t *commandline) {
     int exit_res = STATUS_CMD_OK;
 
-    // TODO: rationalize this.
-    const auto &vars = env_stack_t::principal();
+    const auto &vars = parser.vars();
     wcstring read_history_ID = history_session_id(vars);
     if (!read_history_ID.empty()) read_history_ID += L"_read";
-    reader_push(read_history_ID);
+    reader_push(parser, read_history_ID);
 
     reader_set_left_prompt(prompt);
     reader_set_right_prompt(right_prompt);
@@ -222,7 +220,7 @@ static int read_interactive(wcstring &buff, int nchars, bool shell, bool silent,
     reader_set_exit_on_interrupt(true);
     reader_set_silent_status(silent);
 
-    reader_set_buffer(commandline, wcslen(commandline));
+    reader_set_buffer(commandline, std::wcslen(commandline));
     proc_push_interactive(1);
 
     event_fire_generic(L"fish_prompt");
@@ -276,7 +274,10 @@ static int read_in_chunks(int fd, wcstring &buff, bool split_null) {
         if (bytes_consumed < bytes_read) {
             // We found a splitter. The +1 because we need to treat the splitter as consumed, but
             // not append it to the string.
-            CHECK(lseek(fd, bytes_consumed - bytes_read + 1, SEEK_CUR) != -1, STATUS_CMD_ERROR)
+            if (lseek(fd, bytes_consumed - bytes_read + 1, SEEK_CUR) == -1) {
+                wperror(L"lseek");
+                return STATUS_CMD_ERROR;
+            }
             finished = true;
         } else if (str.size() > read_byte_limit) {
             exit_res = STATUS_READ_TOO_MUCH;
@@ -317,9 +318,9 @@ static int read_one_char_at_a_time(int fd, wcstring &buff, int nchars, bool spli
                 res = (unsigned char)b;
                 finished = true;
             } else {
-                size_t sz = mbrtowc(&res, &b, 1, &state);
+                size_t sz = std::mbrtowc(&res, &b, 1, &state);
                 if (sz == (size_t)-1) {
-                    memset(&state, 0, sizeof(state));
+                    std::memset(&state, 0, sizeof(state));
                 } else if (sz != (size_t)-2) {
                     finished = true;
                 }
@@ -351,17 +352,20 @@ static int read_one_char_at_a_time(int fd, wcstring &buff, int nchars, bool spli
 static int validate_read_args(const wchar_t *cmd, read_cmd_opts_t &opts, int argc,
                               const wchar_t *const *argv, parser_t &parser, io_streams_t &streams) {
     if (opts.prompt && opts.prompt_str) {
-        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd, L"-p", L"-P");
-        builtin_print_help(parser, streams, cmd, streams.err);
+        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd,
+                                  L"-p", L"-P");
+        builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
 
     if (opts.have_delimiter && opts.one_line) {
-        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd, L"--delimiter", L"--line");
+        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd,
+                                  L"--delimiter", L"--line");
         return STATUS_INVALID_ARGS;
     }
     if (opts.one_line && opts.split_null) {
-        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd, L"-z", L"--line");
+        streams.err.append_format(_(L"%ls: Options %ls and %ls cannot be used together\n"), cmd,
+                                  L"-z", L"--line");
         return STATUS_INVALID_ARGS;
     }
 
@@ -374,7 +378,7 @@ static int validate_read_args(const wchar_t *cmd, read_cmd_opts_t &opts, int arg
 
     if ((opts.place & ENV_UNEXPORT) && (opts.place & ENV_EXPORT)) {
         streams.err.append_format(BUILTIN_ERR_EXPUNEXP, cmd);
-        builtin_print_help(parser, streams, cmd, streams.err);
+        builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
 
@@ -382,7 +386,7 @@ static int validate_read_args(const wchar_t *cmd, read_cmd_opts_t &opts, int arg
             (opts.place & ENV_UNIVERSAL ? 1 : 0) >
         1) {
         streams.err.append_format(BUILTIN_ERR_GLOCAL, cmd);
-        builtin_print_help(parser, streams, cmd, streams.err);
+        builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
 
@@ -405,7 +409,7 @@ static int validate_read_args(const wchar_t *cmd, read_cmd_opts_t &opts, int arg
     for (int i = 0; i < argc; i++) {
         if (!valid_var_name(argv[i])) {
             streams.err.append_format(BUILTIN_ERR_VARNAME, cmd, argv[i]);
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_INVALID_ARGS;
         }
     }
@@ -450,32 +454,34 @@ int builtin_read(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         opts.shell = false;
     }
 
-    wchar_t * const *var_ptr = argv;
-    auto vars_left = [&] () { return argv + argc - var_ptr; };
-    auto clear_remaining_vars = [&] () {
+    wchar_t *const *var_ptr = argv;
+    auto vars_left = [&]() { return argv + argc - var_ptr; };
+    auto clear_remaining_vars = [&]() {
         while (vars_left()) {
             parser.vars().set_empty(*var_ptr, opts.place);
             ++var_ptr;
         }
     };
 
-    // Normally, we either consume a line of input or all available input. But if we are reading a line at
-    // a time, we need a middle ground where we only consume as many lines as we need to fill the given vars.
+    // Normally, we either consume a line of input or all available input. But if we are reading a
+    // line at a time, we need a middle ground where we only consume as many lines as we need to
+    // fill the given vars.
     do {
         buff.clear();
 
-        // TODO: Determine if the original set of conditions for interactive reads should be reinstated:
-        // if (isatty(0) && streams.stdin_fd == STDIN_FILENO && !split_null) {
+        // TODO: Determine if the original set of conditions for interactive reads should be
+        // reinstated: if (isatty(0) && streams.stdin_fd == STDIN_FILENO && !split_null) {
         int stream_stdin_is_a_tty = isatty(streams.stdin_fd);
         if (stream_stdin_is_a_tty && !opts.split_null) {
             // Read interactively using reader_readline(). This does not support splitting on null.
-            exit_res = read_interactive(buff, opts.nchars, opts.shell, opts.silent, opts.prompt,
-                                        opts.right_prompt, opts.commandline);
+            exit_res = read_interactive(parser, buff, opts.nchars, opts.shell, opts.silent,
+                                        opts.prompt, opts.right_prompt, opts.commandline);
         } else if (!opts.nchars && !stream_stdin_is_a_tty &&
                    lseek(streams.stdin_fd, 0, SEEK_CUR) != -1) {
             exit_res = read_in_chunks(streams.stdin_fd, buff, opts.split_null);
         } else {
-            exit_res = read_one_char_at_a_time(streams.stdin_fd, buff, opts.nchars, opts.split_null);
+            exit_res =
+                read_one_char_at_a_time(streams.stdin_fd, buff, opts.nchars, opts.split_null);
         }
 
         if (exit_res != STATUS_CMD_OK) {
@@ -497,7 +503,8 @@ int builtin_read(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             // Every character is a separate token with one wrinkle involving non-array mode where
             // the final var gets the remaining characters as a single string.
             size_t x = std::max(static_cast<size_t>(1), buff.size());
-            size_t n_splits = (opts.array || static_cast<size_t>(vars_left()) > x) ? x : vars_left();
+            size_t n_splits =
+                (opts.array || static_cast<size_t>(vars_left()) > x) ? x : vars_left();
             wcstring_list_t chars;
             chars.reserve(n_splits);
 
@@ -564,7 +571,7 @@ int builtin_read(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
                 // is set to the remaining string.
                 split_about(buff.begin(), buff.end(), opts.delimiter.begin(), opts.delimiter.end(),
                             &splits, argc - 1);
-                assert(splits.size() <= (size_t) vars_left());
+                assert(splits.size() <= (size_t)vars_left());
                 for (const auto &split : splits) {
                     vars.set_one(*var_ptr++, opts.place, split);
                 }

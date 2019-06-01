@@ -27,7 +27,7 @@ struct function_properties_t {
     wcstring_list_t named_arguments;
 
     /// Set to true if invoking this function shadows the variables of the underlying function.
-    bool shadow_scope;
+    bool shadow_scope{true};
 };
 
 /// Structure describing a function. This is used by the parser to store data on a function while
@@ -67,14 +67,14 @@ bool function_get_definition(const wcstring &name, wcstring &out_definition);
 bool function_get_desc(const wcstring &name, wcstring &out_desc);
 
 /// Sets the description of the function with the name \c name.
-void function_set_desc(const wcstring &name, const wcstring &desc);
+void function_set_desc(const wcstring &name, const wcstring &desc, parser_t &parser);
 
 /// Returns true if the function with the name name exists.
 /// This may autoload.
-int function_exists(const wcstring &name);
+int function_exists(const wcstring &name, parser_t &parser);
 
 /// Attempts to load a function if not yet loaded. This is used by the completion machinery.
-void function_load(const wcstring &name);
+void function_load(const wcstring &name, parser_t &parser);
 
 /// Returns true if the function with the name name exists, without triggering autoload.
 int function_exists_no_autoload(const wcstring &name, const environment_t &vars);
@@ -109,8 +109,7 @@ std::map<wcstring, env_var_t> function_get_inherit_vars(const wcstring &name);
 bool function_copy(const wcstring &name, const wcstring &new_name);
 
 /// Prepares the environment for executing a function.
-void function_prepare_environment(env_stack_t &vars, const wcstring &name,
-                                  const wchar_t *const *argv,
+void function_prepare_environment(env_stack_t &vars, const wcstring &name, wcstring_list_t argv,
                                   const std::map<wcstring, env_var_t> &inherited_vars);
 
 /// Observes that fish_function_path has changed.

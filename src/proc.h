@@ -12,7 +12,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include <list>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -25,23 +25,23 @@
 #include "topic_monitor.h"
 
 /// Types of processes.
-enum process_type_t {
+enum class process_type_t {
     /// A regular external command.
-    EXTERNAL,
+    external,
     /// A builtin command.
-    INTERNAL_BUILTIN,
+    builtin,
     /// A shellscript function.
-    INTERNAL_FUNCTION,
+    function,
     /// A block of commands, represented as a node.
-    INTERNAL_BLOCK_NODE,
+    block_node,
     /// The exec builtin.
-    INTERNAL_EXEC
+    exec,
 };
 
-enum {
-    JOB_CONTROL_ALL,
-    JOB_CONTROL_INTERACTIVE,
-    JOB_CONTROL_NONE,
+enum class job_control_t {
+    all,
+    interactive,
+    none,
 };
 
 /// A proc_status_t is a value type that encapsulates logic around exited vs stopped vs signaled,
@@ -113,6 +113,10 @@ class proc_status_t {
 /// A structure representing a "process" internal to fish. This is backed by a pthread instead of a
 /// separate process.
 class internal_proc_t {
+    /// An identifier for internal processes.
+    /// This is used for logging purposes only.
+    const uint64_t internal_proc_id_;
+
     /// Whether the process has exited.
     std::atomic<bool> exited_{};
 
@@ -130,6 +134,10 @@ class internal_proc_t {
         assert(exited() && "Process is not exited");
         return status_.load(std::memory_order_relaxed);
     }
+
+    uint64_t get_id() const { return internal_proc_id_; }
+
+    internal_proc_t();
 };
 
 /// A structure representing a single fish process. Contains variables for tracking process state
@@ -137,21 +145,23 @@ class internal_proc_t {
 /// process, an internal builtin which may or may not spawn a fake IO process during execution, a
 /// shellscript function or a block of commands to be evaluated by calling eval. Lastly, this
 /// process can be the result of an exec command. The role of this process_t is determined by the
-/// type field, which can be one of EXTERNAL, INTERNAL_BUILTIN, INTERNAL_FUNCTION, INTERNAL_EXEC.
+/// type field, which can be one of process_type_t::external, process_type_t::builtin,
+/// process_type_t::function, process_type_t::exec.
 ///
 /// The process_t contains information on how the process should be started, such as command name
 /// and arguments, as well as runtime information on the status of the actual physical process which
 /// represents it. Shellscript functions, builtins and blocks of code may all need to spawn an
 /// external process that handles the piping and redirecting of IO for them.
 ///
-/// If the process is of type EXTERNAL or INTERNAL_EXEC, argv is the argument array and actual_cmd
-/// is the absolute path of the command to execute.
+/// If the process is of type process_type_t::external or process_type_t::exec, argv is the argument
+/// array and actual_cmd is the absolute path of the command to execute.
 ///
-/// If the process is of type INTERNAL_BUILTIN, argv is the argument vector, and argv[0] is the name
-/// of the builtin command.
+/// If the process is of type process_type_t::builtin, argv is the argument vector, and argv[0] is
+/// the name of the builtin command.
 ///
-/// If the process is of type INTERNAL_FUNCTION, argv is the argument vector, and argv[0] is the
-/// name of the shellscript function.
+/// If the process is of type process_type_t::function, argv is the argument vector, and argv[0] is
+/// the name of the shellscript function.
+class parser_t;
 class process_t {
    private:
     null_terminated_array_t<wchar_t> argv_array;
@@ -169,9 +179,8 @@ class process_t {
     bool is_first_in_job{false};
     bool is_last_in_job{false};
 
-    /// Type of process. Can be one of \c EXTERNAL, \c INTERNAL_BUILTIN, \c INTERNAL_FUNCTION, \c
-    /// INTERNAL_EXEC.
-    enum process_type_t type { EXTERNAL };
+    /// Type of process.
+    process_type_t type{process_type_t::external};
 
     /// For internal block processes only, the node offset of the statement.
     /// This is always either block, ifs, or switchs, never boolean or decorated.
@@ -208,7 +217,7 @@ class process_t {
     /// launch. This helps us avoid spurious waitpid calls.
     void check_generations_before_launch();
 
-    /// Actual command to pass to exec in case of EXTERNAL or INTERNAL_EXEC.
+    /// Actual command to pass to exec in case of process_type_t::external or process_type_t::exec.
     wcstring actual_cmd;
 
     /// Generation counts for reaping.
@@ -228,12 +237,10 @@ class process_t {
     bool stopped{false};
     /// Reported status value.
     proc_status_t status{};
-#ifdef HAVE__PROC_SELF_STAT
     /// Last time of cpu time check.
     struct timeval last_time {};
     /// Number of jiffies spent in process at last cpu time check.
     unsigned long last_jiffies{0};
-#endif
 };
 
 typedef std::unique_ptr<process_t> process_ptr_t;
@@ -257,25 +264,10 @@ enum class job_flag_t {
     JOB_CONTROL,
     /// Whether the job wants to own the terminal when in the foreground.
     TERMINAL,
+    /// This job is disowned, and should be removed from the active jobs list.
+    DISOWN_REQUESTED,
 
     JOB_FLAG_COUNT
-};
-
-/// A collection of status and pipestatus.
-struct statuses_t {
-    /// Status of the last job to exit.
-    int status{0};
-
-    /// Pipestatus value.
-    std::vector<int> pipestatus{};
-
-    /// Return a statuses for a single process status.
-    static statuses_t just(int s) {
-        statuses_t result{};
-        result.status = s;
-        result.pipestatus.push_back(s);
-        return result;
-    }
 };
 
 template <>
@@ -352,8 +344,7 @@ class job_t {
     /// untruncated job string when we don't care what the job is, only which of the currently
     /// running jobs it is.
     wcstring preview() const {
-        if (processes.empty())
-            return L"";
+        if (processes.empty()) return L"";
         // Note argv0 may be empty in e.g. a block process.
         const wchar_t *argv0 = processes.front()->argv0();
         wcstring result = argv0 ? argv0 : L"null";
@@ -396,6 +387,10 @@ class job_t {
     bool is_completed() const;
     /// The job is in a stopped state
     bool is_stopped() const;
+    /// The job is OK to be externally visible, e.g. to the user via `jobs`
+    bool is_visible() const {
+        return !is_completed() && is_constructed() && !get_flag(job_flag_t::DISOWN_REQUESTED);
+    };
 
     /// \return the parent job, or nullptr.
     const std::shared_ptr<job_t> get_parent() const { return parent_job; }
@@ -403,16 +398,14 @@ class job_t {
     /// \return whether this job and its parent chain are fully constructed.
     bool job_chain_is_fully_constructed() const;
 
-    // (This function would just be called `continue` but that's obviously a reserved keyword)
     /// Resume a (possibly) stopped job. Puts job in the foreground.  If cont is true, restore the
     /// saved terminal modes and send the process group a SIGCONT signal to wake it up before we
     /// block.
     ///
-    /// \param send_sigcont Whether SIGCONT should be sent to the job if it is in the foreground.
-    void continue_job(bool send_sigcont);
-
-    /// Promotes the job to the front of the job list.
-    void promote();
+    /// \param reclaim_foreground_pgrp whether, when the job finishes or stops, to reclaim the
+    /// foreground pgrp (via tcsetpgrp). \param send_sigcont Whether SIGCONT should be sent to the
+    /// job if it is in the foreground.
+    void continue_job(parser_t &parser, bool reclaim_foreground_pgrp, bool send_sigcont);
 
     /// Send the specified signal to all processes in this job.
     /// \return true on success, false on failure.
@@ -430,111 +423,57 @@ class job_t {
 };
 
 /// Whether we are reading from the keyboard right now.
-bool shell_is_interactive(void);
-
-/// Whether we are running a subshell command.
-extern bool is_subshell;
-
-/// Whether we are running a block of commands.
-extern bool is_block;
-
-/// Whether we are running due to a `breakpoint` command.
-extern bool is_breakpoint;
+bool shell_is_interactive();
 
 /// Whether this shell is attached to the keyboard at all.
-extern bool is_interactive_session;
+bool is_interactive_session();
+void set_interactive_session(bool flag);
 
 /// Whether we are a login shell.
-extern bool is_login;
-
-/// Whether we are running an event handler. This is not a bool because we keep count of the event
-/// nesting level.
-extern int is_event;
-
-// List of jobs. We sometimes mutate this while iterating - hence it must be a list, not a vector
-typedef std::list<shared_ptr<job_t>> job_list_t;
-
-bool job_list_is_empty(void);
-
-/// A class to aid iteration over jobs list
-class job_iterator_t {
-    job_list_t *const job_list;
-    job_list_t::iterator current, end;
-
-   public:
-    void reset(void);
-
-    job_t *next() {
-        job_t *job = NULL;
-        if (current != end) {
-            job = current->get();
-            ++current;
-        }
-        return job;
-    }
-
-    explicit job_iterator_t(job_list_t &jobs);
-    job_iterator_t();
-    size_t count() const;
-};
-
-/// Whether a universal variable barrier roundtrip has already been made for the currently executing
-/// command. Such a roundtrip only needs to be done once on a given command, unless a universal
-/// variable value is changed. Once this has been done, this variable is set to 1, so that no more
-/// roundtrips need to be done.
-///
-/// Both setting it to one when it should be zero and the opposite may cause concurrency bugs.
-bool get_proc_had_barrier();
-void set_proc_had_barrier(bool flag);
-
-/// The current job control mode.
-///
-/// Must be one of JOB_CONTROL_ALL, JOB_CONTROL_INTERACTIVE and JOB_CONTROL_NONE.
-extern int job_control_mode;
+bool get_login();
+void mark_login();
 
 /// If this flag is set, fish will never fork or run execve. It is used to put fish into a syntax
 /// verifier mode where fish tries to validate the syntax of a file but doesn't actually do
 /// anything.
-extern int no_exec;
+bool no_exec();
+void mark_no_exec();
 
-/// Sets the status of the last process to exit.
-void proc_set_last_statuses(statuses_t s);
+// List of jobs.
+typedef std::deque<shared_ptr<job_t>> job_list_t;
 
-/// Returns the status of the last process to exit.
-int proc_get_last_status();
-statuses_t proc_get_last_statuses();
-
-/// Notify the user about stopped or terminated jobs. Delete terminated jobs from the job list.
+/// The current job control mode.
 ///
-/// \param interactive whether interactive jobs should be reaped as well
-bool job_reap(bool interactive);
+/// Must be one of job_control_t::all, job_control_t::interactive and job_control_t::none.
+job_control_t get_job_control_mode();
+void set_job_control_mode(job_control_t mode);
+
+/// Notify the user about stopped or terminated jobs, and delete completed jobs from the job list.
+/// If \p interactive is set, allow removing interactive jobs; otherwise skip them.
+/// \return whether text was printed to stdout.
+class parser_t;
+bool job_reap(parser_t &parser, bool interactive);
 
 /// Mark a process as failed to execute (and therefore completed).
 void job_mark_process_as_failed(const std::shared_ptr<job_t> &job, const process_t *p);
 
-#ifdef HAVE__PROC_SELF_STAT
 /// Use the procfs filesystem to look up how many jiffies of cpu time was used by this process. This
 /// function is only available on systems with the procfs file entry 'stat', i.e. Linux.
 unsigned long proc_get_jiffies(process_t *p);
 
 /// Update process time usage for all processes by calling the proc_get_jiffies function for every
 /// process of every job.
-void proc_update_jiffies();
-#endif
+void proc_update_jiffies(parser_t &parser);
 
 /// Perform a set of simple sanity checks on the job list. This includes making sure that only one
 /// job is in the foreground, that every process is in a valid state, etc.
-void proc_sanity_check();
+void proc_sanity_check(const parser_t &parser);
 
-/// Send a process/job exit event notification. This function is a convenience wrapper around
-/// event_fire().
-void proc_fire_event(const wchar_t *msg, event_type_t type, pid_t pid, int status);
+/// Create a process/job exit event notification.
+event_t proc_create_event(const wchar_t *msg, event_type_t type, pid_t pid, int status);
 
 /// Initializations.
 void proc_init();
-
-/// Clean up before exiting.
-void proc_destroy();
 
 /// Set new value for is_interactive flag, saving previous value. If needed, update signal handlers.
 void proc_push_interactive(int value);
@@ -543,7 +482,7 @@ void proc_push_interactive(int value);
 void proc_pop_interactive();
 
 /// Wait for any process finishing, or receipt of a signal.
-void proc_wait_any();
+void proc_wait_any(parser_t &parser);
 
 /// Set and get whether we are in initialization.
 // Hackish. In order to correctly report the origin of code with no associated file, we need to
@@ -552,13 +491,14 @@ void set_is_within_fish_initialization(bool flag);
 bool is_within_fish_initialization();
 
 /// Terminate all background jobs
-void hup_background_jobs();
+void hup_background_jobs(const parser_t &parser);
 
 /// Give ownership of the terminal to the specified job.
 ///
 /// \param j The job to give the terminal to.
-/// \param restore_attrs If this variable is set, we are giving back control to a job that was previously
-/// stopped. In that case, we need to set the terminal attributes to those saved in the job.
+/// \param restore_attrs If this variable is set, we are giving back control to a job that was
+/// previously stopped. In that case, we need to set the terminal attributes to those saved in the
+/// job.
 bool terminal_give_to_job(const job_t *j, bool restore_attrs);
 
 /// Given that we are about to run a builtin, acquire the terminal if it is owned by the given job.
@@ -573,6 +513,8 @@ void add_disowned_pgid(pid_t pgid);
 ///   the Linux kernel will use it for kernel processes.
 /// -1 should not be used; it is a possible return value of the getpgid()
 ///   function
-enum { INVALID_PID  = -2 };
+enum { INVALID_PID = -2 };
+
+bool have_proc_stat();
 
 #endif

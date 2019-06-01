@@ -7,11 +7,10 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/stat.h>
+#include <cstring>
 #if defined(__linux__)
 #include <sys/statfs.h>
 #endif
@@ -19,15 +18,17 @@
 #include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cwchar>
 
+#include <atomic>
 #include <string>
 #include <unordered_map>
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
-#include "wutil.h"     // IWYU pragma: keep
+#include "flog.h"
+#include "wutil.h"  // IWYU pragma: keep
 
 typedef std::string cstring;
 
@@ -39,7 +40,7 @@ static owning_lock<std::unordered_map<wcstring, wcstring>> wgettext_map;
 bool wreaddir_resolving(DIR *dir, const wcstring &dir_path, wcstring &out_name, bool *out_is_dir) {
     struct dirent *result = readdir(dir);
     if (!result) {
-        out_name = L"";
+        out_name.clear();
         return false;
     }
 
@@ -85,7 +86,7 @@ bool wreaddir_resolving(DIR *dir, const wcstring &dir_path, wcstring &out_name, 
 bool wreaddir(DIR *dir, wcstring &out_name) {
     struct dirent *result = readdir(dir);
     if (!result) {
-        out_name = L"";
+        out_name.clear();
         return false;
     }
 
@@ -130,7 +131,7 @@ const wcstring wgetcwd() {
         return str2wcstring(res);
     }
 
-    debug(0, _(L"getcwd() failed with errno %d/%s"), errno, strerror(errno));
+    FLOGF(error, _(L"getcwd() failed with errno %d/%s"), errno, std::strerror(errno));
     return wcstring();
 }
 
@@ -176,6 +177,8 @@ FILE *wfopen(const wcstring &path, const char *mode) {
 }
 
 bool set_cloexec(int fd) {
+    // Note we don't want to overwrite existing flags like O_NONBLOCK which may be set. So fetch the
+    // existing flags and OR in our new one.
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags < 0) {
         return false;
@@ -186,20 +189,19 @@ bool set_cloexec(int fd) {
     return fcntl(fd, F_SETFD, flags | FD_CLOEXEC) >= 0;
 }
 
-static int wopen_internal(const wcstring &pathname, int flags, mode_t mode, bool cloexec) {
+int open_cloexec(const std::string &cstring, int flags, mode_t mode, bool cloexec) {
     ASSERT_IS_NOT_FORKED_CHILD();
-    cstring tmp = wcs2string(pathname);
     int fd;
 
 #ifdef O_CLOEXEC
     // Prefer to use O_CLOEXEC. It has to both be defined and nonzero.
     if (cloexec) {
-        fd = open(tmp.c_str(), flags | O_CLOEXEC, mode);
+        fd = open(cstring.c_str(), flags | O_CLOEXEC, mode);
     } else {
-        fd = open(tmp.c_str(), flags, mode);
+        fd = open(cstring.c_str(), flags, mode);
     }
 #else
-    fd = open(tmp.c_str(), flags, mode);
+    fd = open(cstring.c_str(), flags, mode);
     if (fd >= 0 && !set_cloexec(fd)) {
         close(fd);
         fd = -1;
@@ -209,7 +211,8 @@ static int wopen_internal(const wcstring &pathname, int flags, mode_t mode, bool
 }
 
 int wopen_cloexec(const wcstring &pathname, int flags, mode_t mode) {
-    return wopen_internal(pathname, flags, mode, true);
+    cstring tmp = wcs2string(pathname);
+    return open_cloexec(tmp, flags, mode, true);
 }
 
 DIR *wopendir(const wcstring &name) {
@@ -229,13 +232,9 @@ dir_t::~dir_t() {
     }
 }
 
-bool dir_t::valid() const {
-    return this->dir != nullptr;
-}
+bool dir_t::valid() const { return this->dir != nullptr; }
 
-bool dir_t::read(wcstring &name) {
-    return wreaddir(this->dir, name);
-}
+bool dir_t::read(wcstring &name) { return wreaddir(this->dir, name); }
 
 int wstat(const wcstring &file_name, struct stat *buf) {
     const cstring tmp = wcs2string(file_name);
@@ -260,9 +259,9 @@ int wunlink(const wcstring &file_name) {
 void wperror(const wchar_t *s) {
     int e = errno;
     if (s[0] != L'\0') {
-        fwprintf(stderr, L"%ls: ", s);
+        std::fwprintf(stderr, L"%ls: ", s);
     }
-    fwprintf(stderr, L"%s\n", strerror(e));
+    std::fwprintf(stderr, L"%s\n", std::strerror(e));
 }
 
 int make_fd_nonblocking(int fd) {
@@ -287,7 +286,7 @@ int make_fd_blocking(int fd) {
 
 int fd_check_is_remote(int fd) {
 #if defined(__linux__)
-    struct statfs buf{0};
+    struct statfs buf {};
     if (fstatfs(fd, &buf) < 0) {
         return -1;
     }
@@ -318,7 +317,7 @@ int fd_check_is_remote(int fd) {
 }
 
 static inline void safe_append(char *buffer, const char *s, size_t buffsize) {
-    strncat(buffer, s, buffsize - strlen(buffer) - 1);
+    std::strncat(buffer, s, buffsize - std::strlen(buffer) - 1);
 }
 
 // In general, strerror is not async-safe, and therefore we cannot use it directly. So instead we
@@ -328,7 +327,7 @@ const char *safe_strerror(int err) {
 #if defined(__UCLIBC__)
     // uClibc does not have sys_errlist, however, its strerror is believed to be async-safe.
     // See issue #808.
-    return strerror(err);
+    return std::strerror(err);
 #elif defined(HAVE__SYS__ERRS) || defined(HAVE_SYS_ERRLIST)
 #ifdef HAVE_SYS_ERRLIST
     if (err >= 0 && err < sys_nerr && sys_errlist[err] != NULL) {
@@ -373,7 +372,7 @@ void safe_perror(const char *message) {
     safe_append(buff, safe_strerror(err), sizeof buff);
     safe_append(buff, "\n", sizeof buff);
 
-    ignore_result(write(STDERR_FILENO, buff, strlen(buff)));
+    ignore_result(write(STDERR_FILENO, buff, std::strlen(buff)));
     errno = err;
 }
 
@@ -532,8 +531,8 @@ static void wgettext_really_init() {
 /// For wgettext: Internal init function. Automatically called when a translation is first
 /// requested.
 static void wgettext_init_if_necessary() {
-    static pthread_once_t once = PTHREAD_ONCE_INIT;
-    pthread_once(&once, wgettext_really_init);
+    static std::once_flag s_wgettext_init{};
+    std::call_once(s_wgettext_init, wgettext_really_init);
 }
 
 const wcstring &wgettext(const wchar_t *in) {
@@ -604,7 +603,7 @@ int fish_iswgraph(wint_t wc) {
 /// Convenience variants on fish_wcwswidth().
 ///
 /// See fallback.h for the normal definitions.
-int fish_wcswidth(const wchar_t *str) { return fish_wcswidth(str, wcslen(str)); }
+int fish_wcswidth(const wchar_t *str) { return fish_wcswidth(str, std::wcslen(str)); }
 
 /// Convenience variants on fish_wcwswidth().
 ///
@@ -612,7 +611,7 @@ int fish_wcswidth(const wchar_t *str) { return fish_wcswidth(str, wcslen(str)); 
 int fish_wcswidth(const wcstring &str) { return fish_wcswidth(str.c_str(), str.size()); }
 
 locale_t fish_c_locale() {
-    static locale_t loc = newlocale(LC_ALL_MASK, "C", NULL);
+    static const locale_t loc = newlocale(LC_ALL_MASK, "C", NULL);
     return loc;
 }
 
@@ -635,7 +634,7 @@ int fish_wcstoi(const wchar_t *str, const wchar_t **endptr, int base) {
 
     errno = 0;
     wchar_t *_endptr;
-    long result = wcstol(str, &_endptr, base);
+    long result = std::wcstol(str, &_endptr, base);
     if (result > INT_MAX) {
         result = INT_MAX;
         errno = ERANGE;
@@ -673,7 +672,7 @@ long fish_wcstol(const wchar_t *str, const wchar_t **endptr, int base) {
 
     errno = 0;
     wchar_t *_endptr;
-    long result = wcstol(str, &_endptr, base);
+    long result = std::wcstol(str, &_endptr, base);
     while (iswspace(*_endptr)) ++_endptr;  // skip trailing whitespace
     if (!errno && *_endptr) {
         if (_endptr == str) {
@@ -704,7 +703,7 @@ long long fish_wcstoll(const wchar_t *str, const wchar_t **endptr, int base) {
 
     errno = 0;
     wchar_t *_endptr;
-    long long result = wcstoll(str, &_endptr, base);
+    long long result = std::wcstoll(str, &_endptr, base);
     while (iswspace(*_endptr)) ++_endptr;  // skip trailing whitespace
     if (!errno && *_endptr) {
         if (_endptr == str) {
@@ -737,7 +736,7 @@ unsigned long long fish_wcstoull(const wchar_t *str, const wchar_t **endptr, int
 
     errno = 0;
     wchar_t *_endptr;
-    unsigned long long result = wcstoull(str, &_endptr, base);
+    unsigned long long result = std::wcstoull(str, &_endptr, base);
     while (iswspace(*_endptr)) ++_endptr;  // skip trailing whitespace
     if (!errno && *_endptr) {
         if (_endptr == str) {
@@ -755,7 +754,7 @@ unsigned long long fish_wcstoull(const wchar_t *str, const wchar_t **endptr, int
 double fish_wcstod(const wchar_t *str, wchar_t **endptr) {
     // The "fast path." If we're all ASCII and we fit inline, use strtod().
     char narrow[128];
-    size_t len = wcslen(str);
+    size_t len = std::wcslen(str);
     size_t len_plus_0 = 1 + len;
     auto is_digit = [](wchar_t c) { return '0' <= c && c <= '9'; };
     if (len_plus_0 <= sizeof narrow && std::all_of(str, str + len, is_digit)) {
@@ -811,6 +810,15 @@ file_id_t file_id_for_path(const wcstring &path) {
     file_id_t result = kInvalidFileID;
     struct stat buf = {};
     if (0 == wstat(path, &buf)) {
+        result = file_id_t::from_stat(buf);
+    }
+    return result;
+}
+
+file_id_t file_id_for_path(const std::string &path) {
+    file_id_t result = kInvalidFileID;
+    struct stat buf = {};
+    if (0 == stat(path.c_str(), &buf)) {
         result = file_id_t::from_stat(buf);
     }
     return result;

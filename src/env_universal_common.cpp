@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+#include <cstring>
 #ifdef __CYGWIN__
 #include <sys/mman.h>
 #endif
@@ -28,7 +28,7 @@
 #include <sys/time.h>   // IWYU pragma: keep
 #include <sys/types.h>  // IWYU pragma: keep
 #include <unistd.h>
-#include <wchar.h>
+#include <cwchar>
 
 #include <atomic>
 #include <map>
@@ -40,11 +40,12 @@
 #include "env.h"
 #include "env_universal_common.h"
 #include "fallback.h"  // IWYU pragma: keep
+#include "flog.h"
 #include "path.h"
 #include "utf8.h"
 #include "util.h"  // IWYU pragma: keep
-#include "wutil.h"
 #include "wcstringutil.h"
+#include "wutil.h"
 
 #if __APPLE__
 #define FISH_NOTIFYD_AVAILABLE 1
@@ -123,7 +124,7 @@ static maybe_t<wcstring> default_vars_path() {
 /// On success, updates the cursor to just past the command.
 static bool match(const wchar_t **inout_cursor, const char *cmd) {
     const wchar_t *cursor = *inout_cursor;
-    size_t len = strlen(cmd);
+    size_t len = std::strlen(cmd);
     if (!std::equal(cmd, cmd + len, cursor)) {
         return false;
     }
@@ -136,7 +137,7 @@ static bool match(const wchar_t **inout_cursor, const char *cmd) {
 static bool is_universal_safe_to_encode_directly(wchar_t c) {
     if (c < 32 || c > 128) return false;
 
-    return iswalnum(c) || wcschr(L"/_", c);
+    return iswalnum(c) || std::wcschr(L"/_", c);
 }
 
 /// Escape specified string.
@@ -195,11 +196,11 @@ static bool append_file_entry(env_var_t::env_var_flags_t flags, const wcstring &
 
     // Append variable name like "fish_color_cwd".
     if (!valid_var_name(key_in)) {
-        debug(0, L"Illegal variable name: '%ls'", key_in.c_str());
+        FLOGF(error, L"Illegal variable name: '%ls'", key_in.c_str());
         success = false;
     }
     if (success && !append_utf8(key_in, result, storage)) {
-        debug(0, L"Could not convert %ls to narrow character string", key_in.c_str());
+        FLOGF(error, L"Could not convert %ls to narrow character string", key_in.c_str());
         success = false;
     }
 
@@ -210,7 +211,7 @@ static bool append_file_entry(env_var_t::env_var_flags_t flags, const wcstring &
 
     // Append value.
     if (success && !append_utf8(full_escape(val_in), result, storage)) {
-        debug(0, L"Could not convert %ls to narrow character string", val_in.c_str());
+        FLOGF(error, L"Could not convert %ls to narrow character string", val_in.c_str());
         success = false;
     }
 
@@ -229,7 +230,7 @@ static bool append_file_entry(env_var_t::env_var_flags_t flags, const wcstring &
 }
 
 /// Encoding of a null string.
-static const wchar_t * const ENV_NULL = L"\x1d";
+static const wchar_t *const ENV_NULL = L"\x1d";
 
 /// Character used to separate arrays in universal variables file.
 /// This is 30, the ASCII record separator.
@@ -247,7 +248,7 @@ static wcstring encode_serialized(const wcstring_list_t &vals) {
     return join_strings(vals, UVAR_ARRAY_SEP);
 }
 
-env_universal_t::env_universal_t(wcstring path) : explicit_vars_path(std::move(path)) {}
+env_universal_t::env_universal_t(wcstring path) : narrow_vars_path(wcs2string(path)), explicit_vars_path(std::move(path)) {}
 
 maybe_t<env_var_t> env_universal_t::get(const wcstring &name) const {
     var_table_t::const_iterator where = vars.find(name);
@@ -400,7 +401,7 @@ void env_universal_t::load_from_fd(int fd, callback_data_list_t &callbacks) {
     }
 }
 
-bool env_universal_t::load_from_path(const wcstring &path, callback_data_list_t &callbacks) {
+bool env_universal_t::load_from_path(const std::string &path, callback_data_list_t &callbacks) {
     ASSERT_IS_LOCKED(lock);
 
     // Check to see if the file is unchanged. We do this again in load_from_fd, but this avoids
@@ -411,7 +412,7 @@ bool env_universal_t::load_from_path(const wcstring &path, callback_data_list_t 
     }
 
     bool result = false;
-    int fd = wopen_cloexec(path, O_RDONLY);
+    int fd = open_cloexec(path, O_RDONLY);
     if (fd >= 0) {
         debug(5, L"universal log reading from file");
         this->load_from_fd(fd, callbacks);
@@ -421,6 +422,10 @@ bool env_universal_t::load_from_path(const wcstring &path, callback_data_list_t 
     return result;
 }
 
+bool env_universal_t::load_from_path(const wcstring &path, callback_data_list_t &callbacks) {
+    std::string tmp = wcs2string(path);
+    return load_from_path(tmp, callbacks);
+}
 /// Serialize the contents to a string.
 std::string env_universal_t::serialize_with_vars(const var_table_t &vars) {
     std::string storage;
@@ -433,7 +438,8 @@ std::string env_universal_t::serialize_with_vars(const var_table_t &vars) {
         // variable; soldier on.
         const wcstring &key = kv.first;
         const env_var_t &var = kv.second;
-        append_file_entry(var.get_flags(), key, encode_serialized(var.as_list()), &contents, &storage);
+        append_file_entry(var.get_flags(), key, encode_serialized(var.as_list()), &contents,
+                          &storage);
     }
     return contents;
 }
@@ -445,8 +451,9 @@ bool env_universal_t::write_to_fd(int fd, const wcstring &path) {
     bool success = true;
     std::string contents = serialize_with_vars(vars);
     if (write_loop(fd, contents.data(), contents.size()) < 0) {
-        const char *error = strerror(errno);
-        debug(0, _(L"Unable to write to universal variables file '%ls': %s"), path.c_str(), error);
+        const char *error = std::strerror(errno);
+        FLOGF(error, _(L"Unable to write to universal variables file '%ls': %s"), path.c_str(),
+             error);
         success = false;
     }
 
@@ -460,9 +467,9 @@ bool env_universal_t::write_to_fd(int fd, const wcstring &path) {
 bool env_universal_t::move_new_vars_file_into_place(const wcstring &src, const wcstring &dst) {
     int ret = wrename(src, dst);
     if (ret != 0) {
-        const char *error = strerror(errno);
-        debug(0, _(L"Unable to rename file from '%ls' to '%ls': %s"), src.c_str(), dst.c_str(),
-              error);
+        const char *error = std::strerror(errno);
+        FLOGF(error, _(L"Unable to rename file from '%ls' to '%ls': %s"), src.c_str(), dst.c_str(),
+             error);
     }
     return ret == 0;
 }
@@ -470,7 +477,7 @@ bool env_universal_t::move_new_vars_file_into_place(const wcstring &src, const w
 bool env_universal_t::initialize(callback_data_list_t &callbacks) {
     scoped_lock locker(lock);
     if (!explicit_vars_path.empty()) {
-        return load_from_path(explicit_vars_path, callbacks);
+        return load_from_path(narrow_vars_path, callbacks);
     }
 
     // Get the variables path; if there is none (e.g. HOME is bogus) it's hopeless.
@@ -496,6 +503,11 @@ bool env_universal_t::initialize(callback_data_list_t &callbacks) {
             }
         }
     }
+    // If we succeeded, we store the *default path*, not the legacy one.
+    if (success) {
+        explicit_vars_path = *vars_path;
+        narrow_vars_path = wcs2string(*vars_path);
+    }
     return success;
 }
 
@@ -510,19 +522,21 @@ bool env_universal_t::open_temporary_file(const wcstring &directory, wcstring *o
     int saved_errno;
     const wcstring tmp_name_template = directory + L"/fishd.tmp.XXXXXX";
 
+    char *narrow_str = nullptr;
     for (size_t attempt = 0; attempt < 10 && !success; attempt++) {
-        char *narrow_str = wcs2str(tmp_name_template);
+        narrow_str = wcs2str(tmp_name_template);
         int result_fd = fish_mkstemp_cloexec(narrow_str);
         saved_errno = errno;
         success = result_fd != -1;
         *out_fd = result_fd;
-        *out_path = str2wcstring(narrow_str);
-        free(narrow_str);
     }
 
+    *out_path = str2wcstring(narrow_str);
+    free(narrow_str);
+
     if (!success) {
-        const char *error = strerror(saved_errno);
-        debug(0, _(L"Unable to open temporary file '%ls': %s"), out_path->c_str(), error);
+        const char *error = std::strerror(saved_errno);
+        FLOGF(error, _(L"Unable to open temporary file '%ls': %s"), out_path->c_str(), error);
     }
     return success;
 }
@@ -549,7 +563,7 @@ static bool lock_uvar_file(int fd) {
     return check_duration(start_time);
 }
 
-bool env_universal_t::open_and_acquire_lock(const wcstring &path, int *out_fd) {
+bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd) {
     // Attempt to open the file for reading at the given path, atomically acquiring a lock. On BSD,
     // we can use O_EXLOCK. On Linux, we open the file, take a lock, and then compare fstat() to
     // stat(); if they match, it means that the file was not replaced before we acquired the lock.
@@ -570,7 +584,7 @@ bool env_universal_t::open_and_acquire_lock(const wcstring &path, int *out_fd) {
     int fd = -1;
     while (fd == -1) {
         double start_time = timef();
-        fd = wopen_cloexec(path, flags, 0644);
+        fd = open_cloexec(path, flags, 0644);
         if (fd == -1) {
             if (errno == EINTR) continue;  // signaled; try again
 #ifdef O_EXLOCK
@@ -583,8 +597,9 @@ bool env_universal_t::open_and_acquire_lock(const wcstring &path, int *out_fd) {
                 continue;
             }
 #endif
-            const char *error = strerror(errno);
-            debug(0, _(L"Unable to open universal variable file '%ls': %s"), path.c_str(), error);
+            const char *error = std::strerror(errno);
+            FLOGF(error, _(L"Unable to open universal variable file '%ls': %s"), path.c_str(),
+                 error);
             break;
         }
 
@@ -646,25 +661,28 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
     // instances of fish will not be able to obtain it. This seems to be a greater risk than that of
     // data loss on lockless NFS. Users who put their home directory on lockless NFS are playing
     // with fire anyways.
-    wcstring vars_path = explicit_vars_path;
-    if (vars_path.empty()) {
-        if (auto default_path = default_vars_path()) {
-            vars_path = default_path.acquire();
+    if (explicit_vars_path.empty()) {
+        // Initialize the vars path from the default one.
+        // In some cases we don't "initialize()" before, so we're doing that now.
+        // This should only happen once.
+        // FIXME: Why don't we initialize()?
+        auto def_vars_path = default_vars_path();
+        if (!def_vars_path) {
+            debug(2, L"No universal variable path available");
+            return false;
         }
-    }
-    if (vars_path.empty()) {
-        debug(2, L"No universal variable path available");
-        return false;
+        explicit_vars_path = *def_vars_path;
+        narrow_vars_path = wcs2string(explicit_vars_path);
     }
 
     // If we have no changes, just load.
     if (modified.empty()) {
-        this->load_from_path(vars_path, callbacks);
+        this->load_from_path(narrow_vars_path, callbacks);
         debug(5, L"universal log no modifications");
         return false;
     }
 
-    const wcstring directory = wdirname(vars_path);
+    const wcstring directory = wdirname(explicit_vars_path);
     bool success = true;
     int vars_fd = -1;
 
@@ -672,7 +690,7 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
 
     // Open the file.
     if (success) {
-        success = this->open_and_acquire_lock(vars_path, &vars_fd);
+        success = this->open_and_acquire_lock(narrow_vars_path, &vars_fd);
         if (!success) debug(5, L"universal log open_and_acquire_lock() failed");
     }
 
@@ -683,7 +701,7 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
     }
 
     if (success && ok_to_save) {
-        success = this->save(directory, vars_path);
+        success = this->save(directory, explicit_vars_path);
     }
 
     // Clean up.
@@ -801,7 +819,7 @@ uvar_format_t env_universal_t::format_for_contents(const std::string &s) {
         if (sscanf(line.c_str(), "# VERSION: %64s", versionbuf) != 1) continue;
 
         // Try reading the version.
-        if (!strcmp(versionbuf, UVARS_VERSION_3_0)) {
+        if (!std::strcmp(versionbuf, UVARS_VERSION_3_0)) {
             return uvar_format_t::fish_3_0;
         } else {
             // Unknown future version.
@@ -850,7 +868,7 @@ static const wchar_t *skip_spaces(const wchar_t *str) {
 bool env_universal_t::populate_1_variable(const wchar_t *input, env_var_t::env_var_flags_t flags,
                                           var_table_t *vars, wcstring *storage) {
     const wchar_t *str = skip_spaces(input);
-    const wchar_t *colon = wcschr(str, L':');
+    const wchar_t *colon = std::wcschr(str, L':');
     if (!colon) return false;
 
     // Parse out the value into storage, and decode it into a variable.
@@ -902,7 +920,7 @@ void env_universal_t::parse_message_30_internal(const wcstring &msgstr, var_tabl
 
 /// Parse message msg per fish 2.x format.
 void env_universal_t::parse_message_2x_internal(const wcstring &msgstr, var_table_t *vars,
-                                             wcstring *storage) {
+                                                wcstring *storage) {
     namespace f2x = fish2x_uvars;
     const wchar_t *const msg = msgstr.c_str();
     const wchar_t *cursor = msg;
@@ -926,7 +944,7 @@ void env_universal_t::parse_message_2x_internal(const wcstring &msgstr, var_tabl
 }
 
 /// Maximum length of hostname. Longer hostnames are truncated.
-#define HOSTNAME_LEN 32
+#define HOSTNAME_LEN 255
 
 /// Length of a MAC address.
 #define MAC_ADDRESS_MAX_LEN 6
@@ -946,7 +964,7 @@ static bool get_mac_address(unsigned char macaddr[MAC_ADDRESS_MAX_LEN],
         strncpy((char *)r.ifr_name, interface, sizeof r.ifr_name - 1);
         r.ifr_name[sizeof r.ifr_name - 1] = 0;
         if (ioctl(dummy, SIOCGIFHWADDR, &r) >= 0) {
-            memcpy(macaddr, r.ifr_hwaddr.sa_data, MAC_ADDRESS_MAX_LEN);
+            std::memcpy(macaddr, r.ifr_hwaddr.sa_data, MAC_ADDRESS_MAX_LEN);
             result = true;
         }
         close(dummy);
@@ -978,7 +996,7 @@ static bool get_mac_address(unsigned char macaddr[MAC_ADDRESS_MAX_LEN],
 
             size_t alen = sdl.sdl_alen;
             if (alen > MAC_ADDRESS_MAX_LEN) alen = MAC_ADDRESS_MAX_LEN;
-            memcpy(macaddr, sdl.sdl_data + sdl.sdl_nlen, alen);
+            std::memcpy(macaddr, sdl.sdl_data + sdl.sdl_nlen, alen);
             ok = true;
             break;
         }
@@ -996,8 +1014,9 @@ static bool get_mac_address(unsigned char macaddr[MAC_ADDRESS_MAX_LEN]) { return
 
 /// Function to get an identifier based on the hostname.
 bool get_hostname_identifier(wcstring &result) {
-    //The behavior of gethostname if the buffer size is insufficient differs by implementation and libc version
-    //Work around this by using a "guaranteed" sufficient buffer size then truncating the result.
+    // The behavior of gethostname if the buffer size is insufficient differs by implementation and
+    // libc version Work around this by using a "guaranteed" sufficient buffer size then truncating
+    // the result.
     bool success = false;
     char hostname[256] = {};
     if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -1053,8 +1072,8 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         bool errored = false;
         int fd = shm_open(path, O_RDWR | O_CREAT, 0600);
         if (fd < 0) {
-            const char *error = strerror(errno);
-            debug(0, _(L"Unable to open shared memory with path '%s': %s"), path, error);
+            const char *error = std::strerror(errno);
+            FLOGF(error, _(L"Unable to open shared memory with path '%s': %s"), path, error);
             errored = true;
         }
 
@@ -1063,9 +1082,9 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         if (!errored) {
             struct stat buf = {};
             if (fstat(fd, &buf) < 0) {
-                const char *error = strerror(errno);
-                debug(0, _(L"Unable to fstat shared memory object with path '%s': %s"), path,
-                      error);
+                const char *error = std::strerror(errno);
+                FLOGF(error, _(L"Unable to fstat shared memory object with path '%s': %s"), path,
+                     error);
                 errored = true;
             }
             size = buf.st_size;
@@ -1074,8 +1093,9 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         // Set the size, if it's too small.
         bool set_size = !errored && size < (off_t)sizeof(universal_notifier_shmem_t);
         if (set_size && ftruncate(fd, sizeof(universal_notifier_shmem_t)) < 0) {
-            const char *error = strerror(errno);
-            debug(0, _(L"Unable to truncate shared memory object with path '%s': %s"), path, error);
+            const char *error = std::strerror(errno);
+            FLOGF(error, _(L"Unable to truncate shared memory object with path '%s': %s"), path,
+                 error);
             errored = true;
         }
 
@@ -1084,9 +1104,9 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
             void *addr = mmap(NULL, sizeof(universal_notifier_shmem_t), PROT_READ | PROT_WRITE,
                               MAP_SHARED, fd, 0);
             if (addr == MAP_FAILED) {
-                const char *error = strerror(errno);
-                debug(0, _(L"Unable to memory map shared memory object with path '%s': %s"), path,
-                      error);
+                const char *error = std::strerror(errno);
+                FLOGF(error, _(L"Unable to memory map shared memory object with path '%s': %s"),
+                     path, error);
                 this->region = NULL;
             } else {
                 this->region = static_cast<universal_notifier_shmem_t *>(addr);
@@ -1365,7 +1385,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
 
         // Now return the smaller of the two values. If we get ULONG_MAX, it means there's no more
         // need to poll; in that case return 0.
-        unsigned long result = mini(readback_delay, polling_delay);
+        unsigned long result = std::min(readback_delay, polling_delay);
         if (result == ULONG_MAX) {
             result = 0;
         }
@@ -1378,7 +1398,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
             // Read back what we wrote. We do nothing with the value.
             while (this->readback_amount > 0) {
                 char buff[64];
-                size_t amt_to_read = mini(this->readback_amount, sizeof buff);
+                size_t amt_to_read = std::min(this->readback_amount, sizeof(buff));
                 ignore_result(read(this->pipe_fd, buff, amt_to_read));
                 this->readback_amount -= amt_to_read;
             }
@@ -1489,18 +1509,18 @@ void universal_notifier_named_pipe_t::make_pipe(const wchar_t *test_path) {
 
     int mkfifo_status = mkfifo(narrow_path.c_str(), 0600);
     if (mkfifo_status == -1 && errno != EEXIST) {
-        const char *error = strerror(errno);
+        const char *error = std::strerror(errno);
         const wchar_t *errmsg = _(L"Unable to make a pipe for universal variables using '%ls': %s");
-        debug(0, errmsg, vars_path.c_str(), error);
+        FLOGF(error, errmsg, vars_path.c_str(), error);
         pipe_fd = -1;
         return;
     }
 
     int fd = wopen_cloexec(vars_path, O_RDWR | O_NONBLOCK, 0600);
     if (fd < 0) {
-        const char *error = strerror(errno);
+        const char *error = std::strerror(errno);
         const wchar_t *errmsg = _(L"Unable to open a pipe for universal variables using '%ls': %s");
-        debug(0, errmsg, vars_path.c_str(), error);
+        FLOGF(error, errmsg, vars_path.c_str(), error);
         pipe_fd = -1;
         return;
     }

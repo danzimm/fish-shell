@@ -5,12 +5,12 @@
 
 #include <errno.h>
 #include <stdarg.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cstring>
+#include <cwchar>
 
 #include <cmath>
 #include <memory>
@@ -21,10 +21,11 @@
 #include "builtin.h"
 #include "common.h"
 #include "io.h"
+#include "parser.h"
 #include "wutil.h"  // IWYU pragma: keep
 
-using std::unique_ptr;
 using std::move;
+using std::unique_ptr;
 
 namespace {
 namespace test_expressions {
@@ -529,7 +530,9 @@ unique_ptr<expression> test_parser::parse_expression(unsigned int start, unsigne
         case 4: {
             return parse_4_arg_expression(start, end);
         }
-        default: { return parse_combining_expression(start, end); }
+        default: {
+            return parse_combining_expression(start, end);
+        }
     }
 }
 
@@ -623,7 +626,7 @@ bool combining_expression::evaluate(wcstring_list_t &errors) {
     }
 
     errors.push_back(format_string(L"Unknown token type in %s", __func__));
-    return STATUS_INVALID_ARGS;
+    return false;
 }
 
 bool parenthetical_expression::evaluate(wcstring_list_t &errors) {
@@ -672,10 +675,10 @@ static bool parse_number(const wcstring &arg, number_t *number, wcstring_list_t 
         // We could not parse a float or an int.
         // Check for special fish_wcsto* value or show standard EINVAL/ERANGE error.
         if (errno == -1) {
-            errors.push_back(format_string(_(L"Integer %lld in '%ls' followed by non-digit"),
-                                           integral, argcs));
+            errors.push_back(
+                format_string(_(L"Integer %lld in '%ls' followed by non-digit"), integral, argcs));
         } else {
-            errors.push_back(format_string(L"%s: '%ls'", strerror(errno), argcs));
+            errors.push_back(format_string(L"%s: '%ls'", std::strerror(errno), argcs));
         }
         return false;
     }
@@ -817,7 +820,7 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
     // Whether we are invoked with bracket '[' or not.
     wchar_t *program_name = argv[0];
-    const bool is_bracket = !wcscmp(program_name, L"[");
+    const bool is_bracket = !std::wcscmp(program_name, L"[");
 
     size_t argc = 0;
     while (argv[argc + 1]) argc++;
@@ -825,11 +828,12 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     // If we're bracket, the last argument ought to be ]; we ignore it. Note that argc is the number
     // of arguments after the command name; thus argv[argc] is the last argument.
     if (is_bracket) {
-        if (!wcscmp(argv[argc], L"]")) {
+        if (!std::wcscmp(argv[argc], L"]")) {
             // Ignore the closing bracket from now on.
             argc--;
         } else {
             streams.err.append(L"[: the last argument must be ']'\n");
+            builtin_print_error_trailer(parser, streams.err, program_name);
             return STATUS_INVALID_ARGS;
         }
     }
@@ -848,14 +852,8 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     wcstring err;
     unique_ptr<expression> expr = test_parser::parse_args(args, err, program_name);
     if (!expr) {
-#if 0
-        streams.err.append(L"Oops! test was given args:\n");
-        for (size_t i=0; i < argc; i++) {
-            streams.err.append_format(L"\t%ls\n", args.at(i).c_str());
-        }
-        streams.err.append_format(L"and returned parse error: %ls\n", err.c_str());
-#endif
         streams.err.append(err);
+        builtin_print_error_trailer(parser, streams.err, program_name);
         return STATUS_CMD_ERROR;
     }
 
@@ -864,8 +862,11 @@ int builtin_test(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (!eval_errors.empty()) {
         if (!should_suppress_stderr_for_tests()) {
             for (size_t i = 0; i < eval_errors.size(); i++) {
-                streams.err.append_format(L"\t%ls\n", eval_errors.at(i).c_str());
+                streams.err.append_format(L"%ls\n", eval_errors.at(i).c_str());
             }
+            // Add a backtrace but not the "see help" message
+            // because this isn't about passing the wrong options.
+            streams.err.append(parser.current_line());
         }
         return STATUS_INVALID_ARGS;
     }

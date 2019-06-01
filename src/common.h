@@ -6,12 +6,13 @@
 #include <errno.h>
 #include <limits.h>
 // Needed for va_list et al.
-#include <stdarg.h> // IWYU pragma: keep
+#include <stdarg.h>  // IWYU pragma: keep
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>  // IWYU pragma: keep
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -87,8 +88,6 @@ typedef std::vector<wcstring> wcstring_list_t;
 // on Mac OS X. See http://www.unicode.org/faq/private_use.html.
 #define ENCODE_DIRECT_BASE (wchar_t)0xF600
 #define ENCODE_DIRECT_END (ENCODE_DIRECT_BASE + 256)
-#define INPUT_COMMON_BASE (wchar_t)0xF700
-#define INPUT_COMMON_END (INPUT_COMMON_BASE + 64)
 
 // NAME_MAX is not defined on Solaris
 #if !defined(NAME_MAX)
@@ -139,24 +138,6 @@ enum {
 };
 typedef unsigned int escape_flags_t;
 
-// Directions.
-enum selection_direction_t {
-    // Visual directions.
-    direction_north,
-    direction_east,
-    direction_south,
-    direction_west,
-    direction_page_north,
-    direction_page_south,
-
-    // Logical directions.
-    direction_next,
-    direction_prev,
-
-    // Special value that means deselect.
-    direction_deselect
-};
-
 /// Issue a debug message with printf-style string formating and automatic line breaking. The string
 /// will begin with the string \c program_name, followed by a colon and a whitespace.
 ///
@@ -178,9 +159,9 @@ enum selection_direction_t {
 
 /// The verbosity level of fish. If a call to debug has a severity level higher than \c debug_level,
 /// it will not be printed.
-extern int debug_level;
+extern std::atomic<int> debug_level;
 
-inline bool should_debug(int level) { return level <= debug_level; }
+inline bool should_debug(int level) { return level <= debug_level.load(std::memory_order_relaxed); }
 
 #define debug(level, ...)                                            \
     do {                                                             \
@@ -195,19 +176,22 @@ extern struct termios shell_modes;
 
 /// The character to use where the text has been truncated. Is an ellipsis on unicode system and a $
 /// on other systems.
-extern wchar_t ellipsis_char;
+wchar_t get_ellipsis_char();
+
 /// The character or string to use where text has been truncated (ellipsis if possible, otherwise
 /// ...)
-extern const wchar_t *ellipsis_str;
+const wchar_t *get_ellipsis_str();
 
 /// Character representing an omitted newline at the end of text.
-extern wchar_t omitted_newline_char;
+const wchar_t *get_omitted_newline_str();
+int get_omitted_newline_width();
 
 /// Character used for the silent mode of the read command
-extern wchar_t obfuscation_read_char;
+wchar_t get_obfuscation_read_char();
 
 /// How many stack frames to show when a debug() call is made.
-extern int debug_stack_frames;
+int get_debug_stack_frames();
+void set_debug_stack_frames(int);
 
 /// Profiling flag. True if commands should be profiled.
 extern bool g_profiling_active;
@@ -217,25 +201,6 @@ extern const wchar_t *program_name;
 
 /// Set to false if it's been determined we can't trust the last modified timestamp on the tty.
 extern const bool has_working_tty_timestamps;
-
-/// A list of all whitespace characters
-extern const wcstring whitespace;
-extern const char *whitespace_narrow;
-
-bool is_whitespace(const wchar_t input);
-bool is_whitespace(const wcstring &input);
-inline bool is_whitespace(const wchar_t *input) { return is_whitespace(wcstring(input)); }
-
-/// This macro is used to check that an argument is true. It is a bit like a non-fatal form of
-/// assert. Instead of exiting on failure, the current function is ended at once. The second
-/// parameter is the return value of the current function on failure.
-#define CHECK(arg, retval)                                                               \
-    if (!(arg)) {                                                                        \
-        debug(0, "function %s called with false value for argument %s", __func__, #arg); \
-        bugreport();                                                                     \
-        show_stackframe(L'E');                                                           \
-        return retval;                                                                   \
-    }
 
 // Pause for input, then exit the program. If supported, print a backtrace first.
 // The `return` will never be run  but silences oclint warnings. Especially when this is called
@@ -272,7 +237,8 @@ inline bool is_whitespace(const wchar_t *input) { return is_whitespace(wcstring(
 
 [[noreturn]] void __fish_assert(const char *msg, const char *file, size_t line, int error);
 
-/// Shorthand for wgettext call in situations where a C-style string is needed (e.g., fwprintf()).
+/// Shorthand for wgettext call in situations where a C-style string is needed (e.g.,
+/// std::fwprintf()).
 #define _(wstr) wgettext(wstr).c_str()
 
 /// Noop, used to tell xgettext that a string should be translated. Use this when a string cannot be
@@ -372,26 +338,22 @@ class line_iterator_t {
     // The current location in the iteration.
     typename Collection::const_iterator current;
 
-public:
+   public:
     /// Construct from a collection (presumably std::string or std::wcstring).
     line_iterator_t(const Collection &coll) : coll(coll), current(coll.cbegin()) {}
 
     /// Access the storage in which the last line was stored.
-    const Collection &line() const {
-        return storage;
-    }
+    const Collection &line() const { return storage; }
 
     /// Advances to the next line. \return true on success, false if we have exhausted the string.
     bool next() {
-        if (current == coll.end())
-            return false;
+        if (current == coll.end()) return false;
         auto newline_or_end = std::find(current, coll.cend(), '\n');
         storage.assign(current, newline_or_end);
         current = newline_or_end;
 
         // Skip the newline.
-        if (current != coll.cend())
-            ++current;
+        if (current != coll.cend()) ++current;
         return true;
     }
 };
@@ -429,7 +391,18 @@ static inline bool match_type_requires_full_replacement(fuzzy_match_type_t t) {
         case fuzzy_match_prefix: {
             return false;
         }
-        default: { return true; }
+        case fuzzy_match_case_insensitive:
+        case fuzzy_match_prefix_case_insensitive:
+        case fuzzy_match_substring:
+        case fuzzy_match_substring_case_insensitive:
+        case fuzzy_match_subsequence_insertions_only:
+        case fuzzy_match_none: {
+            return true;
+        }
+        default: {
+            DIE("Unreachable");
+            return false;
+        }
     }
 }
 
@@ -442,7 +415,16 @@ static inline bool match_type_shares_prefix(fuzzy_match_type_t t) {
         case fuzzy_match_prefix_case_insensitive: {
             return true;
         }
-        default: { return false; }
+        case fuzzy_match_substring:
+        case fuzzy_match_substring_case_insensitive:
+        case fuzzy_match_subsequence_insertions_only:
+        case fuzzy_match_none: {
+            return false;
+        }
+        default: {
+            DIE("Unreachabe");
+            return false;
+        }
     }
 }
 
@@ -513,13 +495,15 @@ inline wcstring to_string(long x) {
     return wcstring(buff);
 }
 
-inline wcstring to_string(int x) { return to_string(static_cast<long>(x)); }
-
-inline wcstring to_string(size_t x) {
+inline wcstring to_string(unsigned long long x) {
     wchar_t buff[64];
     format_ullong_safe(buff, x);
     return wcstring(buff);
 }
+
+inline wcstring to_string(int x) { return to_string(static_cast<long>(x)); }
+
+inline wcstring to_string(size_t x) { return to_string(static_cast<unsigned long long>(x)); }
 
 inline bool bool_from_string(const std::string &x) {
     if (x.empty()) return false;
@@ -535,7 +519,9 @@ inline bool bool_from_string(const std::string &x) {
     }
 }
 
-inline bool bool_from_string(const wcstring &x) { return !x.empty() && wcschr(L"YTyt1", x.at(0)); }
+inline bool bool_from_string(const wcstring &x) {
+    return !x.empty() && std::wcschr(L"YTyt1", x.at(0));
+}
 
 wchar_t **make_null_terminated_array(const wcstring_list_t &lst);
 char **make_null_terminated_array(const std::vector<std::string> &lst);
@@ -589,6 +575,18 @@ class null_terminated_array_t {
         this->array = make_null_terminated_array(argv);
     }
 
+    /// Convert from a null terminated list to a vector of strings.
+    static string_list_t to_list(const CharType_t *const *arr) {
+        string_list_t result;
+        for (const auto *cursor = arr; cursor && *cursor; cursor++) {
+            result.push_back(*cursor);
+        }
+        return result;
+    }
+
+    /// Instance method.
+    string_list_t to_list() const { return to_list(array); }
+
     const CharType_t *const *get() const { return array; }
     CharType_t **get() { return array; }
 
@@ -612,15 +610,15 @@ typedef std::lock_guard<std::recursive_mutex> scoped_rlock;
 // Or for simple cases:
 //   name.acquire().value = "derp"
 //
-template <typename DATA>
+template <typename Data>
 class acquired_lock {
     std::unique_lock<std::mutex> lock;
-    acquired_lock(std::mutex &lk, DATA *v) : lock(lk), value(v) {}
+    acquired_lock(std::mutex &lk, Data *v) : lock(lk), value(v) {}
 
     template <typename T>
     friend class owning_lock;
 
-    DATA *value;
+    Data *value;
 
    public:
     // No copying, move construction only
@@ -629,15 +627,22 @@ class acquired_lock {
     acquired_lock(acquired_lock &&) = default;
     acquired_lock &operator=(acquired_lock &&) = default;
 
-    DATA *operator->() { return value; }
-    const DATA *operator->() const { return value; }
-    DATA &operator*() { return *value; }
-    const DATA &operator*() const { return *value; }
+    Data *operator->() { return value; }
+    const Data *operator->() const { return value; }
+    Data &operator*() { return *value; }
+    const Data &operator*() const { return *value; }
+
+    /// Create from a global lock.
+    /// This is used in weird cases where a global lock protects more than one piece of data.
+    static acquired_lock from_global(std::mutex &lk, Data *v) { return acquired_lock{lk, v}; }
+
+    /// \return a reference to the lock, for use with a condition variable.
+    std::unique_lock<std::mutex> &get_lock() { return lock; }
 };
 
 // A lock that owns a piece of data
 // Access to the data is only provided by taking the lock
-template <typename DATA>
+template <typename Data>
 class owning_lock {
     // No copying
     owning_lock &operator=(const scoped_lock &) = delete;
@@ -646,13 +651,14 @@ class owning_lock {
     owning_lock &operator=(owning_lock &&) = default;
 
     std::mutex lock;
-    DATA data;
+    Data data;
 
    public:
-    owning_lock(DATA &&d) : data(std::move(d)) {}
+    owning_lock(Data &&d) : data(std::move(d)) {}
+    owning_lock(const Data &d) : data(d) {}
     owning_lock() : data() {}
 
-    acquired_lock<DATA> acquire() { return {lock, &data}; }
+    acquired_lock<Data> acquire() { return {lock, &data}; }
 };
 
 /// A scoped manager to save the current value of some variable, and optionally set it to a new
@@ -913,7 +919,7 @@ static T str_to_enum(const wchar_t *name, const enum_map<T> map[], int len) {
 
     while (left < right) {
         size_t mid = left + (right - left) / 2;
-        int cmp = wcscmp(name, map[mid].str);
+        int cmp = std::wcscmp(name, map[mid].str);
         if (cmp < 0) {
             right = mid;  // name was smaller than mid
         } else if (cmp > 0) {
@@ -951,7 +957,6 @@ void invalidate_termsize(bool invalidate_vars = false);
 struct winsize get_current_winsize();
 
 bool valid_var_name_char(wchar_t chr);
-bool valid_var_name(const wchar_t *str);
 bool valid_var_name(const wcstring &str);
 bool valid_func_name(const wcstring &str);
 
@@ -1019,14 +1024,14 @@ std::string get_executable_path(const char *fallback);
 /// A RAII wrapper for resources that don't recur, so we don't have to create a separate RAII
 /// wrapper for each function. Avoids needing to call "return cleanup()" or similar / everywhere.
 struct cleanup_t {
-private:
+   private:
     const std::function<void()> cleanup;
-public:
-    cleanup_t(std::function<void()> exit_actions)
-        : cleanup{std::move(exit_actions)} {}
-    ~cleanup_t() {
-        cleanup();
-    }
+
+   public:
+    cleanup_t(std::function<void()> exit_actions) : cleanup{std::move(exit_actions)} {}
+    ~cleanup_t() { cleanup(); }
 };
 
-#endif
+bool is_console_session();
+
+#endif  // FISH_COMMON_H

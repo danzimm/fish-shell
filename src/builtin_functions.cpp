@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <unistd.h>
-#include <wchar.h>
+#include <cwchar>
 
 #include <algorithm>
 #include <map>
@@ -40,13 +40,18 @@ struct functions_cmd_opts_t {
     wchar_t *description = NULL;
 };
 static const wchar_t *const short_options = L":HDacd:ehnqv";
-static const struct woption long_options[] = {
-    {L"erase", no_argument, NULL, 'e'},   {L"description", required_argument, NULL, 'd'},
-    {L"names", no_argument, NULL, 'n'},   {L"all", no_argument, NULL, 'a'},
-    {L"help", no_argument, NULL, 'h'},    {L"query", no_argument, NULL, 'q'},
-    {L"copy", no_argument, NULL, 'c'},    {L"details", no_argument, NULL, 'D'},
-    {L"verbose", no_argument, NULL, 'v'}, {L"handlers", no_argument, NULL, 'H'},
-    {L"handlers-type", required_argument, NULL, 't'}, {NULL, 0, NULL, 0}};
+static const struct woption long_options[] = {{L"erase", no_argument, NULL, 'e'},
+                                              {L"description", required_argument, NULL, 'd'},
+                                              {L"names", no_argument, NULL, 'n'},
+                                              {L"all", no_argument, NULL, 'a'},
+                                              {L"help", no_argument, NULL, 'h'},
+                                              {L"query", no_argument, NULL, 'q'},
+                                              {L"copy", no_argument, NULL, 'c'},
+                                              {L"details", no_argument, NULL, 'D'},
+                                              {L"verbose", no_argument, NULL, 'v'},
+                                              {L"handlers", no_argument, NULL, 'H'},
+                                              {L"handlers-type", required_argument, NULL, 't'},
+                                              {NULL, 0, NULL, 0}};
 
 static int parse_cmd_opts(functions_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncss method)
                           int argc, wchar_t **argv, parser_t &parser, io_streams_t &streams) {
@@ -121,7 +126,7 @@ static int parse_cmd_opts(functions_cmd_opts_t &opts, int *optind,  //!OCLINT(hi
 
 /// Return a definition of the specified function. Used by the functions builtin.
 static wcstring functions_def(const wcstring &name) {
-    CHECK(!name.empty(), L"");  //!OCLINT(multiple unary operator)
+    assert(!name.empty() && "Empty name");
     wcstring out;
     wcstring desc, def;
     function_get_desc(name, desc);
@@ -176,6 +181,7 @@ static wcstring functions_def(const wcstring &name) {
                 append_format(out, L" --on-event %ls", d.str_param1.c_str());
                 break;
             }
+            case event_type_t::any:
             default: {
                 DIE("unexpected next->type");
                 break;
@@ -203,8 +209,9 @@ static wcstring functions_def(const wcstring &name) {
         wcstring_list_t lst;
         kv.second.to_list(lst);
 
-        // This forced tab is crummy, but we don't know what indentation style the function uses.
-        append_format(out, L"\n\tset -l %ls", kv.first.c_str());
+        // We don't know what indentation style the function uses,
+        // so we do what fish_indent would.
+        append_format(out, L"\n    set -l %ls", kv.first.c_str());
         for (const auto &arg : lst) {
             wcstring earg = escape_string(arg, ESCAPE_ALL);
             out.push_back(L' ');
@@ -212,8 +219,8 @@ static wcstring functions_def(const wcstring &name) {
         }
     }
 
-    // This forced tab is sort of crummy - not all functions start with a tab.
-    append_format(out, L"\n\t%ls", def.c_str());
+    // More forced indentation.
+    append_format(out, L"\n    %ls", def.c_str());
 
     // Append a newline before the 'end', unless there already is one there.
     if (!string_suffixes_string(L"\n", def)) {
@@ -224,14 +231,14 @@ static wcstring functions_def(const wcstring &name) {
 }
 
 static int report_function_metadata(const wchar_t *funcname, bool verbose, io_streams_t &streams,
-                                    bool metadata_as_comments) {
+                                    parser_t &parser, bool metadata_as_comments) {
     const wchar_t *path = L"n/a";
     const wchar_t *autoloaded = L"n/a";
     const wchar_t *shadows_scope = L"n/a";
     wcstring description = L"n/a";
     int line_number = 0;
 
-    if (function_exists(funcname)) {
+    if (function_exists(funcname, parser)) {
         auto props = function_get_properties(funcname);
         path = function_get_definition_file(funcname);
         if (path) {
@@ -246,7 +253,7 @@ static int report_function_metadata(const wchar_t *funcname, bool verbose, io_st
     }
 
     if (metadata_as_comments) {
-        if (wcscmp(path, L"stdin")) {
+        if (std::wcscmp(path, L"stdin")) {
             streams.out.append_format(L"# Defined in %ls @ line %d\n", path, line_number);
         }
     } else {
@@ -281,7 +288,7 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     bool describe = opts.description ? true : false;
     if (describe + opts.erase + opts.list + opts.query + opts.copy > 1) {
         streams.err.append_format(_(L"%ls: Invalid combination of options\n"), cmd);
-        builtin_print_help(parser, streams, cmd, streams.err);
+        builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
 
@@ -295,18 +302,18 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
         if (argc - optind != 1) {
             streams.err.append_format(_(L"%ls: Expected exactly one function name\n"), cmd);
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_INVALID_ARGS;
         }
 
         func = argv[optind];
-        if (!function_exists(func)) {
+        if (!function_exists(func, parser)) {
             streams.err.append_format(_(L"%ls: Function '%ls' does not exist\n"), cmd, func);
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_CMD_ERROR;
         }
 
-        function_set_desc(func, opts.description);
+        function_set_desc(func, opts.description, parser);
         return STATUS_CMD_OK;
     }
 
@@ -318,16 +325,17 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         }
 
         const wchar_t *funcname = argv[optind];
-        return report_function_metadata(funcname, opts.verbose, streams, false);
+        return report_function_metadata(funcname, opts.verbose, streams, parser, false);
     }
 
     if (opts.handlers) {
         maybe_t<event_type_t> type_filter;
         if (opts.handlers_type) {
             type_filter = event_type_for_name(opts.handlers_type);
-            if (! type_filter) {
-                streams.err.append_format(_(L"%ls: Expected generic | variable | signal | exit | job-id for --handlers-type\n"),
-                        cmd);
+            if (!type_filter) {
+                streams.err.append_format(_(L"%ls: Expected generic | variable | signal | exit | "
+                                            L"job-id for --handlers-type\n"),
+                                          cmd);
                 return STATUS_INVALID_ARGS;
             }
         }
@@ -369,32 +377,32 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             streams.err.append_format(_(L"%ls: Expected exactly two names (current function name, "
                                         L"and new function name)\n"),
                                       cmd);
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_INVALID_ARGS;
         }
         current_func = argv[optind];
         new_func = argv[optind + 1];
 
-        if (!function_exists(current_func)) {
+        if (!function_exists(current_func, parser)) {
             streams.err.append_format(_(L"%ls: Function '%ls' does not exist\n"), cmd,
                                       current_func.c_str());
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_CMD_ERROR;
         }
 
         if (!valid_func_name(new_func) || parser_keywords_is_reserved(new_func)) {
             streams.err.append_format(_(L"%ls: Illegal function name '%ls'\n"), cmd,
                                       new_func.c_str());
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_INVALID_ARGS;
         }
 
         // Keep things simple: don't allow existing names to be copy targets.
-        if (function_exists(new_func)) {
+        if (function_exists(new_func, parser)) {
             streams.err.append_format(
                 _(L"%ls: Function '%ls' already exists. Cannot create copy '%ls'\n"), cmd,
                 new_func.c_str(), current_func.c_str());
-            builtin_print_help(parser, streams, cmd, streams.err);
+            builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_CMD_ERROR;
         }
 
@@ -404,13 +412,13 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
     int res = STATUS_CMD_OK;
     for (int i = optind; i < argc; i++) {
-        if (!function_exists(argv[i])) {
+        if (!function_exists(argv[i], parser)) {
             res++;
         } else {
             if (!opts.query) {
                 if (i != optind) streams.out.append(L"\n");
                 const wchar_t *funcname = argv[optind];
-                report_function_metadata(funcname, opts.verbose, streams, true);
+                report_function_metadata(funcname, opts.verbose, streams, parser, true);
                 streams.out.append(functions_def(funcname));
             }
         }

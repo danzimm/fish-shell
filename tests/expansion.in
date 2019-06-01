@@ -148,3 +148,11 @@ set testvar "$testvar:FOUR"
 echo "Appended path: $testvar" (count $testvar)
 set --unpath testvar $testvar
 echo "Back to normal variable: $testvar" (count $testvar)
+
+logmsg Test fatal syntax errors
+../test/root/bin/fish -c 'echo $,foo'
+../test/root/bin/fish -c 'echo {'
+../test/root/bin/fish -c 'echo {}}'
+# The output for this is wrong in non-interactive mode and will need fixing when #5812 is fixed
+../test/root/bin/fish -c 'command (asd)'
+true

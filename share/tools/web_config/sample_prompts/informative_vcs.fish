@@ -1,9 +1,8 @@
 # name: Informative Vcs
 # author: Mariusz Smykula <mariuszs at gmail.com>
 
-
-
 function fish_prompt --description 'Write out the prompt'
+    set -l last_pipestatus $pipestatus
     set -l last_status $status
 
     if not set -q __fish_git_prompt_show_informative_status
@@ -12,7 +11,6 @@ function fish_prompt --description 'Write out the prompt'
     if not set -q __fish_git_prompt_hide_untrackedfiles
         set -g __fish_git_prompt_hide_untrackedfiles 1
     end
-
     if not set -q __fish_git_prompt_color_branch
         set -g __fish_git_prompt_color_branch magenta --bold
     end
@@ -28,7 +26,6 @@ function fish_prompt --description 'Write out the prompt'
     if not set -q __fish_git_prompt_char_upstream_prefix
         set -g __fish_git_prompt_char_upstream_prefix ""
     end
-
     if not set -q __fish_git_prompt_char_stagedstate
         set -g __fish_git_prompt_char_stagedstate "●"
     end
@@ -44,7 +41,6 @@ function fish_prompt --description 'Write out the prompt'
     if not set -q __fish_git_prompt_char_cleanstate
         set -g __fish_git_prompt_char_cleanstate "✔"
     end
-
     if not set -q __fish_git_prompt_color_dirtystate
         set -g __fish_git_prompt_color_dirtystate blue
     end
@@ -59,10 +55,6 @@ function fish_prompt --description 'Write out the prompt'
     end
     if not set -q __fish_git_prompt_color_cleanstate
         set -g __fish_git_prompt_color_cleanstate green --bold
-    end
-
-    if not set -q __fish_prompt_normal
-        set -g __fish_prompt_normal (set_color normal)
     end
 
     set -l color_cwd
@@ -87,6 +79,9 @@ function fish_prompt --description 'Write out the prompt'
     set_color normal
 
     printf '%s ' (fish_vcs_prompt)
+
+    set -l pipestatus_string (__fish_print_pipestatus "[" "] " "|" (set_color yellow) (set_color --bold yellow) $last_pipestatus)
+    echo -n "$pipestatus_string"
 
     if not test $last_status -eq 0
         set_color $fish_color_error

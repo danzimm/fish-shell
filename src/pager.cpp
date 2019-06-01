@@ -2,8 +2,8 @@
 
 // IWYU pragma: no_include <cstddef>
 #include <stddef.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cwchar>
 
 #include <algorithm>
 #include <numeric>
@@ -18,7 +18,6 @@
 #include "pager.h"
 #include "reader.h"
 #include "screen.h"
-#include "util.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 typedef pager_t::comp_t comp_t;
@@ -40,24 +39,24 @@ typedef std::vector<comp_t> comp_info_list_t;
 /// Text we use for the search field.
 #define SEARCH_FIELD_PROMPT _(L"search: ")
 
-inline bool selection_direction_is_cardinal(selection_direction_t dir) {
+inline bool selection_direction_is_cardinal(selection_motion_t dir) {
     switch (dir) {
-        case direction_north:
-        case direction_east:
-        case direction_south:
-        case direction_west:
-        case direction_page_north:
-        case direction_page_south: {
+        case selection_motion_t::north:
+        case selection_motion_t::east:
+        case selection_motion_t::south:
+        case selection_motion_t::west:
+        case selection_motion_t::page_north:
+        case selection_motion_t::page_south: {
             return true;
         }
-        case direction_next:
-        case direction_prev:
-        case direction_deselect: {
+        case selection_motion_t::next:
+        case selection_motion_t::prev:
+        case selection_motion_t::deselect: {
             return false;
         }
     }
 
-    DIE("should never reach this statement");
+    DIE("unreachable");
 }
 
 /// Returns numer / denom, rounding up. As a "courtesy" 0/0 is 0.
@@ -90,9 +89,10 @@ static size_t print_max(const wcstring &str, highlight_spec_t color, size_t max,
 
         if (width_c > remaining) break;
 
+        wchar_t ellipsis = get_ellipsis_char();
         if ((width_c == remaining) && (has_more || i + 1 < str.size())) {
-            line->append(ellipsis_char, color);
-            int ellipsis_width = fish_wcwidth(ellipsis_char);
+            line->append(ellipsis, color);
+            int ellipsis_width = fish_wcwidth(ellipsis);
             remaining -= std::min(remaining, size_t(ellipsis_width));
             break;
         }
@@ -163,12 +163,11 @@ line_t pager_t::completion_print_item(const wcstring &prefix, const comp_t *c, s
         const wcstring &comp = c->comp.at(i);
 
         if (i > 0) {
-            comp_remaining -= print_max(PAGER_SPACER_STRING, bg, comp_remaining,
-                                        true /* has_more */, &line_data);
+            comp_remaining -=
+                print_max(PAGER_SPACER_STRING, bg, comp_remaining, true /* has_more */, &line_data);
         }
 
-        comp_remaining -=
-            print_max(prefix, prefix_col, comp_remaining, !comp.empty(), &line_data);
+        comp_remaining -= print_max(prefix, prefix_col, comp_remaining, !comp.empty(), &line_data);
         comp_remaining -=
             print_max(comp, comp_col, comp_remaining, i + 1 < c->comp.size(), &line_data);
     }
@@ -422,7 +421,7 @@ bool pager_t::completion_try_print(size_t cols, const wcstring &prefix, const co
         this->available_term_height - 1 -
         (search_field_shown ? 1 : 0);  // we always subtract 1 to make room for a comment row
     if (!this->fully_disclosed) {
-        term_height = mini(term_height, (size_t)PAGER_UNDISCLOSED_MAX_ROWS);
+        term_height = std::min(term_height, (size_t)PAGER_UNDISCLOSED_MAX_ROWS);
     }
 
     size_t row_count = divide_round_up(lst.size(), cols);
@@ -478,7 +477,7 @@ bool pager_t::completion_try_print(size_t cols, const wcstring &prefix, const co
         // suggested_start_row.
         assert(row_count > term_height);
         size_t last_starting_row = row_count - term_height;
-        start_row = mini(suggested_start_row, last_starting_row);
+        start_row = std::min(suggested_start_row, last_starting_row);
         stop_row = start_row + term_height;
         assert(start_row <= last_starting_row);
     }
@@ -494,7 +493,7 @@ bool pager_t::completion_try_print(size_t cols, const wcstring &prefix, const co
     wcstring progress_text;
     assert(rendering->remaining_to_disclose != 1);
     if (rendering->remaining_to_disclose > 1) {
-        progress_text = format_string(_(L"%lsand %lu more rows"), ellipsis_str,
+        progress_text = format_string(_(L"%lsand %lu more rows"), get_ellipsis_str(),
                                       (unsigned long)rendering->remaining_to_disclose);
     } else if (start_row > 0 || stop_row < row_count) {
         // We have a scrollable interface. The +1 here is because we are zero indexed, but want
@@ -602,7 +601,7 @@ pager_t::pager_t()
 
 bool pager_t::empty() const { return unfiltered_completion_infos.empty(); }
 
-bool pager_t::select_next_completion_in_direction(selection_direction_t direction,
+bool pager_t::select_next_completion_in_direction(selection_motion_t direction,
                                                   const page_rendering_t &rendering) {
     // Must have something to select.
     if (this->completion_infos.empty()) {
@@ -612,24 +611,24 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
     // Handle the case of nothing selected yet.
     if (selected_completion_idx == PAGER_SELECTION_NONE) {
         switch (direction) {
-            case direction_south:
-            case direction_page_south:
-            case direction_next:
-            case direction_north:
-            case direction_prev: {
+            case selection_motion_t::south:
+            case selection_motion_t::page_south:
+            case selection_motion_t::next:
+            case selection_motion_t::north:
+            case selection_motion_t::prev: {
                 // These directions do something sane.
-                if (direction == direction_prev
-                    || direction == direction_north) {
+                if (direction == selection_motion_t::prev ||
+                    direction == selection_motion_t::north) {
                     selected_completion_idx = completion_infos.size() - 1;
                 } else {
                     selected_completion_idx = 0;
                 }
                 return true;
             }
-            case direction_page_north:
-            case direction_east:
-            case direction_west:
-            case direction_deselect: {
+            case selection_motion_t::page_north:
+            case selection_motion_t::east:
+            case selection_motion_t::west:
+            case selection_motion_t::deselect: {
                 // These do nothing.
                 return false;
             }
@@ -640,14 +639,14 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
     size_t new_selected_completion_idx;
     if (!selection_direction_is_cardinal(direction)) {
         // Next, previous, or deselect, all easy.
-        if (direction == direction_deselect) {
+        if (direction == selection_motion_t::deselect) {
             new_selected_completion_idx = PAGER_SELECTION_NONE;
-        } else if (direction == direction_next) {
+        } else if (direction == selection_motion_t::next) {
             new_selected_completion_idx = selected_completion_idx + 1;
             if (new_selected_completion_idx >= completion_infos.size()) {
                 new_selected_completion_idx = 0;
             }
-        } else if (direction == direction_prev) {
+        } else if (direction == selection_motion_t::prev) {
             if (selected_completion_idx == 0) {
                 new_selected_completion_idx = completion_infos.size() - 1;
             } else {
@@ -660,10 +659,10 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
         // Cardinal directions. We have a completion index; we wish to compute its row and column.
         size_t current_row = this->get_selected_row(rendering);
         size_t current_col = this->get_selected_column(rendering);
-        size_t page_height = maxi(rendering.term_height - 1, (size_t)1);
+        size_t page_height = std::max(rendering.term_height - 1, (size_t)1);
 
         switch (direction) {
-            case direction_page_north: {
+            case selection_motion_t::page_north: {
                 if (current_row > page_height) {
                     current_row = current_row - page_height;
                 } else {
@@ -671,7 +670,7 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
                 }
                 break;
             }
-            case direction_north: {
+            case selection_motion_t::north: {
                 // Go up a whole row. If we cycle, go to the previous column.
                 if (current_row > 0) {
                     current_row--;
@@ -685,7 +684,7 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
                 }
                 break;
             }
-            case direction_page_south: {
+            case selection_motion_t::page_south: {
                 if (current_row + page_height < rendering.rows) {
                     current_row += page_height;
                 } else {
@@ -696,7 +695,7 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
                 }
                 break;
             }
-            case direction_south: {
+            case selection_motion_t::south: {
                 // Go down, unless we are in the last row.
                 // If we go over the last element, wrap to the first.
                 if (current_row + 1 < rendering.rows &&
@@ -708,7 +707,7 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
                 }
                 break;
             }
-            case direction_east: {
+            case selection_motion_t::east: {
                 // Go east, wrapping to the next row. There is no "row memory," so if we run off the
                 // end, wrap.
                 if (current_col + 1 < rendering.cols &&
@@ -720,7 +719,7 @@ bool pager_t::select_next_completion_in_direction(selection_direction_t directio
                 }
                 break;
             }
-            case direction_west: {
+            case selection_motion_t::west: {
                 // Go west, wrapping to the previous row.
                 if (current_col > 0) {
                     current_col--;
@@ -852,7 +851,7 @@ void pager_t::set_search_field_shown(bool flag) { this->search_field_shown = fla
 bool pager_t::is_search_field_shown() const { return this->search_field_shown; }
 
 size_t pager_t::cursor_position() const {
-    size_t result = wcslen(SEARCH_FIELD_PROMPT) + this->search_field_line.position;
+    size_t result = std::wcslen(SEARCH_FIELD_PROMPT) + this->search_field_line.position;
     // Clamp it to the right edge.
     if (available_term_width > 0 && result + 1 > available_term_width) {
         result = available_term_width - 1;

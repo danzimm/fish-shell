@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "common.h"
+#include "flog.h"
 #include "parse_constants.h"
 #include "parse_grammar.h"
 #include "parse_productions.h"
@@ -57,7 +58,9 @@ RESOLVE(job_list) {
         case parse_token_type_terminate: {
             return production_for<empty>();  // no more commands, just transition to empty
         }
-        default: { return NO_PRODUCTION; }
+        default: {
+            return NO_PRODUCTION;
+        }
     }
 }
 
@@ -166,7 +169,9 @@ RESOLVE(statement) {
                     return NO_PRODUCTION;
                 }
                 // All other keywords fall through to decorated statement.
-                default: { return production_for<decorated>(); }
+                default: {
+                    return production_for<decorated>();
+                }
             }
             break;
         }
@@ -176,7 +181,9 @@ RESOLVE(statement) {
         case parse_token_type_terminate: {
             return NO_PRODUCTION;
         }
-        default: { return NO_PRODUCTION; }
+        default: {
+            return NO_PRODUCTION;
+        }
     }
 }
 
@@ -188,7 +195,9 @@ RESOLVE(else_clause) {
         case parse_keyword_else: {
             return production_for<else_cont>();
         }
-        default: { return production_for<empty>(); }
+        default: {
+            return production_for<empty>();
+        }
     }
 }
 
@@ -200,7 +209,9 @@ RESOLVE(else_continuation) {
         case parse_keyword_if: {
             return production_for<else_if>();
         }
-        default: { return production_for<else_only>(); }
+        default: {
+            return production_for<else_only>();
+        }
     }
 }
 
@@ -252,7 +263,9 @@ RESOLVE(argument_list) {
         case parse_token_type_string: {
             return production_for<arg>();
         }
-        default: { return production_for<empty>(); }
+        default: {
+            return production_for<empty>();
+        }
     }
 }
 
@@ -267,7 +280,9 @@ RESOLVE(freestanding_argument_list) {
         case parse_token_type_end: {
             return production_for<semicolon>();
         }
-        default: { return production_for<empty>(); }
+        default: {
+            return production_for<empty>();
+        }
     }
 }
 
@@ -288,12 +303,13 @@ RESOLVE(block_header) {
         case parse_keyword_begin: {
             return production_for<beginh>();
         }
-        default: { return NO_PRODUCTION; }
+        default: {
+            return NO_PRODUCTION;
+        }
     }
 }
 
 RESOLVE(decorated_statement) {
-
     // If this is e.g. 'command --help' then the command is 'command' and not a decoration. If the
     // second token is not a string, then this is a naked 'command' and we should execute it as
     // undecorated.
@@ -357,13 +373,12 @@ RESOLVE(optional_background) {
     }
 }
 
-
 const production_element_t *parse_productions::production_for_token(parse_token_type_t node_type,
                                                                     const parse_token_t &input1,
                                                                     const parse_token_t &input2,
                                                                     parse_node_tag_t *out_tag) {
     // this is **extremely** chatty
-    debug(6, "Resolving production for %ls with input token <%ls>",
+    debug(6, L"Resolving production for %ls with input token <%ls>",
           token_type_description(node_type), input1.describe().c_str());
 
     // Fetch the function to resolve the list of productions.
@@ -388,21 +403,21 @@ const production_element_t *parse_productions::production_for_token(parse_token_
         case parse_token_type_oror:
         case parse_token_type_end:
         case parse_token_type_terminate: {
-            debug(0, "Terminal token type %ls passed to %s", token_type_description(node_type),
-                  __FUNCTION__);
+            FLOGF(error, L"Terminal token type %ls passed to %s", token_type_description(node_type),
+                 __FUNCTION__);
             PARSER_DIE();
             break;
         }
         case parse_special_type_parse_error:
         case parse_special_type_tokenizer_error:
         case parse_special_type_comment: {
-            debug(0, "Special type %ls passed to %s\n", token_type_description(node_type),
-                  __FUNCTION__);
+            FLOGF(error, L"Special type %ls passed to %s\n", token_type_description(node_type),
+                 __FUNCTION__);
             PARSER_DIE();
             break;
         }
         case token_type_invalid: {
-            debug(0, "token_type_invalid passed to %s", __FUNCTION__);
+            FLOGF(error, L"token_type_invalid passed to %s", __FUNCTION__);
             PARSER_DIE();
             break;
         }
@@ -411,7 +426,7 @@ const production_element_t *parse_productions::production_for_token(parse_token_
 
     const production_element_t *result = resolver(input1, input2, out_tag);
     if (result == NULL) {
-        debug(5, "Node type '%ls' has no production for input '%ls' (in %s)",
+        debug(5, L"Node type '%ls' has no production for input '%ls' (in %s)",
               token_type_description(node_type), input1.describe().c_str(), __FUNCTION__);
     }
 

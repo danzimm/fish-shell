@@ -4,7 +4,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <wchar.h>
+#include <cwchar>
 
 #include <algorithm>
 #include <string>
@@ -13,6 +13,7 @@
 
 #include "common.h"
 #include "fallback.h"
+#include "flog.h"
 #include "parse_constants.h"
 #include "parse_productions.h"
 #include "parse_tree.h"
@@ -178,7 +179,9 @@ static wcstring token_type_user_presentable_description(
             return L"end of the statement";
         case parse_token_type_terminate:
             return L"end of the input";
-        default: { return format_string(L"a %ls", token_type_description(type)); }
+        default: {
+            return format_string(L"a %ls", token_type_description(type));
+        }
     }
 }
 
@@ -202,7 +205,9 @@ static wcstring block_type_user_presentable_description(parse_token_type_t type)
         case symbol_switch_statement: {
             return L"switch statement";
         }
-        default: { return token_type_description(type); }
+        default: {
+            return token_type_description(type);
+        }
     }
 }
 
@@ -252,7 +257,7 @@ static inline parse_token_type_t parse_token_type_from_tokenizer_token(
         case TOK_COMMENT:
             return parse_special_type_comment;
     }
-    debug(0, "Bad token type %d passed to %s", (int)tokenizer_token_type, __FUNCTION__);
+    FLOGF(error, L"Bad token type %d passed to %s", (int)tokenizer_token_type, __FUNCTION__);
     DIE("bad token type");
     return token_type_invalid;
 }
@@ -407,17 +412,17 @@ class parse_ll_t {
         bool logit = false;
         if (logit) {
             int count = 0;
-            fwprintf(stderr, L"Applying production:\n");
+            std::fwprintf(stderr, L"Applying production:\n");
             for (int i = 0;; i++) {
                 production_element_t elem = production[i];
                 if (!production_element_is_valid(elem)) break;  // all done, bail out
                 parse_token_type_t type = production_element_type(elem);
                 parse_keyword_t keyword = production_element_keyword(elem);
-                fwprintf(stderr, L"\t%ls <%ls>\n", token_type_description(type),
-                         keyword_description(keyword));
+                std::fwprintf(stderr, L"\t%ls <%ls>\n", token_type_description(type),
+                              keyword_description(keyword));
                 count++;
             }
-            if (!count) fwprintf(stderr, L"\t<empty>\n");
+            if (!count) std::fwprintf(stderr, L"\t<empty>\n");
         }
 
         // Get the parent index. But we can't get the parent parse node yet, since it may be made
@@ -524,9 +529,9 @@ void parse_ll_t::dump_stack(void) const {
         }
     }
 
-    fwprintf(stderr, L"Stack dump (%zu elements):\n", symbol_stack.size());
+    std::fwprintf(stderr, L"Stack dump (%zu elements):\n", symbol_stack.size());
     for (size_t idx = 0; idx < stack_lines.size(); idx++) {
-        fwprintf(stderr, L"    %ls\n", stack_lines.at(idx).c_str());
+        std::fwprintf(stderr, L"    %ls\n", stack_lines.at(idx).c_str());
     }
 }
 #endif
@@ -690,8 +695,7 @@ void parse_ll_t::parse_error_failed_production(struct parse_stack_element_t &sta
 void parse_ll_t::report_tokenizer_error(const tok_t &tok) {
     parse_error_code_t parse_error_code = parse_error_from_tokenizer_error(tok.error);
     this->parse_error_at_location(tok.offset, tok.length, tok.offset + tok.error_offset,
-                                  parse_error_code, L"%ls",
-                                  tokenizer_get_error_message(tok.error).c_str());
+                                  parse_error_code, L"%ls", tokenizer_get_error_message(tok.error));
 }
 
 void parse_ll_t::parse_error_unexpected_token(const wchar_t *expected, parse_token_t token) {
@@ -730,7 +734,9 @@ static bool type_is_terminal_type(parse_token_type_t type) {
         case parse_token_type_terminate: {
             return true;
         }
-        default: { return false; }
+        default: {
+            return false;
+        }
     }
 }
 

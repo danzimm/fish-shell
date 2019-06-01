@@ -92,20 +92,8 @@ static int parse_cmd_opts(function_cmd_opts_t &opts, int *optind,  //!OCLINT(hig
                 if ((opt == 'j') && (wcscasecmp(w.woptarg, L"caller") == 0)) {
                     job_id_t job_id = -1;
 
-                    if (is_subshell) {
-                        size_t block_idx = 0;
-
-                        // Find the outermost substitution block.
-                        for (block_idx = 0;; block_idx++) {
-                            const block_t *b = parser.block_at_index(block_idx);
-                            if (b == NULL || b->type() == SUBST) break;
-                        }
-
-                        // Go one step beyond that, to get to the caller.
-                        const block_t *caller_block = parser.block_at_index(block_idx + 1);
-                        if (caller_block != NULL && caller_block->job != NULL) {
-                            job_id = caller_block->job->job_id;
-                        }
+                    if (parser.libdata().is_subshell) {
+                        job_id = parser.libdata().caller_job_id;
                     }
 
                     if (job_id == -1) {
@@ -230,7 +218,7 @@ int builtin_function(parser_t &parser, io_streams_t &streams, const wcstring_lis
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.err);
+        builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_CMD_OK;
     }
 

@@ -11,8 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <wchar.h>
 #include <wctype.h>
+#include <cwchar>
 
 #include <algorithm>
 #include <cwctype>
@@ -26,6 +26,7 @@
 #include "builtin.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
+#include "future_feature_flags.h"
 #include "io.h"
 #include "parse_util.h"
 #include "pcre2.h"
@@ -189,13 +190,13 @@ static int handle_flag_1(wchar_t **argv, parser_t &parser, io_streams_t &streams
     const wchar_t *cmd = argv[0];
 
     if (opts->style_valid) {
-        if (wcscmp(w.woptarg, L"script") == 0) {
+        if (std::wcscmp(w.woptarg, L"script") == 0) {
             opts->escape_style = STRING_STYLE_SCRIPT;
-        } else if (wcscmp(w.woptarg, L"url") == 0) {
+        } else if (std::wcscmp(w.woptarg, L"url") == 0) {
             opts->escape_style = STRING_STYLE_URL;
-        } else if (wcscmp(w.woptarg, L"var") == 0) {
+        } else if (std::wcscmp(w.woptarg, L"var") == 0) {
             opts->escape_style = STRING_STYLE_VAR;
-        } else if (wcscmp(w.woptarg, L"regex") == 0) {
+        } else if (std::wcscmp(w.woptarg, L"regex") == 0) {
             opts->escape_style = STRING_STYLE_REGEX;
         } else {
             string_error(streams, _(L"%ls: Invalid escape style '%ls'\n"), cmd, w.woptarg);
@@ -933,8 +934,13 @@ class regex_replacer_t : public string_replacer_t {
     regex_replacer_t(const wchar_t *argv0, const wcstring &pattern, const wcstring &replacement_,
                      const options_t &opts, io_streams_t &streams)
         : string_replacer_t(argv0, opts, streams),
-          regex(argv0, pattern, opts.ignore_case, streams),
-          replacement(interpret_escapes(replacement_)) {}
+          regex(argv0, pattern, opts.ignore_case, streams) {
+        if (feature_test(features_t::string_replace_backslash)) {
+            replacement = replacement_;
+        } else {
+            replacement = interpret_escapes(replacement_);
+        }
+    }
 
     bool replace_matches(const wcstring &arg) override;
 };
@@ -949,7 +955,7 @@ bool literal_replacer_t::replace_matches(const wcstring &arg) {
         replacement_occurred = true;
         result = arg;
     } else {
-        auto &cmp_func = opts.ignore_case ? wcsncasecmp : wcsncmp;
+        auto &cmp_func = opts.ignore_case ? wcsncasecmp : std::wcsncmp;
         const wchar_t *cur = arg.c_str();
         const wchar_t *end = cur + arg.size();
         while (cur < end) {
@@ -1008,13 +1014,13 @@ bool regex_replacer_t::replace_matches(const wcstring &arg) {
         }
     }
 
-    wcstring outstr(output, outlen);
     bool rc = true;
     if (pcre2_rc < 0) {
         string_error(streams, _(L"%ls: Regular expression substitute error: %ls\n"), argv0,
                      pcre2_strerror(pcre2_rc).c_str());
         rc = false;
     } else {
+        wcstring outstr(output, outlen);
         bool replacement_occurred = pcre2_rc > 0;
         if (!opts.quiet && (!opts.filter || replacement_occurred)) {
             streams.out.append(outstr);
@@ -1311,13 +1317,13 @@ int builtin_string(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         return STATUS_INVALID_ARGS;
     }
 
-    if (wcscmp(argv[1], L"-h") == 0 || wcscmp(argv[1], L"--help") == 0) {
+    if (std::wcscmp(argv[1], L"-h") == 0 || std::wcscmp(argv[1], L"--help") == 0) {
         builtin_print_help(parser, streams, L"string", streams.out);
         return STATUS_CMD_OK;
     }
 
     const string_subcommand *subcmd = &string_subcommands[0];
-    while (subcmd->name != 0 && wcscmp(subcmd->name, argv[1]) != 0) {
+    while (subcmd->name != 0 && std::wcscmp(subcmd->name, argv[1]) != 0) {
         subcmd++;
     }
     if (!subcmd->handler) {

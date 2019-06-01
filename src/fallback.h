@@ -10,7 +10,7 @@
 // between the weak linking of `wcsdup` and `wcscasecmp` via `#define`s below and the declarations
 // in <wchar.h>. At least on OS X if we don't do this we get compilation errors do to the macro
 // substitution if wchar.h is included after this header.
-#include <wchar.h>  // IWYU pragma: keep
+#include <cwchar>  // IWYU pragma: keep
 
 /// The column width of ambiguous East Asian characters.
 extern int g_fish_ambiguous_width;
@@ -137,7 +137,7 @@ wchar_t *wcsndup(const wchar_t *in, size_t c);
 
 #ifndef HAVE_WCSLCPY
 /// Copy src to string dst of size siz.  At most siz-1 characters will be copied.  Always NUL
-/// terminates (unless siz == 0).  Returns wcslen(src); if retval >= siz, truncation occurred.
+/// terminates (unless siz == 0).  Returns std::wcslen(src); if retval >= siz, truncation occurred.
 ///
 /// This is the OpenBSD strlcpy function, modified for wide characters, and renamed to reflect this
 /// change.
@@ -196,8 +196,8 @@ int flock(int fd, int op);
 #endif
 
 // NetBSD _has_ wcstod_l, but it's doing some weak linking hullabaloo that I don't get.
-// Since it doesn't have uselocale (yes, the standard function isn't there, the non-standard extension is),
-// we can't try to use the fallback.
+// Since it doesn't have uselocale (yes, the standard function isn't there, the non-standard
+// extension is), we can't try to use the fallback.
 #if !defined(HAVE_WCSTOD_L) && !defined(__NetBSD__)
 // On some platforms if this is incorrectly detected and a system-defined
 // defined version of `wcstod_l` exists, calling `wcstod` from our own
@@ -207,7 +207,7 @@ int flock(int fd, int op);
 // duplication.
 #undef wcstod_l
 namespace fish_compat {
-    double wcstod_l(const wchar_t *enptr, wchar_t **endptr, locale_t loc);
+double wcstod_l(const wchar_t *enptr, wchar_t **endptr, locale_t loc);
 }
 #define wcstod_l(x, y, z) fish_compat::wcstod_l(x, y, z)
 #endif

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common.h"
+#include "enum_set.h"
 #include "maybe.h"
 #include "parse_constants.h"
 
@@ -21,43 +22,51 @@ class environment_t;
 class env_var_t;
 class environment_t;
 
-enum {
-    /// Flag specifying that cmdsubst expansion should be skipped.
-    EXPAND_SKIP_CMDSUBST = 1 << 0,
-    /// Flag specifying that variable expansion should be skipped.
-    EXPAND_SKIP_VARIABLES = 1 << 1,
-    /// Flag specifying that wildcard expansion should be skipped.
-    EXPAND_SKIP_WILDCARDS = 1 << 2,
+/// Set of flags controlling expansions.
+enum class expand_flag {
+    /// Skip command substitutions.
+    skip_cmdsubst,
+    /// Skip variable expansion.
+    skip_variables,
+    /// Skip wildcard expansion.
+    skip_wildcards,
     /// The expansion is being done for tab or auto completions. Returned completions may have the
     /// wildcard as a prefix instead of a match.
-    EXPAND_FOR_COMPLETIONS = 1 << 3,
+    for_completions,
     /// Only match files that are executable by the current user.
-    EXECUTABLES_ONLY = 1 << 4,
+    executables_only,
     /// Only match directories.
-    DIRECTORIES_ONLY = 1 << 5,
+    directories_only,
     /// Don't generate descriptions.
-    EXPAND_NO_DESCRIPTIONS = 1 << 6,
-    /// Don't expand jobs (but you can still expand processes). This is because
-    /// job expansion is not thread safe.
-    EXPAND_SKIP_JOBS = 1 << 7,
+    no_descriptions,
+    /// Don't expand jobs (but still expand processes).
+    skip_jobs,
     /// Don't expand home directories.
-    EXPAND_SKIP_HOME_DIRECTORIES = 1 << 8,
+    skip_home_directories,
     /// Allow fuzzy matching.
-    EXPAND_FUZZY_MATCH = 1 << 9,
+    fuzzy_match,
     /// Disallow directory abbreviations like /u/l/b for /usr/local/bin. Only applicable if
-    /// EXPAND_FUZZY_MATCH is set.
-    EXPAND_NO_FUZZY_DIRECTORIES = 1 << 10,
+    /// fuzzy_match is set.
+    no_fuzzy_directories,
     /// Do expansions specifically to support cd. This means using CDPATH as a list of potential
     /// working directories, and to use logical instead of physical paths.
-    EXPAND_SPECIAL_FOR_CD = 1 << 11,
+    special_for_cd,
     /// Do expansions specifically for cd autosuggestion. This is to differentiate between cd
     /// completions and cd autosuggestions.
-    EXPAND_SPECIAL_FOR_CD_AUTOSUGGEST = 1 << 12,
+    special_for_cd_autosuggestion,
     /// Do expansions specifically to support external command completions. This means using PATH as
     /// a list of potential working directories.
-    EXPAND_SPECIAL_FOR_COMMAND = 1 << 13
+    special_for_command,
+
+    COUNT,
 };
-typedef int expand_flags_t;
+
+template <>
+struct enum_info_t<expand_flag> {
+    static constexpr auto count = expand_flag::COUNT;
+};
+
+using expand_flags_t = enum_set_t<expand_flag>;
 
 class completion_t;
 
@@ -89,19 +98,20 @@ enum {
 };
 
 /// These are the possible return values for expand_string. Note how zero value is the only error.
-enum expand_error_t {
+enum class expand_result_t {
     /// Error
-    EXPAND_ERROR,
+    error,
     /// Ok
-    EXPAND_OK,
+    ok,
     /// Ok, a wildcard in the string matched no files.
-    EXPAND_WILDCARD_NO_MATCH,
+    wildcard_no_match,
     /// Ok, a wildcard in the string matched a file.
-    EXPAND_WILDCARD_MATCH
+    wildcard_match,
 };
 
 /// The string represented by PROCESS_EXPAND_SELF
 #define PROCESS_EXPAND_SELF_STR L"%self"
+#define PROCESS_EXPAND_SELF_STR_LEN 5
 
 /// Perform various forms of expansion on in, such as tilde expansion (\~USER becomes the users home
 /// directory), variable expansion (\$VAR_NAME becomes the value of the environment variable
@@ -113,28 +123,32 @@ enum expand_error_t {
 /// \param input The parameter to expand
 /// \param output The list to which the result will be appended.
 /// \param flags Specifies if any expansion pass should be skipped. Legal values are any combination
-/// of EXPAND_SKIP_CMDSUBST EXPAND_SKIP_VARIABLES and EXPAND_SKIP_WILDCARDS
+/// of skip_cmdsubst skip_variables and skip_wildcards
 /// \param vars variables used during expansion.
+/// \param parser the parser to use for command substitutions, or nullptr to disable.
 /// \param errors Resulting errors, or NULL to ignore
 ///
-/// \return One of EXPAND_OK, EXPAND_ERROR, EXPAND_WILDCARD_MATCH and EXPAND_WILDCARD_NO_MATCH.
-/// EXPAND_WILDCARD_NO_MATCH and EXPAND_WILDCARD_MATCH are normal exit conditions used only on
+/// \return An expand_result_t.
+/// wildcard_no_match and wildcard_match are normal exit conditions used only on
 /// strings containing wildcards to tell if the wildcard produced any matches.
-__warn_unused expand_error_t expand_string(wcstring input, std::vector<completion_t> *output,
-                                           expand_flags_t flags, const environment_t &vars,
-                                           parse_error_list_t *errors);
+class parser_t;
+__warn_unused expand_result_t expand_string(wcstring input, std::vector<completion_t> *output,
+                                            expand_flags_t flags, const environment_t &vars,
+                                            const std::shared_ptr<parser_t> &parser,
+                                            parse_error_list_t *errors);
 
 /// expand_one is identical to expand_string, except it will fail if in expands to more than one
 /// string. This is used for expanding command names.
 ///
 /// \param inout_str The parameter to expand in-place
 /// \param flags Specifies if any expansion pass should be skipped. Legal values are any combination
-/// of EXPAND_SKIP_CMDSUBST EXPAND_SKIP_VARIABLES and EXPAND_SKIP_WILDCARDS
+/// of skip_cmdsubst skip_variables and skip_wildcards
+/// \param parser the parser to use for command substitutions, or nullptr to disable.
 /// \param errors Resulting errors, or NULL to ignore
 ///
 /// \return Whether expansion succeded
 bool expand_one(wcstring &inout_str, expand_flags_t flags, const environment_t &vars,
-                parse_error_list_t *errors = NULL);
+                const std::shared_ptr<parser_t> &parser, parse_error_list_t *errors = NULL);
 
 /// Expand a command string like $HOME/bin/cmd into a command and list of arguments.
 /// Return the command and arguments by reference.
@@ -142,9 +156,9 @@ bool expand_one(wcstring &inout_str, expand_flags_t flags, const environment_t &
 /// that API does not distinguish between expansion resulting in an empty command (''), and
 /// expansion resulting in no command (e.g. unset variable).
 // \return an expand error.
-expand_error_t expand_to_command_and_args(const wcstring &instr, const environment_t &vars,
-                                          wcstring *out_cmd, wcstring_list_t *out_args,
-                                          parse_error_list_t *errors = NULL);
+expand_result_t expand_to_command_and_args(const wcstring &instr, const environment_t &vars,
+                                           wcstring *out_cmd, wcstring_list_t *out_args,
+                                           parse_error_list_t *errors = NULL);
 
 /// Convert the variable value to a human readable form, i.e. escape things, handle arrays, etc.
 /// Suitable for pretty-printing.
@@ -161,10 +175,9 @@ wcstring replace_home_directory_with_tilde(const wcstring &str, const environmen
 /// Abbreviation support. Expand src as an abbreviation, returning the expanded form if found,
 /// none() if not.
 maybe_t<wcstring> expand_abbreviation(const wcstring &src, const environment_t &vars);
-maybe_t<wcstring> expand_abbreviation(const wcstring &src);
 
 /// \return a snapshot of all abbreviations as a map abbreviation->expansion.
-std::map<wcstring, wcstring> get_abbreviations();
+std::map<wcstring, wcstring> get_abbreviations(const environment_t &vars);
 
 // Terrible hacks
 bool fish_xdm_login_hack_hack_hack_hack(std::vector<std::string> *cmds, int argc,

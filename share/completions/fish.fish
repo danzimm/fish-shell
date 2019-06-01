@@ -11,7 +11,8 @@ complete -c fish -s d -l debug-level -d "Specify verbosity level" -x -a "0\t'War
 2\t'Basic debug output'
 3\t'More debug output'
 4\t'Much more debug output'
-5\t'Too much debug output'"
+5\t'Too much debug output'
+(fish --print-debug-categories | string replace ' ' \t)"
 complete -c fish -s D -l debug-stack-frames -d "Show specified # of frames with debug output" -x -a "(seq 128)\t\n"
 complete -c fish -s P -l private -d "Do not persist history"
 
@@ -21,4 +22,7 @@ function __fish_complete_features
     printf "%s\n" "$arg_comma"$features #TODO: remove existing args
 end
 complete -c fish -s f -l features -d "Run with comma-separated feature flags enabled" -a "(__fish_complete_features)" -x
+complete -c fish -l print-rusage-self -d "Print stats from getrusage at exit" -f
+complete -c fish -l print-debug-categories -d "Print the debug categories fish knows" -f
+
 complete -c fish -x -a "(__fish_complete_suffix .fish)"

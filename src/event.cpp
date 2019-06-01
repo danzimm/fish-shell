@@ -35,7 +35,7 @@ class pending_signals_t {
     /// This is not accessed from a signal handler.
     owning_lock<uint32_t> last_counter_{0};
 
-public:
+   public:
     pending_signals_t() = default;
 
     /// No copying.
@@ -64,7 +64,8 @@ public:
             return {};
         }
 
-        // The signal count has changed. Store the new counter and fetch all the signals that are set.
+        // The signal count has changed. Store the new counter and fetch all the signals that are
+        // set.
         *current = count;
         std::bitset<SIGNAL_COUNT> result{};
         uint32_t bit = 0;
@@ -120,6 +121,7 @@ static bool handler_matches(const event_handler_t &classv, const event_t &instan
         case event_type_t::generic: {
             return classv.desc.str_param1 == instance.desc.str_param1;
         }
+        case event_type_t::any:
         default: {
             DIE("unexpected classv.type");
             return false;
@@ -129,6 +131,7 @@ static bool handler_matches(const event_handler_t &classv, const event_t &instan
 
 /// Test if specified event is blocked.
 static int event_is_blocked(const event_t &e) {
+    (void)e;
     const block_t *block;
     parser_t &parser = parser_t::principal_parser();
 
@@ -165,7 +168,7 @@ wcstring event_get_desc(const event_t &evt) {
                                          -ed.param1.pid);
                 }
             }
-            assert(0 && "Unreachable");
+            DIE("Unreachable");
         }
 
         case event_type_t::job_exit: {
@@ -182,6 +185,9 @@ wcstring event_get_desc(const event_t &evt) {
         case event_type_t::generic: {
             return format_string(_(L"handler for generic event '%ls'"), ed.str_param1.c_str());
         }
+        case event_type_t::any: {
+            DIE("Unreachable");
+        }
         default:
             DIE("Unknown event type");
     }
@@ -189,11 +195,11 @@ wcstring event_get_desc(const event_t &evt) {
 
 #if 0
 static void show_all_handlers(void) {
-    fwprintf(stdout, L"event handlers:\n");
+    std::fwprintf(stdout, L"event handlers:\n");
     for (event_list_t::const_iterator iter = events.begin(); iter != events.end(); ++iter) {
         const event_t *foo = *iter;
         wcstring tmp = event_get_desc(foo);
-        fwprintf(stdout, L"    handler now %ls\n", tmp.c_str());
+        std::fwprintf(stdout, L"    handler now %ls\n", tmp.c_str());
     }
 }
 #endif
@@ -242,8 +248,9 @@ bool event_is_signal_observed(int sig) {
 /// allocated/initialized unless needed.
 static void event_fire_internal(const event_t &event) {
     ASSERT_IS_MAIN_THREAD();
-    assert(is_event >= 0 && "is_event should not be negative");
-    scoped_push<decltype(is_event)> inc_event{&is_event, is_event + 1};
+    auto &ld = parser_t::principal_parser().libdata();
+    assert(ld.is_event >= 0 && "is_event should not be negative");
+    scoped_push<decltype(ld.is_event)> inc_event{&ld.is_event, ld.is_event + 1};
 
     // Capture the event handlers that match this event.
     event_handler_list_t fire;
@@ -274,23 +281,26 @@ static void event_fire_internal(const event_t &event) {
         // Event handlers are not part of the main flow of code, so they are marked as
         // non-interactive.
         proc_push_interactive(0);
-        auto prev_statuses = proc_get_last_statuses();
         parser_t &parser = parser_t::principal_parser();
+        auto prev_statuses = parser.get_last_statuses();
 
-        event_block_t *b = parser.push_block<event_block_t>(event);
+        block_t *b = parser.push_block(block_t::event_block(event));
         parser.eval(buffer, io_chain_t(), TOP);
         parser.pop_block(b);
         proc_pop_interactive();
-        proc_set_last_statuses(std::move(prev_statuses));
+        parser.set_last_statuses(std::move(prev_statuses));
     }
 }
 
 /// Handle all pending signal events.
 void event_fire_delayed() {
-    ASSERT_IS_MAIN_THREAD();
+    // Hack: only allow events on the main thread.
+    // TODO: rationalize how events work with multiple threads.
+    if (!is_main_thread()) return;
+
+    auto &parser = parser_t::principal_parser();
     // Do not invoke new event handlers from within event handlers.
-    if (is_event)
-        return;
+    if (parser.libdata().is_event) return;
 
     event_list_t to_send;
     to_send.swap(blocked);
@@ -299,7 +309,7 @@ void event_fire_delayed() {
     // Append all signal events to to_send.
     auto signals = s_pending_signals.acquire_pending();
     if (signals.any()) {
-        for (uint32_t sig=0; sig < signals.size(); sig++) {
+        for (uint32_t sig = 0; sig < signals.size(); sig++) {
             if (signals.test(sig)) {
                 auto e = std::make_shared<event_t>(event_type_t::signal);
                 e->desc.param1.signal = sig;
@@ -325,6 +335,10 @@ void event_enqueue_signal(int signal) {
 }
 
 void event_fire(const event_t &event) {
+    // Hack: only allow events on the main thread.
+    // TODO: rationalize how events work with multiple threads.
+    if (!is_main_thread()) return;
+
     // Fire events triggered by signals.
     event_fire_delayed();
 
@@ -366,7 +380,6 @@ static const wchar_t *event_name_for_type(event_type_t type) {
     return L"";
 }
 
-
 void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
     event_handler_list_t tmp = s_event_handlers;
     std::sort(tmp.begin(), tmp.end(),
@@ -399,8 +412,7 @@ void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
         }
 
         if (!last_type || *last_type != evt->desc.type) {
-            if (last_type)
-                streams.out.append(L"\n");
+            if (last_type) streams.out.append(L"\n");
             last_type = static_cast<event_type_t>(evt->desc.type);
             streams.out.append_format(L"Event %ls\n", event_name_for_type(*last_type));
         }
@@ -409,6 +421,7 @@ void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
                 streams.out.append_format(L"%ls %ls\n", sig2wcs(evt->desc.param1.signal),
                                           evt->function_name.c_str());
                 break;
+            case event_type_t::exit:
             case event_type_t::job_exit:
                 streams.out.append_format(L"%d %ls\n", evt->desc.param1,
                                           evt->function_name.c_str());
@@ -418,6 +431,8 @@ void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
                 streams.out.append_format(L"%ls %ls\n", evt->desc.str_param1.c_str(),
                                           evt->function_name.c_str());
                 break;
+            case event_type_t::any:
+                DIE("Unreachable");
             default:
                 streams.out.append_format(L"%ls\n", evt->function_name.c_str());
                 break;
@@ -426,7 +441,7 @@ void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
 }
 
 void event_fire_generic(const wchar_t *name, const wcstring_list_t *args) {
-    CHECK(name, );
+    assert(name && "Null name");
 
     event_t ev(event_type_t::generic);
     ev.desc.str_param1 = name;
