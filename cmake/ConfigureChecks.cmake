@@ -4,6 +4,7 @@
 # `wcstod_l` is a GNU-extension, sometimes hidden behind GNU-related defines.
 # This is the case for at least Cygwin and Newlib.
 LIST(APPEND CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE=1)
+
 IF(APPLE)
     INCLUDE(CheckCXXCompilerFlag)
     CHECK_CXX_COMPILER_FLAG("-Werror=unguarded-availability" REQUIRES_UNGUARDED_AVAILABILITY)
@@ -176,6 +177,12 @@ int main () {
 ENDIF()
 CMAKE_POP_CHECK_STATE()
 
+# Work around the fact that cmake does not propagate the language standard flag into
+# the CHECK_CXX_SOURCE_COMPILES function. See CMake issue #16456.
+# Ensure we do this after the FIND_PACKAGE calls which use C, and will error on a C++
+# standards flag.
+LIST(APPEND CMAKE_REQUIRED_FLAGS "${CMAKE_CXX${CMAKE_CXX_STANDARD}_STANDARD_COMPILE_OPTION}")
+
 CHECK_CXX_SOURCE_COMPILES("
 #include <memory>
 
@@ -187,3 +194,24 @@ int main () {
 )
 
 FIND_PROGRAM(SED sed)
+
+# https://github.com/fish-shell/fish-shell/issues/5865
+CMAKE_PUSH_CHECK_STATE()
+# Needed until CMP0067 is set to NEW
+# g++ 4.8 needs -std=gnu+11 set to enable atomic features, but CMake < 3.8 does not add that
+# flag to TRY_COMPILE targets even when set for the project
+IF(CMAKE_COMPILER_IS_GNUCXX)
+    LIST(APPEND CMAKE_REQUIRED_FLAGS "-std=gnu++11")
+ENDIF()
+CHECK_CXX_SOURCE_COMPILES("
+#include <atomic>
+#include <cstdint>
+std::atomic<uint64_t> x;
+int main() {
+   return x;
+}"
+LIBATOMIC_NOT_NEEDED)
+IF (NOT LIBATOMIC_NOT_NEEDED)
+    SET(ATOMIC_LIBRARY "atomic")
+ENDIF()
+CMAKE_POP_CHECK_STATE()

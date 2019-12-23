@@ -1,13 +1,15 @@
 // Implementation of the source builtin.
 #include "config.h"  // IWYU pragma: keep
 
+#include "builtin_source.h"
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #include <cwchar>
 
 #include "builtin.h"
-#include "builtin_source.h"
 #include "common.h"
 #include "env.h"
 #include "fallback.h"  // IWYU pragma: keep
@@ -31,7 +33,7 @@ int builtin_source(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 

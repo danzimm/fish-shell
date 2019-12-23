@@ -6,8 +6,9 @@ prevd - move backward through directory history
 Synopsis
 --------
 
-prevd [ -l | --list ] [POS]
+::
 
+    prevd [ -l | --list ] [POS]
 
 Description
 -----------
@@ -29,13 +30,13 @@ Example
 
     cd /usr/src
     # Working directory is now /usr/src
-    
+
     cd /usr/src/fish-shell
     # Working directory is now /usr/src/fish-shell
-    
+
     prevd
     # Working directory is now /usr/src
-    
+
     nextd
     # Working directory is now /usr/src/fish-shell
 

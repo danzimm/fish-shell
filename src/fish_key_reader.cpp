@@ -16,9 +16,9 @@
 #include <stdlib.h>
 #include <termios.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <cwchar>
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +29,7 @@
 #include "fish_version.h"
 #include "input.h"
 #include "input_common.h"
+#include "parser.h"
 #include "print_help.h"
 #include "proc.h"
 #include "reader.h"
@@ -38,9 +39,10 @@
 struct config_paths_t determine_config_directory_paths(const char *argv0);
 
 static const wchar_t *ctrl_symbolic_names[] = {
-    NULL,   NULL,   NULL,   NULL, NULL, NULL,   NULL, L"\\a", L"\\b", L"\\t", L"\\n",
-    L"\\v", L"\\f", L"\\r", NULL, NULL, NULL,   NULL, NULL,   NULL,   NULL,   NULL,
-    NULL,   NULL,   NULL,   NULL, NULL, L"\\e", NULL, NULL,   NULL,   NULL};
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"\\a",
+    L"\\b",  L"\\t",  L"\\n",  L"\\v",  L"\\f",  L"\\r",  nullptr, nullptr,
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+    nullptr, nullptr, nullptr, L"\\e",  nullptr, nullptr, nullptr, nullptr};
 static bool keep_running = true;
 
 /// Return true if the recent sequence of characters indicates the user wants to exit the program.
@@ -66,34 +68,34 @@ static bool should_exit(wchar_t wc) {
 }
 
 /// Return the name if the recent sequence of characters matches a known terminfo sequence.
-static char *sequence_name(wchar_t wc) {
-    unsigned char c = wc < 0x80 ? wc : 0;
-    static char recent_chars[8] = {0};
-
-    recent_chars[0] = recent_chars[1];
-    recent_chars[1] = recent_chars[2];
-    recent_chars[2] = recent_chars[3];
-    recent_chars[3] = recent_chars[4];
-    recent_chars[4] = recent_chars[5];
-    recent_chars[5] = recent_chars[6];
-    recent_chars[6] = recent_chars[7];
-    recent_chars[7] = c;
-
-    for (int idx = 7; idx >= 0; idx--) {
-        wcstring out_name;
-        wcstring seq = str2wcstring(recent_chars + idx, 8 - idx);
-        bool found = input_terminfo_get_name(seq, &out_name);
-        if (found) {
-            return strdup(wcs2string(out_name).c_str());
-        }
+static maybe_t<wcstring> sequence_name(wchar_t wc) {
+    static std::string recent_chars;
+    if (wc >= 0x80) {
+        // Terminfo sequences are always ASCII.
+        recent_chars.clear();
+        return none();
     }
 
-    return NULL;
+    unsigned char c = wc;
+    recent_chars.push_back(c);
+    while (recent_chars.size() > 8) {
+        recent_chars.erase(recent_chars.begin());
+    }
+
+    // Check all nonempty substrings extending to the end.
+    for (size_t i = 0; i < recent_chars.size(); i++) {
+        wcstring out_name;
+        wcstring seq = str2wcstring(recent_chars.substr(i));
+        if (input_terminfo_get_name(seq, &out_name)) {
+            return out_name;
+        }
+    }
+    return none();
 }
 
 /// Return true if the character must be escaped when used in the sequence of chars to be bound in
 /// a `bind` command.
-static bool must_escape(wchar_t wc) { return std::wcschr(L"[]()<>{}*\\?$#;&|'\"", wc) != NULL; }
+static bool must_escape(wchar_t wc) { return std::wcschr(L"[]()<>{}*\\?$#;&|'\"", wc) != nullptr; }
 
 static void ctrl_to_symbol(wchar_t *buf, int buf_len, wchar_t wc, bool bind_friendly) {
     if (ctrl_symbolic_names[wc]) {
@@ -158,10 +160,10 @@ static void add_char_to_bind_command(wchar_t wc, std::vector<wchar_t> &bind_char
 }
 
 static void output_bind_command(std::vector<wchar_t> &bind_chars) {
-    if (bind_chars.size()) {
+    if (!bind_chars.empty()) {
         std::fputws(L"bind ", stdout);
-        for (size_t i = 0; i < bind_chars.size(); i++) {
-            std::fputws(char_to_symbol(bind_chars[i], true), stdout);
+        for (auto bind_char : bind_chars) {
+            std::fputws(char_to_symbol(bind_char, true), stdout);
         }
         std::fputws(L" 'do something'\n", stdout);
         bind_chars.clear();
@@ -173,10 +175,8 @@ static void output_info_about_char(wchar_t wc) {
 }
 
 static bool output_matching_key_name(wchar_t wc) {
-    char *name = sequence_name(wc);
-    if (name) {
-        std::fwprintf(stdout, L"bind -k %s 'do something'\n", name);
-        free(name);
+    if (maybe_t<wcstring> name = sequence_name(wc)) {
+        std::fwprintf(stdout, L"bind -k %ls 'do something'\n", name->c_str());
         return true;
     }
     return false;
@@ -201,6 +201,7 @@ static double output_elapsed_time(double prev_tstamp, bool first_char_seen) {
 static void process_input(bool continuous_mode) {
     bool first_char_seen = false;
     double prev_tstamp = 0.0;
+    input_event_queue_t queue;
     std::vector<wchar_t> bind_chars;
 
     std::fwprintf(stderr, L"Press a key\n\n");
@@ -209,7 +210,7 @@ static void process_input(bool continuous_mode) {
         if (reader_test_and_clear_interrupted()) {
             evt = char_event_t{shell_modes.c_cc[VINTR]};
         } else {
-            evt = input_common_readch_timed(true);
+            evt = queue.readch_timed(true);
         }
         if (!evt.is_char()) {
             output_bind_command(bind_chars);
@@ -221,7 +222,12 @@ static void process_input(bool continuous_mode) {
 
         wchar_t wc = evt.get_char();
         prev_tstamp = output_elapsed_time(prev_tstamp, first_char_seen);
-        add_char_to_bind_command(wc, bind_chars);
+        // Hack for #3189. Do not suggest \c@ as the binding for nul, because a string containing
+        // nul cannot be passed to builtin_bind since it uses C strings. We'll output the name of
+        // this key (nul) elsewhere.
+        if (wc) {
+            add_char_to_bind_command(wc, bind_chars);
+        }
         output_info_about_char(wc);
         if (output_matching_key_name(wc)) {
             output_bind_command(bind_chars);
@@ -284,9 +290,10 @@ static void setup_and_process_keys(bool continuous_mode) {
     set_interactive_session(true);  // by definition this program is interactive
     set_main_thread();
     setup_fork_guards();
-    proc_push_interactive(1);
     env_init();
     reader_init();
+    parser_t &parser = parser_t::principal_parser();
+    scoped_push<bool> interactive{&parser.libdata().is_interactive, true};
     // We need to set the shell-modes for ICRNL,
     // in fish-proper this is done once a command is run.
     tcsetattr(STDIN_FILENO, TCSANOW, &shell_modes);
@@ -312,7 +319,7 @@ static bool parse_debug_level_flag() {
     long tmp = strtol(optarg, &end, 10);
 
     if (tmp >= 0 && tmp <= 10 && !*end && !errno) {
-        debug_level = (int)tmp;
+        debug_level = static_cast<int>(tmp);
     } else {
         std::fwprintf(stderr, _(L"Invalid value '%s' for debug-level flag\n"), optarg);
         return false;
@@ -326,7 +333,7 @@ static bool parse_debug_frames_flag() {
     char *end;
     long tmp = strtol(optarg, &end, 10);
     if (tmp > 0 && tmp <= 128 && !*end && !errno) {
-        set_debug_stack_frames((int)tmp);
+        set_debug_stack_frames(static_cast<int>(tmp));
     } else {
         std::fwprintf(stderr, _(L"Invalid value '%s' for debug-stack-frames flag\n"), optarg);
         return false;
@@ -337,15 +344,15 @@ static bool parse_debug_frames_flag() {
 
 static bool parse_flags(int argc, char **argv, bool *continuous_mode) {
     const char *short_opts = "+cd:D:hv";
-    const struct option long_opts[] = {{"continuous", no_argument, NULL, 'c'},
-                                       {"debug-level", required_argument, NULL, 'd'},
-                                       {"debug-stack-frames", required_argument, NULL, 'D'},
-                                       {"help", no_argument, NULL, 'h'},
-                                       {"version", no_argument, NULL, 'v'},
-                                       {NULL, 0, NULL, 0}};
+    const struct option long_opts[] = {{"continuous", no_argument, nullptr, 'c'},
+                                       {"debug-level", required_argument, nullptr, 'd'},
+                                       {"debug-stack-frames", required_argument, nullptr, 'D'},
+                                       {"help", no_argument, nullptr, 'h'},
+                                       {"version", no_argument, nullptr, 'v'},
+                                       {nullptr, 0, nullptr, 0}};
     int opt;
     bool error = false;
-    while (!error && (opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
+    while (!error && (opt = getopt_long(argc, argv, short_opts, long_opts, nullptr)) != -1) {
         switch (opt) {
             case 'c': {
                 *continuous_mode = true;

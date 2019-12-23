@@ -1,11 +1,12 @@
 // Implementation of the exit builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stddef.h>
+#include "builtin_exit.h"
+
+#include <cerrno>
+#include <cstddef>
 
 #include "builtin.h"
-#include "builtin_exit.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
@@ -19,8 +20,8 @@ struct exit_cmd_opts_t {
     bool print_help = false;
 };
 static const wchar_t *const short_options = L":h";
-static const struct woption long_options[] = {{L"help", no_argument, NULL, 'h'},
-                                              {NULL, 0, NULL, 0}};
+static const struct woption long_options[] = {{L"help", no_argument, nullptr, 'h'},
+                                              {nullptr, 0, nullptr, 0}};
 
 static int parse_cmd_opts(exit_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncss method)
                           int argc, wchar_t **argv, parser_t &parser, io_streams_t &streams) {
@@ -29,7 +30,7 @@ static int parse_cmd_opts(exit_cmd_opts_t &opts, int *optind,  //!OCLINT(high nc
     wchar_t *cmd = argv[0];
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
         switch (opt) {  //!OCLINT(too few branches)
             case 'h': {
                 opts.print_help = true;
@@ -68,7 +69,7 @@ int builtin_exit(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
@@ -83,8 +84,7 @@ int builtin_exit(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     } else {
         retval = fish_wcstoi(argv[optind]);
         if (errno) {
-            streams.err.append_format(_(L"%ls: Argument '%ls' must be an integer\n"), cmd,
-                                      argv[optind]);
+            streams.err.append_format(BUILTIN_ERR_NOT_NUMBER, cmd, argv[optind]);
             builtin_print_error_trailer(parser, streams.err, cmd);
             return STATUS_INVALID_ARGS;
         }

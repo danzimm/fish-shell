@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <unistd.h>
+
 #include <cstring>
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -11,8 +12,8 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <cwchar>
 
+#include <cwchar>
 #include <deque>
 #include <list>
 #include <memory>
@@ -34,36 +35,6 @@
 #define WAIT_ON_ESCAPE_DEFAULT 30
 static int wait_on_escape_ms = WAIT_ON_ESCAPE_DEFAULT;
 
-struct input_lookahead_t {
-    /// Events which have been read and returned by the sequence matching code.
-    std::deque<char_event_t> lookahead_list;
-
-    bool has_lookahead() const { return !lookahead_list.empty(); }
-
-    char_event_t pop() {
-        auto result = lookahead_list.front();
-        lookahead_list.pop_front();
-        return result;
-    }
-
-    /// \return the next lookahead char, or none if none. Discards timeouts.
-    maybe_t<char_event_t> pop_evt() {
-        while (has_lookahead()) {
-            auto evt = pop();
-            if (!evt.is_timeout()) {
-                return evt;
-            }
-        }
-        return none();
-    }
-
-    void push_back(char_event_t c) { lookahead_list.push_back(c); }
-
-    void push_front(char_event_t c) { lookahead_list.push_front(c); }
-};
-
-static mainthread_t<input_lookahead_t> s_lookahead;
-
 /// Callback function for handling interrupts on reading.
 static interrupt_func_t interrupt_handler;
 
@@ -71,7 +42,7 @@ void input_common_init(interrupt_func_t func) { interrupt_handler = func; }
 
 /// Internal function used by input_common_readch to read one byte from fd 0. This function should
 /// only be called by input_common_readch().
-static char_event_t readb() {
+char_event_t input_event_queue_t::readb() {
     for (;;) {
         fd_set fdset;
         int fd_max = 0;
@@ -100,17 +71,17 @@ static char_event_t readb() {
         const unsigned long usecs_delay = notifier.usec_delay_between_polls();
         if (usecs_delay > 0) {
             unsigned long usecs_per_sec = 1000000;
-            tv.tv_sec = (int)(usecs_delay / usecs_per_sec);
-            tv.tv_usec = (int)(usecs_delay % usecs_per_sec);
+            tv.tv_sec = static_cast<int>(usecs_delay / usecs_per_sec);
+            tv.tv_usec = static_cast<int>(usecs_delay % usecs_per_sec);
         }
 
-        res = select(fd_max + 1, &fdset, 0, 0, usecs_delay > 0 ? &tv : NULL);
+        res = select(fd_max + 1, &fdset, nullptr, nullptr, usecs_delay > 0 ? &tv : nullptr);
         if (res == -1) {
             if (errno == EINTR || errno == EAGAIN) {
                 if (interrupt_handler) {
                     if (auto interrupt_evt = interrupt_handler()) {
                         return *interrupt_evt;
-                    } else if (auto mc = s_lookahead->pop_evt()) {
+                    } else if (auto mc = pop_discard_timeouts()) {
                         return *mc;
                     }
                 }
@@ -128,16 +99,9 @@ static char_event_t readb() {
             if (barrier_from_poll || barrier_from_readability) {
                 if (env_universal_barrier()) {
                     // A variable change may have triggered a repaint, etc.
-                    if (auto mc = s_lookahead->pop_evt()) {
+                    if (auto mc = pop_discard_timeouts()) {
                         return *mc;
                     }
-                }
-            }
-
-            if (ioport > 0 && FD_ISSET(ioport, &fdset)) {
-                iothread_service_completion();
-                if (auto mc = s_lookahead->pop_evt()) {
-                    return *mc;
                 }
             }
 
@@ -150,6 +114,15 @@ static char_event_t readb() {
 
                 // We read from stdin, so don't loop.
                 return arr[0];
+            }
+
+            // Check for iothread completions only if there is no data to be read from the stdin.
+            // This gives priority to the foreground.
+            if (ioport > 0 && FD_ISSET(ioport, &fdset)) {
+                iothread_service_completion();
+                if (auto mc = pop_discard_timeouts()) {
+                    return *mc;
+                }
             }
         }
     }
@@ -171,18 +144,34 @@ void update_wait_on_escape_ms(const environment_t &vars) {
                       L"is not an integer or is < 10 or >= 5000 ms\n",
                       escape_time_ms->as_string().c_str());
     } else {
-        wait_on_escape_ms = (int)tmp;
+        wait_on_escape_ms = static_cast<int>(tmp);
     }
 }
 
-char_event_t input_common_readch() {
+char_event_t input_event_queue_t::pop() {
+    auto result = queue_.front();
+    queue_.pop_front();
+    return result;
+}
+
+maybe_t<char_event_t> input_event_queue_t::pop_discard_timeouts() {
+    while (has_lookahead()) {
+        auto evt = pop();
+        if (!evt.is_timeout()) {
+            return evt;
+        }
+    }
+    return none();
+}
+
+char_event_t input_event_queue_t::readch() {
     ASSERT_IS_MAIN_THREAD();
-    if (auto mc = s_lookahead->pop_evt()) {
+    if (auto mc = pop_discard_timeouts()) {
         return *mc;
     }
     wchar_t res;
     mbstate_t state = {};
-    while (1) {
+    while (true) {
         auto evt = readb();
         if (!evt.is_char()) {
             return evt;
@@ -197,12 +186,12 @@ char_event_t input_common_readch() {
         size_t sz = std::mbrtowc(&res, &bb, 1, &state);
 
         switch (sz) {
-            case (size_t)(-1): {
+            case static_cast<size_t>(-1): {
                 std::memset(&state, '\0', sizeof(state));
                 debug(2, L"Illegal input");
                 return char_event_type_t::check_exit;
             }
-            case (size_t)(-2): {
+            case static_cast<size_t>(-2): {
                 break;
             }
             case 0: {
@@ -215,27 +204,27 @@ char_event_t input_common_readch() {
     }
 }
 
-char_event_t input_common_readch_timed(bool dequeue_timeouts) {
+char_event_t input_event_queue_t::readch_timed(bool dequeue_timeouts) {
     char_event_t result{char_event_type_t::timeout};
-    if (s_lookahead->has_lookahead()) {
-        result = s_lookahead->pop();
+    if (has_lookahead()) {
+        result = pop();
     } else {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
         struct timeval tm = {wait_on_escape_ms / 1000, 1000 * (wait_on_escape_ms % 1000)};
-        if (select(1, &fds, 0, 0, &tm) > 0) {
-            result = input_common_readch();
+        if (select(1, &fds, nullptr, nullptr, &tm) > 0) {
+            result = readch();
         }
     }
     // If we got a timeout, either through dequeuing or creating, ensure it stays on the queue.
     if (result.is_timeout()) {
-        if (!dequeue_timeouts) s_lookahead->push_front(char_event_type_t::timeout);
+        if (!dequeue_timeouts) queue_.push_front(char_event_type_t::timeout);
         return char_event_type_t::timeout;
     }
     return result;
 }
 
-void input_common_queue_ch(char_event_t ch) { s_lookahead->push_back(ch); }
+void input_event_queue_t::push_back(char_event_t ch) { queue_.push_back(ch); }
 
-void input_common_next_ch(char_event_t ch) { s_lookahead->push_front(ch); }
+void input_event_queue_t::push_front(char_event_t ch) { queue_.push_front(ch); }

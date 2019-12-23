@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "common.h"
-
 #include "enum_set.h"
 
 struct completion_mode_t {
@@ -153,7 +152,7 @@ void completions_sort_and_prioritize(std::vector<completion_t> *comps,
 /// \param option_type The type of option: can be option_type_short (-x),
 ///        option_type_single_long (-foo), option_type_double_long (--bar).
 /// \param result_mode Controls how to search further completions when this completion has been
-/// succesfully matched.
+/// successfully matched.
 /// \param comp A space separated list of completions which may contain subshells.
 /// \param desc A description of the completion.
 /// \param condition a command to be run to check it this completion should be used. If \c condition
@@ -197,8 +196,8 @@ void append_completion(std::vector<completion_t> *completions, wcstring comp,
                        string_fuzzy_match_t match = string_fuzzy_match_t(fuzzy_match_exact));
 
 /// Support for "wrap targets." A wrap target is a command that completes like another command.
-bool complete_add_wrapper(const wcstring &command, const wcstring &wrap_target);
-bool complete_remove_wrapper(const wcstring &command, const wcstring &wrap_target);
+bool complete_add_wrapper(const wcstring &command, const wcstring &new_target);
+bool complete_remove_wrapper(const wcstring &command, const wcstring &target_to_remove);
 
 /// Returns a list of wrap targets for a given command.
 wcstring_list_t complete_get_wrap_targets(const wcstring &command);

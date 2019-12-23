@@ -9,6 +9,7 @@
 import glob
 import os.path
 import pygments
+import subprocess
 from sphinx.errors import SphinxError, SphinxWarning
 
 # -- Helper functions --------------------------------------------------------
@@ -28,6 +29,11 @@ def setup(app):
         os.path.join(this_dir, "fish_indent_lexer.py"), lexername="FishIndentLexer"
     )
     lexers["fish-docs-samples"] = fish_indent_lexer
+    # add_css_file only appears in Sphinx 1.8.0
+    if hasattr(app, "add_css_file"):
+        app.add_css_file("custom.css")
+    else:
+        app.add_stylesheet("custom.css")
 
 
 # The default language to assume
@@ -50,10 +56,15 @@ project = "fish-shell"
 copyright = "2019, fish-shell developers"
 author = "fish-shell developers"
 
-# The short X.Y version
-version = "3.1"
+# Parsing FISH-BUILD-VERSION-FILE is possible but hard to ensure that it is in the right place
+# fish_indent is guaranteed to be on PATH for the Pygments highlighter anyway
+ret = subprocess.check_output(
+    ("fish_indent", "--version"), stderr=subprocess.STDOUT
+).decode("utf-8")
 # The full version, including alpha/beta/rc tags
-release = "3.1.0"
+release = ret.strip().split(" ")[-1]
+# The short X.Y version
+version = release.rsplit(".", 1)[0]
 
 
 # -- General configuration ---------------------------------------------------
@@ -122,7 +133,7 @@ html_static_path = ["_static"]
 # default: ``['localtoc.html', 'relations.html', 'sourcelink.html',
 # 'searchbox.html']``.
 #
-html_sidebars = {"**": ["globaltoc.html", "localtoc.html", "searchbox.html"]}
+html_sidebars = {"**": ["globaltoc.html", "searchbox.html", "localtoc.html"]}
 
 
 # -- Options for HTMLHelp output ---------------------------------------------
@@ -177,7 +188,11 @@ def get_command_description(path, name):
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, "fish", "fish-shell Documentation", [author], 1)]
+man_pages = [
+    (master_doc, "fish-doc", "fish-shell Documentation", [author], 1),
+    ("tutorial", "fish-tutorial", "fish-shell tutorial", [author], 1),
+    ("faq", "fish-faq", "fish-shell faq", [author], 1),
+]
 for path in sorted(glob.glob("cmds/*")):
     docname = strip_ext(path)
     cmd = os.path.basename(docname)

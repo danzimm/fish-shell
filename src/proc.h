@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "common.h"
-#include "enum_set.h"
 #include "event.h"
+#include "global_safety.h"
 #include "io.h"
 #include "parse_tree.h"
 #include "tnode.h"
@@ -72,6 +72,11 @@ class proc_status_t {
         constexpr int zerocode = w_exitcode(0, 0);
         static_assert(WIFEXITED(zerocode), "Synthetic exit status not reported as exited");
         return proc_status_t(w_exitcode(ret, 0 /* sig */));
+    }
+
+    /// Construct directly from a signal.
+    static proc_status_t from_signal(int sig) {
+        return proc_status_t(w_exitcode(0 /* ret */, sig));
     }
 
     /// \return if we are stopped (as in SIGSTOP).
@@ -140,6 +145,12 @@ class internal_proc_t {
     internal_proc_t();
 };
 
+/// 0 should not be used; although it is not a valid PGID in userspace,
+///   the Linux kernel will use it for kernel processes.
+/// -1 should not be used; it is a possible return value of the getpgid()
+///   function
+enum { INVALID_PID = -2 };
+
 /// A structure representing a single fish process. Contains variables for tracking process state
 /// and the process argument list. Actually, a fish process can be either a regular external
 /// process, an internal builtin which may or may not spawn a fake IO process during execution, a
@@ -166,7 +177,7 @@ class process_t {
    private:
     null_terminated_array_t<wchar_t> argv_array;
 
-    io_chain_t process_io_chain;
+    redirection_spec_list_t proc_redirection_specs;
 
     // No copying.
     process_t(const process_t &rhs) = delete;
@@ -187,30 +198,39 @@ class process_t {
     parsed_source_ref_t block_node_source{};
     tnode_t<grammar::statement> internal_block_node{};
 
+    struct concrete_assignment {
+        wcstring variable_name;
+        wcstring_list_t values;
+    };
+    /// The expanded variable assignments for this process, as specified by the `a=b cmd` syntax.
+    std::vector<concrete_assignment> variable_assignments;
+
     /// Sets argv.
     void set_argv(const wcstring_list_t &argv) { argv_array.set(argv); }
 
     /// Returns argv.
     wchar_t **get_argv() { return argv_array.get(); }
+    const wchar_t *const *get_argv() const { return argv_array.get(); }
     const null_terminated_array_t<wchar_t> &get_argv_array() const { return argv_array; }
 
     /// Returns argv[idx].
     const wchar_t *argv(size_t idx) const {
         const wchar_t *const *argv = argv_array.get();
-        assert(argv != NULL);
+        assert(argv != nullptr);
         return argv[idx];
     }
 
     /// Returns argv[0], or NULL.
     const wchar_t *argv0() const {
         const wchar_t *const *argv = argv_array.get();
-        return argv ? argv[0] : NULL;
+        return argv ? argv[0] : nullptr;
     }
 
-    /// IO chain getter and setter.
-    const io_chain_t &io_chain() const { return process_io_chain; }
-
-    void set_io_chain(const io_chain_t &chain) { this->process_io_chain = chain; }
+    /// Redirection list getter and setter.
+    const redirection_spec_list_t &redirection_specs() const { return proc_redirection_specs; }
+    void set_redirection_specs(redirection_spec_list_t specs) {
+        this->proc_redirection_specs = std::move(specs);
+    }
 
     /// Store the current topic generations. That is, right before the process is launched, record
     /// the generations of all topics; then we can tell which generation values have changed after
@@ -246,63 +266,62 @@ class process_t {
 typedef std::unique_ptr<process_t> process_ptr_t;
 typedef std::vector<process_ptr_t> process_list_t;
 
-/// Constants for the flag variable in the job struct.
-enum class job_flag_t {
-    /// Whether the user has been told about stopped job.
-    NOTIFIED,
-    /// Whether this job is in the foreground.
-    FOREGROUND,
-    /// Whether the specified job is completely constructed, i.e. completely parsed, and every
-    /// process in the job has been forked, etc.
-    CONSTRUCTED,
-    /// Whether the specified job is a part of a subshell, event handler or some other form of
-    /// special job that should not be reported.
-    SKIP_NOTIFICATION,
-    /// Whether the exit status should be negated. This flag can only be set by the not builtin.
-    NEGATE,
-    /// Whether the job is under job control, i.e. has its own pgrp.
-    JOB_CONTROL,
-    /// Whether the job wants to own the terminal when in the foreground.
-    TERMINAL,
-    /// This job is disowned, and should be removed from the active jobs list.
-    DISOWN_REQUESTED,
-
-    JOB_FLAG_COUNT
-};
-
-template <>
-struct enum_info_t<job_flag_t> {
-    static constexpr auto count = job_flag_t::JOB_FLAG_COUNT;
-};
-
 typedef int job_id_t;
 job_id_t acquire_job_id(void);
-void release_job_id(job_id_t jobid);
+void release_job_id(job_id_t jid);
+
+/// Information about where a job comes from.
+/// This should be safe to copy across threads; in particular that means this cannot contain a
+/// job_t. It is also important that job_t not contain this: because it stores block IO, it will
+/// extend the life of the IO which may prevent pipes from closing in a timely manner. See #6397.
+struct job_lineage_t {
+    /// The pgid of the parental job.
+    /// If our job is "nested" as part of a function or block execution, and that function or block
+    /// is part of a pipeline, then this may be set.
+    maybe_t<pid_t> parent_pgid{};
+
+    /// The IO chain associated with any block containing this job.
+    /// For example, in `begin; foo ; end < file.txt` this would have the 'file.txt' IO.
+    io_chain_t block_io{};
+
+    /// A shared pointer indicating that the entire tree of jobs is safe to disown.
+    /// This is set to true by the "root" job after it is constructed.
+    std::shared_ptr<relaxed_atomic_bool_t> root_constructed{};
+};
 
 /// A struct represeting a job. A job is basically a pipeline of one or more processes and a couple
 /// of flags.
 class job_t {
+   public:
+    /// A set of jobs properties. These are immutable: they do not change for the lifetime of the
+    /// job.
+    struct properties_t {
+        /// Whether the specified job is a part of a subshell, event handler or some other form of
+        /// special job that should not be reported.
+        bool skip_notification{};
+
+        /// Whether the job wants to own the terminal when in the foreground.
+        bool wants_terminal{};
+
+        /// Whether this job was created as part of an event handler.
+        bool from_event_handler{};
+    };
+
+   private:
+    /// Set of immutable job properties.
+    const properties_t properties;
+
     /// The original command which led to the creation of this job. It is used for displaying
     /// messages about job status on the terminal.
     wcstring command_str;
-
-    // The IO chain associated with the block.
-    const io_chain_t block_io;
-
-    // The parent job. If we were created as a nested job due to execution of a block or function in
-    // a pipeline, then this refers to the job corresponding to that pipeline. Otherwise it is null.
-    const std::shared_ptr<job_t> parent_job;
 
     // No copying.
     job_t(const job_t &rhs) = delete;
     void operator=(const job_t &) = delete;
 
    public:
-    job_t(job_id_t jobid, io_chain_t bio, std::shared_ptr<job_t> parent);
+    job_t(job_id_t job_id, const properties_t &props, job_lineage_t lineage);
     ~job_t();
-
-    /// Returns whether the command is empty.
-    bool command_is_empty() const { return command_str.empty(); }
 
     /// Returns the command as a wchar_t *. */
     const wchar_t *command_wcstr() const { return command_str.c_str(); }
@@ -311,7 +330,7 @@ class job_t {
     const wcstring &command() const { return command_str; }
 
     /// Sets the command.
-    void set_command(const wcstring &cmd) { command_str = cmd; }
+    void set_command(wcstring cmd) { command_str = std::move(cmd); }
 
     /// \return whether it is OK to reap a given process. Sometimes we want to defer reaping a
     /// process if it is the group leader and the job is not yet constructed, because then we might
@@ -356,44 +375,77 @@ class job_t {
 
     /// Process group ID for the process group that this job is running in.
     /// Set to a nonexistent, non-return-value of getpgid() integer by the constructor
-    pid_t pgid;
+    pid_t pgid{INVALID_PID};
+
+    /// The id of this job.
+    const job_id_t job_id;
+
     /// The saved terminal modes of this job. This needs to be saved so that we can restore the
     /// terminal to the same state after temporarily taking control over the terminal when a job
     /// stops.
-    struct termios tmodes;
-    /// The job id of the job. This is a small integer that is a unique identifier of the job within
-    /// this shell, and is used e.g. in process expansion.
-    const job_id_t job_id;
-    /// Bitset containing information about the job. A combination of the JOB_* constants.
-    enum_set_t<job_flag_t> flags;
+    struct termios tmodes {};
 
-    // Get and set flags
-    bool get_flag(job_flag_t flag) const;
-    void set_flag(job_flag_t flag, bool set);
+    /// Whether the specified job is completely constructed, i.e. completely parsed, and every
+    /// process in the job has been forked, etc.
+    /// This is a shared_ptr because it may be passed to child jobs through the lineage.
+    const std::shared_ptr<relaxed_atomic_bool_t> constructed =
+        std::make_shared<relaxed_atomic_bool_t>(false);
 
-    /// Returns the block IO redirections associated with the job. These are things like the IO
-    /// redirections associated with the begin...end statement.
-    const io_chain_t &block_io_chain() const { return this->block_io; }
+    /// Whether the root job is constructed; this may share a reference with 'constructed'.
+    const std::shared_ptr<relaxed_atomic_bool_t> root_constructed;
 
-    /// Fetch all the IO redirections associated with the job.
-    io_chain_t all_io_redirections() const;
+    /// Flags associated with the job.
+    struct flags_t {
+        /// Whether the user has been told about stopped job.
+        bool notified{false};
+
+        /// Whether this job is in the foreground.
+        bool foreground{false};
+
+        /// Whether the exit status should be negated. This flag can only be set by the not builtin.
+        bool negate{false};
+
+        /// Whether the job is under job control, i.e. has its own pgrp.
+        bool job_control{false};
+
+        /// This job is disowned, and should be removed from the active jobs list.
+        bool disown_requested{false};
+    } job_flags{};
+
+    /// Access the job flags.
+    const flags_t &flags() const { return job_flags; }
+
+    /// Access mutable job flags.
+    flags_t &mut_flags() { return job_flags; }
+
+    /// \return if we want job control.
+    bool wants_job_control() const { return flags().job_control; }
+
+    /// \return if this job should own the terminal when it runs.
+    bool should_claim_terminal() const { return properties.wants_terminal && is_foreground(); }
+
+    /// Mark this job as constructed. The job must not have previously been marked as constructed.
+    void mark_constructed();
 
     // Helper functions to check presence of flags on instances of jobs
     /// The job has been fully constructed, i.e. all its member processes have been launched
-    bool is_constructed() const { return get_flag(job_flag_t::CONSTRUCTED); }
+    bool is_constructed() const { return *constructed; }
     /// The job was launched in the foreground and has control of the terminal
-    bool is_foreground() const { return get_flag(job_flag_t::FOREGROUND); }
+    bool is_foreground() const { return flags().foreground; }
     /// The job is complete, i.e. all its member processes have been reaped
     bool is_completed() const;
     /// The job is in a stopped state
     bool is_stopped() const;
     /// The job is OK to be externally visible, e.g. to the user via `jobs`
     bool is_visible() const {
-        return !is_completed() && is_constructed() && !get_flag(job_flag_t::DISOWN_REQUESTED);
-    };
+        return !is_completed() && is_constructed() && !flags().disown_requested;
+    }
+    bool skip_notification() const { return properties.skip_notification; }
+    bool from_event_handler() const { return properties.from_event_handler; }
 
-    /// \return the parent job, or nullptr.
-    const std::shared_ptr<job_t> get_parent() const { return parent_job; }
+    /// \return whether we should report process exit events.
+    /// This implements some historical behavior which has not been justified.
+    bool should_report_process_exits() const;
 
     /// \return whether this job and its parent chain are fully constructed.
     bool job_chain_is_fully_constructed() const;
@@ -421,9 +473,6 @@ class job_t {
     /// Return the job containing the process identified by the unique pid provided.
     static job_t *from_pid(pid_t pid);
 };
-
-/// Whether we are reading from the keyboard right now.
-bool shell_is_interactive();
 
 /// Whether this shell is attached to the keyboard at all.
 bool is_interactive_session();
@@ -455,7 +504,7 @@ class parser_t;
 bool job_reap(parser_t &parser, bool interactive);
 
 /// Mark a process as failed to execute (and therefore completed).
-void job_mark_process_as_failed(const std::shared_ptr<job_t> &job, const process_t *p);
+void job_mark_process_as_failed(const std::shared_ptr<job_t> &job, const process_t *failed_proc);
 
 /// Use the procfs filesystem to look up how many jiffies of cpu time was used by this process. This
 /// function is only available on systems with the procfs file entry 'stat', i.e. Linux.
@@ -475,12 +524,6 @@ event_t proc_create_event(const wchar_t *msg, event_type_t type, pid_t pid, int 
 /// Initializations.
 void proc_init();
 
-/// Set new value for is_interactive flag, saving previous value. If needed, update signal handlers.
-void proc_push_interactive(int value);
-
-/// Set is_interactive flag to the previous value. If needed, update signal handlers.
-void proc_pop_interactive();
-
 /// Wait for any process finishing, or receipt of a signal.
 void proc_wait_any(parser_t &parser);
 
@@ -493,13 +536,14 @@ bool is_within_fish_initialization();
 /// Terminate all background jobs
 void hup_background_jobs(const parser_t &parser);
 
-/// Give ownership of the terminal to the specified job.
+/// Give ownership of the terminal to the specified job, if it wants it.
 ///
 /// \param j The job to give the terminal to.
-/// \param restore_attrs If this variable is set, we are giving back control to a job that was
-/// previously stopped. In that case, we need to set the terminal attributes to those saved in the
-/// job.
-bool terminal_give_to_job(const job_t *j, bool restore_attrs);
+/// \param continuing_from_stopped If this variable is set, we are giving back control to a job that
+/// was previously stopped. In that case, we need to set the terminal attributes to those saved in
+/// the job.
+/// \return 1 if transferred, 0 if no transfer was necessary, -1 on error.
+int terminal_maybe_give_to_job(const job_t *j, bool continuing_from_stopped);
 
 /// Given that we are about to run a builtin, acquire the terminal if it is owned by the given job.
 /// Returns the pid to restore after running the builtin, or -1 if there is no pid to restore.
@@ -508,12 +552,6 @@ pid_t terminal_acquire_before_builtin(int job_pgid);
 /// Add a pid to the list of pids we wait on even though they are not associated with any jobs.
 /// Used to avoid zombie processes after disown.
 void add_disowned_pgid(pid_t pgid);
-
-/// 0 should not be used; although it is not a valid PGID in userspace,
-///   the Linux kernel will use it for kernel processes.
-/// -1 should not be used; it is a possible return value of the getpgid()
-///   function
-enum { INVALID_PID = -2 };
 
 bool have_proc_stat();
 

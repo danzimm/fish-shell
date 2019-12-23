@@ -28,7 +28,7 @@ struct callback_data_t {
     bool is_erase() const { return !val.has_value(); }
 };
 
-typedef std::vector<struct callback_data_t> callback_data_list_t;
+typedef std::vector<callback_data_t> callback_data_list_t;
 
 // List of fish universal variable formats.
 // This is exposed for testing.
@@ -49,6 +49,8 @@ class env_universal_t {
     // Path that we save to. If empty, use the default.
     wcstring explicit_vars_path;
 
+    // A generation count which is incremented every time an exported variable is modified.
+    uint64_t export_generation{1};
 
     // Whether it's OK to save. This may be set to false if we discover that a future version of
     // fish wrote the uvars contents.
@@ -59,8 +61,8 @@ class env_universal_t {
     bool load_from_path(const wcstring &path, callback_data_list_t &callbacks);
     void load_from_fd(int fd, callback_data_list_t &callbacks);
 
-    void set_internal(const wcstring &key, const env_var_t &var, bool overwrite);
-    bool remove_internal(const wcstring &name);
+    void set_internal(const wcstring &key, const env_var_t &var);
+    bool remove_internal(const wcstring &key);
 
     // Functions concerned with saving.
     bool open_and_acquire_lock(const std::string &path, int *out_fd);
@@ -72,14 +74,15 @@ class env_universal_t {
     file_id_t last_read_file = kInvalidFileID;
 
     // Given a variable table, generate callbacks representing the difference between our vars and
-    // the new vars.
-    void generate_callbacks(const var_table_t &new_vars, callback_data_list_t &callbacks) const;
+    // the new vars. Also update our exports generation count as necessary.
+    void generate_callbacks_and_update_exports(const var_table_t &new_vars,
+                                               callback_data_list_t &callbacks);
 
     // Given a variable table, copy unmodified values into self. May destructively modify
     // vars_to_acquire.
     void acquire_variables(var_table_t &vars_to_acquire);
 
-    static bool populate_1_variable(const wchar_t *str, env_var_t::env_var_flags_t flags,
+    static bool populate_1_variable(const wchar_t *input, env_var_t::env_var_flags_t flags,
                                     var_table_t *vars, wcstring *storage);
 
     static void parse_message_2x_internal(const wcstring &msg, var_table_t *vars,
@@ -103,10 +106,13 @@ class env_universal_t {
     void set(const wcstring &key, env_var_t var);
 
     // Removes a variable. Returns true if it was found, false if not.
-    bool remove(const wcstring &name);
+    bool remove(const wcstring &key);
 
     // Gets variable names.
     wcstring_list_t get_names(bool show_exported, bool show_unexported) const;
+
+    /// Get a view on the universal variable table.
+    const var_table_t &get_table() const { return vars; }
 
     /// Loads variables at the correct path, optionally migrating from a legacy path.
     bool initialize(callback_data_list_t &callbacks);
@@ -128,6 +134,9 @@ class env_universal_t {
 
     /// Exposed for testing only.
     bool is_ok_to_save() const { return ok_to_save; }
+
+    /// Access the export generation.
+    uint64_t get_export_generation() const;
 };
 
 /// The "universal notifier" is an object responsible for broadcasting and receiving universal
@@ -174,7 +183,7 @@ class universal_notifier_t {
 
     // Factory constructor.
     static std::unique_ptr<universal_notifier_t> new_notifier_for_strategy(
-        notifier_strategy_t strat, const wchar_t *test_path = NULL);
+        notifier_strategy_t strat, const wchar_t *test_path = nullptr);
 
     // Default instance. Other instances are possible for testing.
     static universal_notifier_t &default_notifier();

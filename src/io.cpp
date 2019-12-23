@@ -1,28 +1,44 @@
 // Utilities for io redirection.
 #include "config.h"  // IWYU pragma: keep
 
+#include "io.h"
+
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <cwchar>
 
 #include "common.h"
 #include "exec.h"
 #include "fallback.h"  // IWYU pragma: keep
-#include "io.h"
 #include "iothread.h"
+#include "path.h"
 #include "redirection.h"
 #include "wutil.h"  // IWYU pragma: keep
 
+/// File redirection error message.
+#define FILE_ERROR _(L"An error occurred while redirecting file '%ls'")
+#define NOCLOB_ERROR _(L"The file '%ls' already exists")
+
+/// Base open mode to pass to calls to open.
+#define OPEN_MASK 0666
+
 io_data_t::~io_data_t() = default;
+
+io_file_t::io_file_t(int f, autoclose_fd_t file)
+    : io_data_t(io_mode_t::file, f), file_fd_(std::move(file)) {
+    assert(file_fd_.valid() && "File is not valid");
+}
 
 void io_close_t::print() const { std::fwprintf(stderr, L"close %d\n", fd); }
 
 void io_fd_t::print() const { std::fwprintf(stderr, L"FD map %d -> %d\n", old_fd, fd); }
 
-void io_file_t::print() const { std::fwprintf(stderr, L"file (%s)\n", filename_cstr); }
+void io_file_t::print() const { std::fwprintf(stderr, L"file (%d)\n", file_fd_.fd()); }
 
 void io_pipe_t::print() const {
     std::fwprintf(stderr, L"pipe {%d} (input: %s)\n", pipe_fd(), is_input_ ? "yes" : "no");
@@ -31,14 +47,15 @@ void io_pipe_t::print() const {
 void io_bufferfill_t::print() const { std::fwprintf(stderr, L"bufferfill {%d}\n", write_fd_.fd()); }
 
 void io_buffer_t::append_from_stream(const output_stream_t &stream) {
-    if (stream.empty()) return;
+    const separated_buffer_t<wcstring> &input = stream.buffer();
+    if (input.elements().empty()) return;
     scoped_lock locker(append_lock_);
     if (buffer_.discarded()) return;
-    if (stream.buffer().discarded()) {
+    if (input.discarded()) {
         buffer_.set_discard();
         return;
     }
-    buffer_.append_wide_buffer(stream.buffer());
+    buffer_.append_wide_buffer(input);
 }
 
 void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
@@ -76,7 +93,7 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
-        int ret = select(fd + 1, &fds, NULL, NULL, &tv);
+        int ret = select(fd + 1, &fds, nullptr, nullptr, &tv);
         // select(2) is allowed to (and does) update `tv` to indicate how much time was left, so we
         // need to restore the desired value each time.
         tv.tv_usec = poll_timeout_usec;
@@ -92,7 +109,7 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
         // allowing it to time out. Note the typical case is that the fd will be closed, in which
         // case select will return immediately.
         if (!readable) {
-            shutdown = this->shutdown_fillthread_.load(std::memory_order_relaxed);
+            shutdown = this->shutdown_fillthread_;
         }
 
         if (readable || shutdown) {
@@ -124,37 +141,40 @@ void io_buffer_t::run_background_fillthread(autoclose_fd_t readfd) {
 
 void io_buffer_t::begin_background_fillthread(autoclose_fd_t fd) {
     ASSERT_IS_MAIN_THREAD();
-    assert(!fillthread_ && "Already have a fillthread");
+    assert(!fillthread_running() && "Already have a fillthread");
 
     // We want our background thread to own the fd but it's not easy to move into a std::function.
     // Use a shared_ptr.
     auto fdref = move_to_sharedptr(std::move(fd));
 
-    // Our function to read until the receiver is closed.
-    // It's OK to capture 'this' by value because 'this' owns the background thread and joins it
-    // before dtor.
-    std::function<void(void)> func = [this, fdref]() {
-        this->run_background_fillthread(std::move(*fdref));
-    };
+    // Construct a promise that can go into our background thread.
+    auto promise = std::make_shared<std::promise<void>>();
 
-    pthread_t fillthread{};
-    if (!make_pthread(&fillthread, std::move(func))) {
-        wperror(L"make_pthread");
-    }
-    fillthread_ = fillthread;
+    // Get the future associated with our promise.
+    // Note this should only ever be called once.
+    fillthread_waiter_ = promise->get_future();
+
+    // Run our function to read until the receiver is closed.
+    // It's OK to capture 'this' by value because 'this' owns the background thread and waits for it
+    // before dtor.
+    iothread_perform([this, promise, fdref]() {
+        this->run_background_fillthread(std::move(*fdref));
+        promise->set_value();
+    });
 }
 
 void io_buffer_t::complete_background_fillthread() {
     ASSERT_IS_MAIN_THREAD();
-    assert(fillthread_ && "Should have a fillthread");
-    shutdown_fillthread_.store(true, std::memory_order_relaxed);
-    void *ignored = nullptr;
-    int err = pthread_join(*fillthread_, &ignored);
-    DIE_ON_FAILURE(err);
-    fillthread_.reset();
+    assert(fillthread_running() && "Should have a fillthread");
+    shutdown_fillthread_ = true;
+
+    // Wait for the fillthread to fulfill its promise, and then clear the future so we know we no
+    // longer have one.
+    fillthread_waiter_.wait();
+    fillthread_waiter_ = {};
 }
 
-shared_ptr<io_bufferfill_t> io_bufferfill_t::create(const io_chain_t &conflicts,
+shared_ptr<io_bufferfill_t> io_bufferfill_t::create(const fd_set_t &conflicts,
                                                     size_t buffer_limit) {
     // Construct our pipes.
     auto pipes = make_autoclose_pipes(conflicts);
@@ -188,11 +208,13 @@ std::shared_ptr<io_buffer_t> io_bufferfill_t::finish(std::shared_ptr<io_bufferfi
 }
 
 io_pipe_t::~io_pipe_t() = default;
-
+io_fd_t::~io_fd_t() = default;
+io_close_t::~io_close_t() = default;
+io_file_t::~io_file_t() = default;
 io_bufferfill_t::~io_bufferfill_t() = default;
 
 io_buffer_t::~io_buffer_t() {
-    assert(!fillthread_ && "io_buffer_t destroyed with outstanding fillthread");
+    assert(!fillthread_running() && "io_buffer_t destroyed with outstanding fillthread");
 }
 
 void io_chain_t::remove(const shared_ptr<const io_data_t> &element) {
@@ -205,107 +227,103 @@ void io_chain_t::remove(const shared_ptr<const io_data_t> &element) {
     }
 }
 
-void io_chain_t::push_back(shared_ptr<io_data_t> element) {
+void io_chain_t::push_back(io_data_ref_t element) {
     // Ensure we never push back NULL.
     assert(element.get() != nullptr);
-    std::vector<shared_ptr<io_data_t> >::push_back(std::move(element));
-}
-
-void io_chain_t::push_front(shared_ptr<io_data_t> element) {
-    assert(element.get() != nullptr);
-    this->insert(this->begin(), std::move(element));
+    std::vector<io_data_ref_t>::push_back(std::move(element));
 }
 
 void io_chain_t::append(const io_chain_t &chain) {
+    assert(&chain != this && "Cannot append self to self");
     this->insert(this->end(), chain.begin(), chain.end());
 }
 
-#if 0
-// This isn't used so the lint tools were complaining about its presence. I'm keeping it in the
-// source because it could be useful for debugging.
-void io_print(const io_chain_t &chain)
-{
-    if (chain.empty())
-    {
-        std::fwprintf(stderr, L"Empty chain %p\n", &chain);
+bool io_chain_t::append_from_specs(const redirection_spec_list_t &specs, const wcstring &pwd) {
+    for (const auto &spec : specs) {
+        switch (spec.mode) {
+            case redirection_mode_t::fd: {
+                if (spec.is_close()) {
+                    this->push_back(make_unique<io_close_t>(spec.fd));
+                } else {
+                    auto target_fd = spec.get_target_as_fd();
+                    assert(target_fd.has_value() &&
+                           "fd redirection should have been validated already");
+                    this->push_back(make_unique<io_fd_t>(spec.fd, *target_fd));
+                }
+                break;
+            }
+            default: {
+                // We have a path-based redireciton. Resolve it to a file.
+                // Mark it as CLO_EXEC because we don't want it to be open in any child.
+                wcstring path = path_apply_working_directory(spec.target, pwd);
+                int oflags = spec.oflags();
+                autoclose_fd_t file{wopen_cloexec(path, oflags, OPEN_MASK)};
+                if (!file.valid()) {
+                    if ((oflags & O_EXCL) && (errno == EEXIST)) {
+                        debug(1, NOCLOB_ERROR, spec.target.c_str());
+                    } else {
+                        debug(1, FILE_ERROR, spec.target.c_str());
+                        if (should_debug(1)) wperror(L"open");
+                    }
+                    return false;
+                }
+                this->push_back(std::make_shared<io_file_t>(spec.fd, std::move(file)));
+                break;
+            }
+        }
+    }
+    return true;
+}
+
+void io_chain_t::print() const {
+    if (this->empty()) {
+        std::fwprintf(stderr, L"Empty chain %p\n", this);
         return;
     }
 
-    std::fwprintf(stderr, L"Chain %p (%ld items):\n", &chain, (long)chain.size());
-    for (size_t i=0; i < chain.size(); i++)
-    {
-        const shared_ptr<io_data_t> &io = chain.at(i);
-        if (io.get() == NULL)
-        {
+    std::fwprintf(stderr, L"Chain %p (%ld items):\n", this, (long)this->size());
+    for (size_t i = 0; i < this->size(); i++) {
+        const auto &io = this->at(i);
+        if (io.get() == nullptr) {
             std::fwprintf(stderr, L"\t(null)\n");
-        }
-        else
-        {
+        } else {
             std::fwprintf(stderr, L"\t%lu: fd:%d, ", (unsigned long)i, io->fd);
             io->print();
         }
     }
 }
-#endif
 
-int move_fd_to_unused(int fd, const io_chain_t &io_chain, bool cloexec) {
-    if (fd < 0 || io_chain.get_io_for_fd(fd).get() == NULL) {
+fd_set_t io_chain_t::fd_set() const {
+    fd_set_t result;
+    for (const auto &io : *this) {
+        result.add(io->fd);
+    }
+    return result;
+}
+
+autoclose_fd_t move_fd_to_unused(autoclose_fd_t fd, const fd_set_t &fdset, bool cloexec) {
+    if (!fd.valid() || !fdset.contains(fd.fd())) {
         return fd;
     }
 
     // We have fd >= 0, and it's a conflict. dup it and recurse. Note that we recurse before
     // anything is closed; this forces the kernel to give us a new one (or report fd exhaustion).
-    int new_fd = fd;
     int tmp_fd;
     do {
-        tmp_fd = dup(fd);
+        tmp_fd = dup(fd.fd());
     } while (tmp_fd < 0 && errno == EINTR);
 
-    assert(tmp_fd != fd);
+    assert(tmp_fd != fd.fd());
     if (tmp_fd < 0) {
         // Likely fd exhaustion.
-        new_fd = -1;
-    } else {
-        // Ok, we have a new candidate fd. Recurse. If we get a valid fd, either it's the same as
-        // what we gave it, or it's a new fd and what we gave it has been closed. If we get a
-        // negative value, the fd also has been closed.
-        if (cloexec) set_cloexec(tmp_fd);
-        new_fd = move_fd_to_unused(tmp_fd, io_chain);
+        return autoclose_fd_t{};
     }
-
-    // We're either returning a new fd or an error. In both cases, we promise to close the old one.
-    assert(new_fd != fd);
-    int saved_errno = errno;
-    exec_close(fd);
-    errno = saved_errno;
-    return new_fd;
+    // Ok, we have a new candidate fd. Recurse.
+    if (cloexec) set_cloexec(tmp_fd);
+    return move_fd_to_unused(autoclose_fd_t{tmp_fd}, fdset, cloexec);
 }
 
-static bool pipe_avoid_conflicts_with_io_chain(int fds[2], const io_chain_t &ios) {
-    bool success = true;
-    for (int i = 0; i < 2; i++) {
-        fds[i] = move_fd_to_unused(fds[i], ios);
-        if (fds[i] < 0) {
-            success = false;
-            break;
-        }
-    }
-
-    // If any fd failed, close all valid fds.
-    if (!success) {
-        int saved_errno = errno;
-        for (int i = 0; i < 2; i++) {
-            if (fds[i] >= 0) {
-                exec_close(fds[i]);
-                fds[i] = -1;
-            }
-        }
-        errno = saved_errno;
-    }
-    return success;
-}
-
-maybe_t<autoclose_pipes_t> make_autoclose_pipes(const io_chain_t &ios) {
+maybe_t<autoclose_pipes_t> make_autoclose_pipes(const fd_set_t &fdset) {
     int pipes[2] = {-1, -1};
 
     if (pipe(pipes) < 0) {
@@ -316,42 +334,21 @@ maybe_t<autoclose_pipes_t> make_autoclose_pipes(const io_chain_t &ios) {
     set_cloexec(pipes[0]);
     set_cloexec(pipes[1]);
 
-    if (!pipe_avoid_conflicts_with_io_chain(pipes, ios)) {
-        // The pipes are closed on failure here.
-        return none();
-    }
-    autoclose_pipes_t result;
-    result.read = autoclose_fd_t(pipes[0]);
-    result.write = autoclose_fd_t(pipes[1]);
-    return {std::move(result)};
+    auto read = move_fd_to_unused(autoclose_fd_t{pipes[0]}, fdset, true);
+    if (!read.valid()) return none();
+
+    auto write = move_fd_to_unused(autoclose_fd_t{pipes[1]}, fdset, true);
+    if (!write.valid()) return none();
+
+    return autoclose_pipes_t(std::move(read), std::move(write));
 }
 
-/// Return the last IO for the given fd.
-shared_ptr<const io_data_t> io_chain_t::get_io_for_fd(int fd) const {
-    size_t idx = this->size();
-    while (idx--) {
-        const shared_ptr<io_data_t> &data = this->at(idx);
+shared_ptr<const io_data_t> io_chain_t::io_for_fd(int fd) const {
+    for (auto iter = rbegin(); iter != rend(); ++iter) {
+        const auto &data = *iter;
         if (data->fd == fd) {
             return data;
         }
     }
-    return shared_ptr<const io_data_t>();
+    return nullptr;
 }
-
-shared_ptr<io_data_t> io_chain_t::get_io_for_fd(int fd) {
-    size_t idx = this->size();
-    while (idx--) {
-        const shared_ptr<io_data_t> &data = this->at(idx);
-        if (data->fd == fd) {
-            return data;
-        }
-    }
-    return shared_ptr<io_data_t>();
-}
-
-/// The old function returned the last match, so we mimic that.
-shared_ptr<const io_data_t> io_chain_get(const io_chain_t &src, int fd) {
-    return src.get_io_for_fd(fd);
-}
-
-shared_ptr<io_data_t> io_chain_get(io_chain_t &src, int fd) { return src.get_io_for_fd(fd); }

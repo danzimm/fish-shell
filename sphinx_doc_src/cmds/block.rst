@@ -6,7 +6,9 @@ block - temporarily block delivery of events
 Synopsis
 --------
 
-block [OPTIONS...]
+::
+
+    block [OPTIONS...]
 
 
 Description
@@ -32,22 +34,19 @@ The following parameters are available:
 Example
 -------
 
-
-
 ::
 
     # Create a function that listens for events
     function --on-event foo foo; echo 'foo fired'; end
-    
+
     # Block the delivery of events
     block -g
-    
+
     emit foo
     # No output will be produced
-    
+
     block -e
     # 'foo fired' will now be printed
-
 
 
 Notes

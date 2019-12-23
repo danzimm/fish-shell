@@ -44,7 +44,7 @@ void path_emit_config_directory_errors(env_stack_t &vars);
 /// Returns:
 /// false if the command can not be found else true. The result
 /// should be freed with free().
-bool path_get_path(const wcstring &cmd, wcstring *output_or_NULL, const environment_t &vars);
+bool path_get_path(const wcstring &cmd, wcstring *out_path, const environment_t &vars);
 
 /// Return all the paths that match the given command.
 wcstring_list_t path_get_paths(const wcstring &cmd, const environment_t &vars);
@@ -53,13 +53,12 @@ wcstring_list_t path_get_paths(const wcstring &cmd, const environment_t &vars);
 /// directories for relative paths.
 ///
 /// If no valid path is found, false is returned and errno is set to ENOTDIR if at least one such
-/// path was found, but it did not point to a directory, EROTTEN if a arotten symbolic link was
+/// path was found, but it did not point to a directory, EROTTEN if a rotten symbolic link was
 /// found, or ENOENT if no file of the specified name was found. If both a rotten symlink and a file
 /// are found, it is undefined which error status will be returned.
 ///
 /// \param dir The name of the directory.
-/// \param out_or_NULL If non-NULL, return the path to the resolved directory
-/// \param wd The working directory. The working directory should have a slash appended at the end.
+/// \param wd The working directory. The working directory must end with a slash.
 /// \param vars The environment variables to use (for the CDPATH variable)
 /// \return the command, or none() if it could not be found.
 maybe_t<wcstring> path_get_cdpath(const wcstring &dir, const wcstring &wd,

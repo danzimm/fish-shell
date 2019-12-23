@@ -6,13 +6,14 @@ emit - Emit a generic event
 Synopsis
 --------
 
-emit EVENT_NAME [ARGUMENTS...]
+::
 
+    emit EVENT_NAME [ARGUMENTS...]
 
 Description
 -----------
 
-``emit`` emits, or fires, an event. Events are delivered to, or caught by, special functions called event handlers. The arguments are passed to the event handlers as function arguments.
+``emit`` emits, or fires, an event. Events are delivered to, or caught by, special functions called :ref:`event handlers <event>`. The arguments are passed to the event handlers as function arguments.
 
 
 Example

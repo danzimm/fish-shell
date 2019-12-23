@@ -6,7 +6,9 @@ eval - evaluate the specified commands
 Synopsis
 --------
 
-eval [COMMANDS...]
+::
+
+    eval [COMMANDS...]
 
 
 Description
@@ -15,7 +17,7 @@ Description
 
 If your command does not need access to stdin, consider using ``source`` instead.
 
-If no piping or other compound shell constructs are required, variable-expansion-as-command, as in  ``set cmd ls; $cmd``, is also an option.
+If no piping or other compound shell constructs are required, variable-expansion-as-command, as in  ``set cmd ls -la; $cmd``, is also an option.
 
 
 Example

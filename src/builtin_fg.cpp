@@ -1,13 +1,14 @@
 // Implementation of the fg builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include "builtin_fg.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 
 #include "builtin.h"
-#include "builtin_fg.h"
 #include "common.h"
 #include "env.h"
 #include "fallback.h"  // IWYU pragma: keep
@@ -29,7 +30,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
@@ -40,8 +41,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
         for (const auto &j : parser.jobs()) {
             if (j->is_constructed() && (!j->is_completed()) &&
-                ((j->is_stopped() || (!j->is_foreground())) &&
-                 j->get_flag(job_flag_t::JOB_CONTROL))) {
+                ((j->is_stopped() || (!j->is_foreground())) && j->wants_job_control())) {
                 job = j.get();
                 break;
             }
@@ -77,7 +77,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             if (!job || !job->is_constructed() || job->is_completed()) {
                 streams.err.append_format(_(L"%ls: No suitable job: %d\n"), cmd, pid);
                 job = nullptr;
-            } else if (!job->get_flag(job_flag_t::JOB_CONTROL)) {
+            } else if (!job->wants_job_control()) {
                 streams.err.append_format(_(L"%ls: Can't put job %d, '%ls' to foreground because "
                                             L"it is not under job control\n"),
                                           cmd, pid, job->command_wcstr());
@@ -104,7 +104,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     reader_write_title(job->command(), parser);
 
     parser.job_promote(job);
-    job->set_flag(job_flag_t::FOREGROUND, true);
+    job->mut_flags().foreground = true;
 
     job->continue_job(parser, true, job->is_stopped());
     return STATUS_CMD_OK;

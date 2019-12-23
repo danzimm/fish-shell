@@ -80,7 +80,7 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
     bind --preset $argv \e. history-token-search-backward
 
     bind --preset $argv \el __fish_list_current_token
-    bind --preset $argv \ew 'set tok (commandline -pt); if test -n "$tok[1]"; echo; whatis $tok[1]; commandline -f repaint; end'
+    bind --preset $argv \ew __fish_whatis_current_token
     # ncurses > 6.0 sends a "delete scrollback" sequence along with clear.
     # This string replace removes it.
     bind --preset $argv \cl 'echo -n (clear | string replace \e\[3J ""); commandline -f repaint'
@@ -92,6 +92,9 @@ function __fish_shared_key_bindings -d "Bindings shared between emacs and vi mod
 
     bind --preset $argv \ed 'set -l cmd (commandline); if test -z "$cmd"; echo; dirh; commandline -f repaint; else; commandline -f kill-word; end'
     bind --preset $argv \cd delete-or-exit
+
+    # Prepend 'sudo ' to the current commandline
+    bind --preset $argv \es __fish_prepend_sudo
 
     # Allow reading manpages by pressing F1 (many GUI applications) or Alt+h (like in zsh).
     bind --preset $argv -k f1 __fish_man_page

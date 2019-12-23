@@ -1,16 +1,16 @@
 #ifndef FISH_TOPIC_MONITOR_H
 #define FISH_TOPIC_MONITOR_H
 
-#include "common.h"
-#include "enum_set.h"
-#include "io.h"
-
 #include <array>
 #include <atomic>
 #include <bitset>
 #include <condition_variable>
 #include <limits>
 #include <numeric>
+
+#include "common.h"
+#include "enum_set.h"
+#include "io.h"
 
 /** Topic monitoring support. Topics are conceptually "a thing that can happen." For example,
  delivery of a SIGINT, a child process exits, etc. It is possible to post to a topic, which means
@@ -63,7 +63,7 @@ constexpr generation_t invalid_generation = std::numeric_limits<generation_t>::m
 /// The initial value of a generation is always 0.
 using generation_list_t = enum_array_t<generation_t, topic_t>;
 
-/// Teh topic monitor class. This permits querying the current generation values for topics,
+/// The topic monitor class. This permits querying the current generation values for topics,
 /// optionally blocking until they increase.
 class topic_monitor_t {
    private:

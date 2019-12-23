@@ -3,9 +3,9 @@
 // IWYU pragma: no_include <cstddef>
 #include <stddef.h>
 #include <wctype.h>
-#include <cwchar>
 
 #include <algorithm>
+#include <cwchar>
 #include <numeric>
 #include <type_traits>
 #include <unordered_map>
@@ -20,9 +20,9 @@
 #include "screen.h"
 #include "wutil.h"  // IWYU pragma: keep
 
-typedef pager_t::comp_t comp_t;
-typedef std::vector<completion_t> completion_list_t;
-typedef std::vector<comp_t> comp_info_list_t;
+using comp_t = pager_t::comp_t;
+using completion_list_t = std::vector<completion_t>;
+using comp_info_list_t = std::vector<comp_t>;
 
 /// The minimum width (in characters) the terminal must to show completions at all.
 #define PAGER_MIN_WIDTH 16
@@ -324,8 +324,8 @@ static comp_info_list_t process_completions_into_infos(const completion_list_t &
 
 void pager_t::measure_completion_infos(comp_info_list_t *infos, const wcstring &prefix) const {
     size_t prefix_len = fish_wcswidth(prefix);
-    for (size_t i = 0; i < infos->size(); i++) {
-        comp_t *comp = &infos->at(i);
+    for (auto &info : *infos) {
+        comp_t *comp = &info;
         const wcstring_list_t &comp_strings = comp->comp;
 
         for (size_t j = 0; j < comp_strings.size(); j++) {
@@ -359,9 +359,8 @@ bool pager_t::completion_info_passes_filter(const comp_t &info) const {
     }
 
     // Match against the completion strings.
-    for (size_t i = 0; i < info.comp.size(); i++) {
-        if (string_fuzzy_match_string(needle, prefix + info.comp.at(i), limit).type !=
-            fuzzy_match_none) {
+    for (const auto &i : info.comp) {
+        if (string_fuzzy_match_string(needle, prefix + i, limit).type != fuzzy_match_none) {
             return true;
         }
     }
@@ -372,8 +371,7 @@ bool pager_t::completion_info_passes_filter(const comp_t &info) const {
 // Update completion_infos from unfiltered_completion_infos, to reflect the filter.
 void pager_t::refilter_completions() {
     this->completion_infos.clear();
-    for (size_t i = 0; i < this->unfiltered_completion_infos.size(); i++) {
-        const comp_t &info = this->unfiltered_completion_infos.at(i);
+    for (const auto &info : this->unfiltered_completion_infos) {
         if (this->completion_info_passes_filter(info)) {
             this->completion_infos.push_back(info);
         }
@@ -421,7 +419,7 @@ bool pager_t::completion_try_print(size_t cols, const wcstring &prefix, const co
         this->available_term_height - 1 -
         (search_field_shown ? 1 : 0);  // we always subtract 1 to make room for a comment row
     if (!this->fully_disclosed) {
-        term_height = std::min(term_height, (size_t)PAGER_UNDISCLOSED_MAX_ROWS);
+        term_height = std::min(term_height, static_cast<size_t>(PAGER_UNDISCLOSED_MAX_ROWS));
     }
 
     size_t row_count = divide_round_up(lst.size(), cols);
@@ -494,7 +492,7 @@ bool pager_t::completion_try_print(size_t cols, const wcstring &prefix, const co
     assert(rendering->remaining_to_disclose != 1);
     if (rendering->remaining_to_disclose > 1) {
         progress_text = format_string(_(L"%lsand %lu more rows"), get_ellipsis_str(),
-                                      (unsigned long)rendering->remaining_to_disclose);
+                                      static_cast<unsigned long>(rendering->remaining_to_disclose));
     } else if (start_row > 0 || stop_row < row_count) {
         // We have a scrollable interface. The +1 here is because we are zero indexed, but want
         // to present things as 1-indexed. We do not add 1 to stop_row or row_count because
@@ -566,7 +564,7 @@ page_rendering_t pager_t::render() const {
             continue;
         }
 
-        rendering.cols = (size_t)cols;
+        rendering.cols = cols;
         rendering.rows = min_rows_required_for_cols;
         rendering.selected_completion_idx =
             this->visual_selected_completion_index(rendering.rows, rendering.cols);
@@ -659,7 +657,7 @@ bool pager_t::select_next_completion_in_direction(selection_motion_t direction,
         // Cardinal directions. We have a completion index; we wish to compute its row and column.
         size_t current_row = this->get_selected_row(rendering);
         size_t current_col = this->get_selected_column(rendering);
-        size_t page_height = std::max(rendering.term_height - 1, (size_t)1);
+        size_t page_height = std::max(rendering.term_height - 1, static_cast<size_t>(1));
 
         switch (direction) {
             case selection_motion_t::page_north: {
@@ -809,7 +807,7 @@ bool pager_t::is_navigating_contents() const {
 void pager_t::set_fully_disclosed(bool flag) { fully_disclosed = flag; }
 
 const completion_t *pager_t::selected_completion(const page_rendering_t &rendering) const {
-    const completion_t *result = NULL;
+    const completion_t *result = nullptr;
     size_t idx = visual_selected_completion_index(rendering.rows, rendering.cols);
     if (idx != PAGER_SELECTION_NONE) {
         result = &completion_infos.at(idx).representative;

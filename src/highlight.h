@@ -72,11 +72,13 @@ struct highlight_spec_t {
 
 class history_item_t;
 
+std::string colorize(const wcstring &text, const std::vector<highlight_spec_t> &colors);
+
 /// Perform syntax highlighting for the shell commands in buff. The result is stored in the color
 /// array as a color_code from the HIGHLIGHT_ enum for each character in buff.
 ///
 /// \param buffstr The buffer on which to perform syntax highlighting
-/// \param color The array in wchich to store the color codes. The first 8 bits are used for fg
+/// \param color The array in which to store the color codes. The first 8 bits are used for fg
 /// color, the next 8 bits for bg color.
 /// \param pos the cursor position. Used for quote matching, etc.
 /// \param error a list in which a description of each error will be inserted. May be 0, in whcich
@@ -89,12 +91,12 @@ void highlight_shell(const wcstring &buffstr, std::vector<highlight_spec_t> &col
 void highlight_shell_no_io(const wcstring &buffstr, std::vector<highlight_spec_t> &color,
                            size_t pos, wcstring_list_t *error, const environment_t &vars);
 
-/// Perform syntax highlighting for the text in buff. Matching quotes and paranthesis are
+/// Perform syntax highlighting for the text in buff. Matching quotes and parenthesis are
 /// highlighted. The result is stored in the color array as a color_code from the HIGHLIGHT_ enum
 /// for each character in buff.
 ///
 /// \param buffstr The buffer on which to perform syntax highlighting
-/// \param color The array in wchich to store the color codes. The first 8 bits are used for fg
+/// \param color The array in which to store the color codes. The first 8 bits are used for fg
 /// color, the next 8 bits for bg color.
 /// \param pos the cursor position. Used for quote matching, etc.
 /// \param error a list in which a description of each error will be inserted. May be 0, in whcich
@@ -124,7 +126,7 @@ enum {
     PATH_EXPAND_TILDE = 1 << 1
 };
 typedef unsigned int path_flags_t;
-bool is_potential_path(const wcstring &const_path, const wcstring_list_t &directories,
+bool is_potential_path(const wcstring &potential_path_fragment, const wcstring_list_t &directories,
                        const environment_t &vars, path_flags_t flags);
 
 #endif

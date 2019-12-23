@@ -3,7 +3,6 @@
 #define FISH_LRU_H
 
 #include <cwchar>
-
 #include <unordered_map>
 
 #include "common.h"
@@ -25,8 +24,8 @@ class lru_cache_t {
     struct lru_link_t {
         // Our doubly linked list
         // The base class is used for the mouth only
-        lru_link_t *prev = NULL;
-        lru_link_t *next = NULL;
+        lru_link_t *prev = nullptr;
+        lru_link_t *next = nullptr;
     };
 
     // The node type in our LRU cache
@@ -37,15 +36,13 @@ class lru_cache_t {
         lru_node_t(lru_node_t &&) = default;
 
         // Our key in the map. This is owned by the map itself.
-        const wcstring *key = NULL;
+        const wcstring *key = nullptr;
 
         // The value from the client
         Contents value;
 
-        explicit lru_node_t(const Contents &v) : value(std::move(v)) {}
+        explicit lru_node_t(Contents &&v) : value(std::move(v)) {}
     };
-
-    typedef typename std::unordered_map<wcstring, lru_node_t>::iterator node_iter_t;
 
     // Max node count. This may be (transiently) exceeded by add_node_without_eviction, which is
     // used from background threads.
@@ -54,7 +51,7 @@ class lru_cache_t {
     // All of our nodes
     // Note that our linked list contains pointers to these nodes in the map
     // We are dependent on the iterator-noninvalidation guarantees of std::map
-    std::unordered_map<wcstring, lru_node_t> node_map;
+    std::map<wcstring, lru_node_t> node_map;
 
     // Head of the linked list
     // The list is circular!
@@ -79,7 +76,7 @@ class lru_cache_t {
     // Remove the node
     void evict_node(lru_node_t *node) {
         // We should never evict the mouth.
-        assert(node != &mouth && node != NULL && node->key != NULL);
+        assert(node != &mouth && node != nullptr && node->key != nullptr);
 
         auto iter = this->node_map.find(*node->key);
         assert(iter != this->node_map.end());
@@ -189,7 +186,7 @@ class lru_cache_t {
         auto where = this->node_map.find(key);
         if (where == this->node_map.end()) {
             // not found
-            return NULL;
+            return nullptr;
         }
         promote_node(&where->second);
         return &where->second.value;
@@ -218,7 +215,7 @@ class lru_cache_t {
 
     // Adds a node under the given key without triggering eviction. Returns true if the node was
     // added, false if the node was not because a node with that key is already in the set.
-    bool insert_no_eviction(wcstring key, Contents value) {
+    bool insert_no_eviction(wcstring &&key, Contents &&value) {
         // Try inserting; return false if it was already in the set.
         auto iter_inserted = this->node_map.emplace(std::move(key), lru_node_t(std::move(value)));
         if (!iter_inserted.second) {
@@ -228,7 +225,7 @@ class lru_cache_t {
         }
 
         // Tell the node where it is in the map
-        node_iter_t iter = iter_inserted.first;
+        auto iter = iter_inserted.first;
         lru_node_t *node = &iter->second;
         node->key = &iter->first;
 

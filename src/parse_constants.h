@@ -2,18 +2,19 @@
 #ifndef FISH_PARSE_CONSTANTS_H
 #define FISH_PARSE_CONSTANTS_H
 
-#include "common.h"
 #include "config.h"
 
+#include "common.h"
+
 #define PARSE_ASSERT(a) assert(a)
-#define PARSER_DIE()                  \
-    do {                              \
+#define PARSER_DIE()                   \
+    do {                               \
         FLOG(error, L"Parser dying!"); \
-        exit_without_destructors(-1); \
+        exit_without_destructors(-1);  \
     } while (0)
 
 // IMPORTANT: If the following enum table is modified you must also update token_enum_map below.
-enum parse_token_type_t {
+enum parse_token_type_t : uint8_t {
     token_type_invalid = 1,
     // Non-terminal tokens
     symbol_job_list,
@@ -39,6 +40,8 @@ enum parse_token_type_t {
     symbol_not_statement,
     symbol_decorated_statement,
     symbol_plain_statement,
+    symbol_variable_assignment,
+    symbol_variable_assignments,
     symbol_arguments_or_redirections_list,
     symbol_andor_job_list,
     symbol_argument_list,
@@ -71,7 +74,7 @@ enum parse_token_type_t {
     LAST_TOKEN_OR_SYMBOL = parse_token_type_terminate,
     FIRST_PARSE_TOKEN_TYPE = parse_token_type_string,
     LAST_PARSE_TOKEN_TYPE = parse_token_type_end
-} __packed;
+};
 
 const enum_map<parse_token_type_t> token_enum_map[] = {
     {parse_special_type_comment, L"parse_special_type_comment"},
@@ -89,14 +92,14 @@ const enum_map<parse_token_type_t> token_enum_map[] = {
 #define ELEM(sym) {symbol_##sym, L"symbol_" #sym},
 #include "parse_grammar_elements.inc"
     {token_type_invalid, L"token_type_invalid"},
-    {token_type_invalid, NULL}};
+    {token_type_invalid, nullptr}};
 #define token_enum_map_len (sizeof token_enum_map / sizeof *token_enum_map)
 
 // IMPORTANT: If the following enum is modified you must update the corresponding keyword_enum_map
 // array below.
 //
 // IMPORTANT: These enums must start at zero.
-enum parse_keyword_t {
+enum parse_keyword_t : uint8_t {
     parse_keyword_and,
     parse_keyword_begin,
     parse_keyword_builtin,
@@ -114,8 +117,9 @@ enum parse_keyword_t {
     parse_keyword_not,
     parse_keyword_or,
     parse_keyword_switch,
+    parse_keyword_time,
     parse_keyword_while,
-} __packed;
+};
 
 const enum_map<parse_keyword_t> keyword_enum_map[] = {{parse_keyword_exclam, L"!"},
                                                       {parse_keyword_and, L"and"},
@@ -133,8 +137,9 @@ const enum_map<parse_keyword_t> keyword_enum_map[] = {{parse_keyword_exclam, L"!
                                                       {parse_keyword_not, L"not"},
                                                       {parse_keyword_or, L"or"},
                                                       {parse_keyword_switch, L"switch"},
+                                                      {parse_keyword_time, L"time"},
                                                       {parse_keyword_while, L"while"},
-                                                      {parse_keyword_none, NULL}};
+                                                      {parse_keyword_none, nullptr}};
 #define keyword_enum_map_len (sizeof keyword_enum_map / sizeof *keyword_enum_map)
 
 // Node tag values.
@@ -147,8 +152,13 @@ enum parse_statement_decoration_t {
     parse_statement_decoration_exec,
 };
 
-// Boolean statement types, stored in node tag.
-enum parse_bool_statement_type_t { parse_bool_none, parse_bool_and, parse_bool_or };
+// Job decorations, stored in node tag.
+enum parse_job_decoration_t {
+    parse_job_decoration_none,
+    parse_job_decoration_and,
+    parse_job_decoration_or,
+    parse_job_decoration_time,
+};
 
 // Whether a statement is backgrounded.
 enum parse_optional_background_t { parse_no_background, parse_background };
@@ -171,9 +181,11 @@ enum parse_error_code_t {
     parse_error_tokenizer_unterminated_escape,
     parse_error_tokenizer_other,
 
-    parse_error_unbalancing_end,   // end outside of block
-    parse_error_unbalancing_else,  // else outside of if
-    parse_error_unbalancing_case   // case outside of switch
+    parse_error_unbalancing_end,           // end outside of block
+    parse_error_unbalancing_else,          // else outside of if
+    parse_error_unbalancing_case,          // case outside of switch
+    parse_error_bare_variable_assignment,  // a=b without command
+    parse_error_andor_in_pipeline,         // "and" or "or" after a pipe
 };
 
 enum { PARSER_TEST_ERROR = 1, PARSER_TEST_INCOMPLETE = 2 };
@@ -187,9 +199,9 @@ struct parse_error_t {
     /// Offset and length of the token in the source code that triggered this error.
     size_t source_start;
     size_t source_length;
-    /// Return a string describing the error, suitable for presentation to the user. If skip_caret
-    /// is false, the offending line with a caret is printed as well.
-    wcstring describe(const wcstring &src) const;
+    /// Return a string describing the error, suitable for presentation to the user. If
+    /// is_interactive is true, the offending line with a caret is printed as well.
+    wcstring describe(const wcstring &src, bool is_interactive) const;
     /// Return a string describing the error, suitable for presentation to the user, with the given
     /// prefix. If skip_caret is false, the offending line with a caret is printed as well.
     wcstring describe_with_prefix(const wcstring &src, const wcstring &prefix, bool is_interactive,
@@ -275,11 +287,6 @@ void parse_error_offset_source_start(parse_error_list_t *errors, size_t amt);
 
 /// Error issued on $.
 #define ERROR_NO_VAR_NAME _(L"Expected a variable name after this $.")
-
-/// Error on foo=bar.
-#define ERROR_BAD_EQUALS_IN_COMMAND5                                                        \
-    _(L"Unsupported use of '='. To run '%ls' with a modified environment, please use 'env " \
-      L"%ls=%ls %ls%ls'")
 
 /// Error message for Posix-style assignment: foo=bar.
 #define ERROR_BAD_COMMAND_ASSIGN_ERR_MSG \

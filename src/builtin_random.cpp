@@ -1,15 +1,15 @@
 // Implementation of the random builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stdint.h>
-#include <cwchar>
+#include "builtin_random.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <cwchar>
 #include <random>
 
 #include "builtin.h"
-#include "builtin_random.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
@@ -37,7 +37,7 @@ int builtin_random(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
@@ -64,7 +64,7 @@ int builtin_random(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         auto parse_ll = [&](const wchar_t *str) {
             long long ll = fish_wcstoll(str);
             if (errno) {
-                streams.err.append_format(L"%ls: %ls is not a valid integer\n", cmd, str);
+                streams.err.append_format(BUILTIN_ERR_NOT_NUMBER, cmd, str);
                 parse_error = true;
             }
             return ll;
@@ -72,7 +72,7 @@ int builtin_random(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         auto parse_ull = [&](const wchar_t *str) {
             unsigned long long ull = fish_wcstoull(str);
             if (errno) {
-                streams.err.append_format(L"%ls: %ls is not a valid integer\n", cmd, str);
+                streams.err.append_format(BUILTIN_ERR_NOT_NUMBER, cmd, str);
                 parse_error = true;
             }
             return ull;

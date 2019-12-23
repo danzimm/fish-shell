@@ -1,23 +1,24 @@
 #include "config.h"  // IWYU pragma: keep
 
+#include "parse_productions.h"
+
 #include <stdio.h>
 
 #include "common.h"
 #include "flog.h"
 #include "parse_constants.h"
 #include "parse_grammar.h"
-#include "parse_productions.h"
 #include "parse_tree.h"
 
 using namespace parse_productions;
 using namespace grammar;
 
-#define NO_PRODUCTION NULL
+#define NO_PRODUCTION nullptr
 
 // Herein are encoded the productions for our LL2 fish grammar.
 //
-// Each symbol (e.g. symbol_job_list) has a corresponding function (e.g. resolve_job_lits). The
-// function accepts two tokens, representing the first and second lookahead, and returns returns a
+// Each symbol (e.g. symbol_job_list) has a corresponding function (e.g. resolve_job_list). The
+// function accepts two tokens, representing the first and second lookahead, and returns a
 // production representing the rule, or NULL on error. There is also a tag value which is returned
 // by reference; the tag is a sort of node annotation.
 //
@@ -66,19 +67,27 @@ RESOLVE(job_list) {
 
 // A job decorator is AND or OR
 RESOLVE(job_decorator) {
-    UNUSED(token2);
+    // If it's followed by --help, it's not a decoration.
+    if (token2.is_help_argument) {
+        *out_tag = parse_job_decoration_none;
+        return production_for<empty>();
+    }
 
     switch (token1.keyword) {
         case parse_keyword_and: {
-            *out_tag = parse_bool_and;
+            *out_tag = parse_job_decoration_and;
             return production_for<ands>();
         }
         case parse_keyword_or: {
-            *out_tag = parse_bool_or;
+            *out_tag = parse_job_decoration_or;
             return production_for<ors>();
         }
+        case parse_keyword_time: {
+            *out_tag = parse_job_decoration_time;
+            return production_for<times>();
+        }
         default: {
-            *out_tag = parse_bool_none;
+            *out_tag = parse_job_decoration_none;
             return production_for<empty>();
         }
     }
@@ -89,10 +98,10 @@ RESOLVE(job_conjunction_continuation) {
     UNUSED(out_tag);
     switch (token1.type) {
         case parse_token_type_andand:
-            *out_tag = parse_bool_and;
+            *out_tag = parse_job_decoration_and;
             return production_for<andands>();
         case parse_token_type_oror:
-            *out_tag = parse_bool_or;
+            *out_tag = parse_job_decoration_or;
             return production_for<orors>();
         default:
             return production_for<empty>();
@@ -309,7 +318,25 @@ RESOLVE(block_header) {
     }
 }
 
+RESOLVE(variable_assignments) {
+    UNUSED(token2);
+    UNUSED(out_tag);
+    if (token1.may_be_variable_assignment) {
+        assert(token1.type == parse_token_type_string);
+        return production_for<var>();
+    }
+    return production_for<empty>();
+}
+
 RESOLVE(decorated_statement) {
+    // and/or are typically parsed in job_conjunction at the beginning of a job
+    // However they may be reached here through e.g. true && and false.
+    // Refuse to parse them as a command except for --help. See #6089.
+    if ((token1.keyword == parse_keyword_and || token1.keyword == parse_keyword_or) &&
+        !token2.is_help_argument) {
+        return NO_PRODUCTION;
+    }
+
     // If this is e.g. 'command --help' then the command is 'command' and not a decoration. If the
     // second token is not a string, then this is a naked 'command' and we should execute it as
     // undecorated.
@@ -385,7 +412,7 @@ const production_element_t *parse_productions::production_for_token(parse_token_
     const production_element_t *(*resolver)(const parse_token_t &input1,  //!OCLINT(unused param)
                                             const parse_token_t &input2,  //!OCLINT(unused param)
                                             parse_node_tag_t *out_tag) =  //!OCLINT(unused param)
-        NULL;
+        nullptr;
     switch (node_type) {
 // Handle all of our grammar elements
 #define ELEM(SYM)                \
@@ -404,7 +431,7 @@ const production_element_t *parse_productions::production_for_token(parse_token_
         case parse_token_type_end:
         case parse_token_type_terminate: {
             FLOGF(error, L"Terminal token type %ls passed to %s", token_type_description(node_type),
-                 __FUNCTION__);
+                  __FUNCTION__);
             PARSER_DIE();
             break;
         }
@@ -412,7 +439,7 @@ const production_element_t *parse_productions::production_for_token(parse_token_
         case parse_special_type_tokenizer_error:
         case parse_special_type_comment: {
             FLOGF(error, L"Special type %ls passed to %s\n", token_type_description(node_type),
-                 __FUNCTION__);
+                  __FUNCTION__);
             PARSER_DIE();
             break;
         }
@@ -422,10 +449,10 @@ const production_element_t *parse_productions::production_for_token(parse_token_
             break;
         }
     }
-    PARSE_ASSERT(resolver != NULL);
+    PARSE_ASSERT(resolver != nullptr);
 
     const production_element_t *result = resolver(input1, input2, out_tag);
-    if (result == NULL) {
+    if (result == nullptr) {
         debug(5, L"Node type '%ls' has no production for input '%ls' (in %s)",
               token_type_description(node_type), input1.describe().c_str(), __FUNCTION__);
     }

@@ -24,8 +24,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <stdio.h>
 #include <stdlib.h>
 #include <wctype.h>
-#include <cstring>
 
+#include <cstring>
 #include <cwchar>
 #include <memory>
 #include <stack>
@@ -47,14 +47,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #define SPACES_PER_INDENT 4
 
 // An indent_t represents an abstract indent depth. 2 means we are in a doubly-nested block, etc.
-typedef unsigned int indent_t;
+using indent_t = unsigned int;
 static bool dump_parse_tree = false;
 static int ret = 0;
 
 // Read the entire contents of a file into the specified string.
 static wcstring read_file(FILE *f) {
     wcstring result;
-    while (1) {
+    while (true) {
         wint_t c = std::fgetwc(f);
 
         if (c == WEOF) {
@@ -73,7 +73,7 @@ static wcstring read_file(FILE *f) {
             }
             break;
         }
-        result.push_back((wchar_t)c);
+        result.push_back(static_cast<wchar_t>(c));
     }
     return result;
 }
@@ -137,10 +137,10 @@ struct prettifier_t {
 static void dump_node(indent_t node_indent, const parse_node_t &node, const wcstring &source) {
     wchar_t nextc = L' ';
     wchar_t prevc = L' ';
-    wcstring source_txt = L"";
+    wcstring source_txt;
     if (node.source_start != SOURCE_OFFSET_INVALID && node.source_length != SOURCE_OFFSET_INVALID) {
         int nextc_idx = node.source_start + node.source_length;
-        if ((size_t)nextc_idx < source.size()) {
+        if (static_cast<size_t>(nextc_idx) < source.size()) {
             nextc = source[node.source_start + node.source_length];
         }
         if (node.source_start > 0) prevc = source[node.source_start - 1];
@@ -353,7 +353,7 @@ static wcstring prettify(const wcstring &src, bool do_indent) {
     parse_node_tree_t parse_tree;
     int parse_flags = (parse_flag_continue_after_error | parse_flag_include_comments |
                        parse_flag_leave_unterminated | parse_flag_show_blank_lines);
-    if (!parse_tree_from_string(src, parse_flags, &parse_tree, NULL)) {
+    if (!parse_tree_from_string(src, parse_flags, &parse_tree, nullptr)) {
         return src;  // we return the original string on failure
     }
 
@@ -373,26 +373,6 @@ static wcstring prettify(const wcstring &src, bool do_indent) {
         }
     }
     return std::move(prettifier.output);
-}
-
-/// Given a string and list of colors of the same size, return the string with ANSI escape sequences
-/// representing the colors.
-static std::string ansi_colorize(const wcstring &text,
-                                 const std::vector<highlight_spec_t> &colors) {
-    assert(colors.size() == text.size());
-    outputter_t outp;
-
-    highlight_spec_t last_color = highlight_role_t::normal;
-    for (size_t i = 0; i < text.size(); i++) {
-        highlight_spec_t color = colors.at(i);
-        if (color != last_color) {
-            outp.set_color(highlight_get_color(color, false), rgb_color_t::normal());
-            last_color = color;
-        }
-        outp.writech(text.at(i));
-    }
-    outp.set_color(rgb_color_t::normal(), rgb_color_t::normal());
-    return outp.contents();
 }
 
 /// Given a string and list of colors of the same size, return the string with HTML span elements
@@ -528,20 +508,20 @@ int main(int argc, char *argv[]) {
     bool do_indent = true;
 
     const char *short_opts = "+d:hvwiD:";
-    const struct option long_opts[] = {{"debug-level", required_argument, NULL, 'd'},
-                                       {"debug-stack-frames", required_argument, NULL, 'D'},
-                                       {"dump-parse-tree", no_argument, NULL, 'P'},
-                                       {"no-indent", no_argument, NULL, 'i'},
-                                       {"help", no_argument, NULL, 'h'},
-                                       {"version", no_argument, NULL, 'v'},
-                                       {"write", no_argument, NULL, 'w'},
-                                       {"html", no_argument, NULL, 1},
-                                       {"ansi", no_argument, NULL, 2},
-                                       {"pygments", no_argument, NULL, 3},
-                                       {NULL, 0, NULL, 0}};
+    const struct option long_opts[] = {{"debug-level", required_argument, nullptr, 'd'},
+                                       {"debug-stack-frames", required_argument, nullptr, 'D'},
+                                       {"dump-parse-tree", no_argument, nullptr, 'P'},
+                                       {"no-indent", no_argument, nullptr, 'i'},
+                                       {"help", no_argument, nullptr, 'h'},
+                                       {"version", no_argument, nullptr, 'v'},
+                                       {"write", no_argument, nullptr, 'w'},
+                                       {"html", no_argument, nullptr, 1},
+                                       {"ansi", no_argument, nullptr, 2},
+                                       {"pygments", no_argument, nullptr, 3},
+                                       {nullptr, 0, nullptr, 0}};
 
     int opt;
-    while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, short_opts, long_opts, nullptr)) != -1) {
         switch (opt) {
             case 'P': {
                 dump_parse_tree = true;
@@ -585,7 +565,7 @@ int main(int argc, char *argv[]) {
                 tmp = strtol(optarg, &end, 10);
 
                 if (tmp >= 0 && tmp <= 10 && !*end && !errno) {
-                    debug_level = (int)tmp;
+                    debug_level = static_cast<int>(tmp);
                 } else {
                     std::fwprintf(stderr, _(L"Invalid value '%s' for debug-level flag"), optarg);
                     exit(1);
@@ -600,7 +580,7 @@ int main(int argc, char *argv[]) {
                 tmp = strtol(optarg, &end, 10);
 
                 if (tmp > 0 && tmp <= 128 && !*end && !errno) {
-                    set_debug_stack_frames((int)tmp);
+                    set_debug_stack_frames(static_cast<int>(tmp));
                 } else {
                     std::fwprintf(stderr, _(L"Invalid value '%s' for debug-stack-frames flag"),
                                   optarg);
@@ -653,7 +633,7 @@ int main(int argc, char *argv[]) {
         // Maybe colorize.
         std::vector<highlight_spec_t> colors;
         if (output_type != output_type_plain_text) {
-            highlight_shell_no_io(output_wtext, colors, output_wtext.size(), NULL,
+            highlight_shell_no_io(output_wtext, colors, output_wtext.size(), nullptr,
                                   env_stack_t::globals());
         }
 
@@ -676,7 +656,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
             case output_type_ansi: {
-                colored_output = ansi_colorize(output_wtext, colors);
+                colored_output = colorize(output_wtext, colors);
                 break;
             }
             case output_type_html: {

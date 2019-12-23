@@ -4,12 +4,13 @@
 
 #include "config.h"  // IWYU pragma: keep
 
-#include "global_safety.h"
-
 #include <stdio.h>
+
 #include <string>
 #include <type_traits>
 #include <utility>
+
+#include "global_safety.h"
 
 using wcstring = std::wstring;
 using wcstring_list_t = std::vector<wcstring>;
@@ -61,9 +62,23 @@ class category_list_t {
 
     category_t proc_internal_proc{L"proc-internal-proc", L"Internal (non-forked) process events"};
 
+    category_t proc_reap_internal{L"proc-reap-internal",
+                                  L"Reaping internal (non-forked) processes"};
+
+    category_t proc_reap_external{L"proc-reap-external", L"Reaping external (forked) processes"};
+
     category_t env_locale{L"env-locale", L"Changes to locale variables"};
 
+    category_t env_export{L"env-export", L"Changes to exported variables"};
+
     category_t topic_monitor{L"topic-monitor", L"Internal details of the topic monitor"};
+    category_t char_encoding{L"char-encoding", L"Character encoding issues"};
+
+    category_t history{L"history", L"Command history events"};
+
+    category_t profile_history{L"profile-history", L"History performance measurements"};
+
+    category_t iothread{L"iothread", L"Background IO thread events"};
 };
 
 /// The class responsible for logging.
@@ -112,6 +127,9 @@ class logger_t {
 
     void log_fmt(const category_t &cat, const wchar_t *fmt, ...);
     void log_fmt(const category_t &cat, const char *fmt, ...);
+
+    // Log outside of the usual flog usage.
+    void log_extra(const wchar_t *s) { log1(s); }
 };
 
 extern owning_lock<logger_t> g_logger;
@@ -127,6 +145,10 @@ void set_flog_output_file(FILE *f);
 
 /// \return a list of all categories, sorted by name.
 std::vector<const flog_details::category_t *> get_flog_categories();
+
+/// Print some extra stuff to the flog file (stderr by default).
+/// This is used by the tracing machinery.
+void log_extra_to_flog_file(const wcstring &s);
 
 /// Output to the fish log a sequence of arguments, separated by spaces, and ending with a newline.
 #define FLOG(wht, ...)                                                        \

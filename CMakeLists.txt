@@ -11,10 +11,16 @@ PROJECT(fish)
 
 # We are C++11.
 SET(CMAKE_CXX_STANDARD 11)
-SET(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
-SET(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
-SET(CMAKE_CXX_FLAGS_RELEASE "-O2")
 SET(DEFAULT_BUILD_TYPE "RelWithDebInfo")
+
+# Use the default flags (#6296) but remove -DNDEBUG so that asserts remain enabled.
+STRING(REPLACE "-DNDEBUG" ""
+  CMAKE_CXX_FLAGS_RELWITHDEBINFO
+  "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+
+STRING(REPLACE "-DNDEBUG" ""
+  CMAKE_CXX_FLAGS_RELEASE
+  "${CMAKE_CXX_FLAGS_RELEASE}")
 
 IF(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     MESSAGE(STATUS "Setting build type to default '${DEFAULT_BUILD_TYPE}'")
@@ -35,10 +41,26 @@ endif()
 # - comment because we use a bunch of those, and they're not really all that harmful.
 # - address, because that occurs for our mkostemp check (weak-linking requires us to compare `&mkostemp == nullptr`).
 # - strict-aliasing, because on old GCCs (*Travis*) those are triggered by maybe.h, so you get it every time it is included.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-implicit-fallthrough -Wno-comment -Wno-address -Wno-strict-aliasing")
+# - redundant-move, because we have one that is required on old libc
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra \
+-Wno-implicit-fallthrough \
+-Wno-comment \
+-Wno-address \
+-Wno-strict-aliasing \
+-Wno-redundant-move \
+")
 
 # Disable exception handling.
 ADD_COMPILE_OPTIONS(-fno-exceptions)
+
+# Prefer the gold linker because it doesn't emit useless warnings about sys_nerr and _sys_errlist.
+if (UNIX AND NOT APPLE)
+  EXECUTE_PROCESS(COMMAND ${CMAKE_C_COMPILER} -fuse-ld=gold -Wl,--version
+                  ERROR_QUIET OUTPUT_VARIABLE LD_VERSION)
+  if ("${LD_VERSION}" MATCHES "GNU gold")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
+  endif()
+endif()
 
 # Hide the CMake Rules directories in Xcode projects.
 SOURCE_GROUP("CMake Rules" REGULAR_EXPRESSION "^$")
@@ -87,15 +109,15 @@ SET(FISH_SRCS
     src/color.cpp src/common.cpp src/complete.cpp src/env.cpp src/env_dispatch.cpp
     src/env_universal_common.cpp src/event.cpp src/exec.cpp src/expand.cpp
     src/fallback.cpp src/fish_version.cpp src/function.cpp src/highlight.cpp
-    src/history.cpp src/input.cpp src/input_common.cpp src/intern.cpp src/io.cpp
-    src/iothread.cpp src/kill.cpp src/output.cpp src/pager.cpp
+    src/history.cpp src/history_file.cpp src/input.cpp src/input_common.cpp src/intern.cpp
+    src/io.cpp src/iothread.cpp src/kill.cpp src/output.cpp src/pager.cpp
     src/parse_execution.cpp src/parse_productions.cpp src/parse_tree.cpp
     src/parse_util.cpp src/parser.cpp src/parser_keywords.cpp src/path.cpp
     src/postfork.cpp src/proc.cpp src/reader.cpp src/sanity.cpp src/screen.cpp
     src/signal.cpp src/tinyexpr.cpp src/tnode.cpp src/tokenizer.cpp src/utf8.cpp src/util.cpp
     src/wcstringutil.cpp src/wgetopt.cpp src/wildcard.cpp src/wutil.cpp
     src/future_feature_flags.cpp src/redirection.cpp src/topic_monitor.cpp
-    src/flog.cpp
+    src/flog.cpp src/trace.cpp src/timer.cpp
 )
 
 # Header files are just globbed.
@@ -150,7 +172,7 @@ ADD_LIBRARY(fishlib STATIC ${FISH_SRCS})
 TARGET_SOURCES(fishlib PRIVATE ${FISH_HEADERS})
 TARGET_LINK_LIBRARIES(fishlib
   ${CURSES_LIBRARY} ${CURSES_EXTRA_LIBRARY} Threads::Threads ${CMAKE_DL_LIBS}
-  ${PCRE2_LIB} ${Intl_LIBRARIES})
+  ${PCRE2_LIB} ${Intl_LIBRARIES} ${ATOMIC_LIBRARY})
 
 # Define fish.
 ADD_EXECUTABLE(fish src/fish.cpp)

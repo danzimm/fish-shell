@@ -4,6 +4,7 @@
 // IWYU pragma: no_include <cstring>
 // IWYU pragma: no_include <cstddef>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
 #include <math.h>
@@ -23,21 +24,22 @@
 #include <time.h>
 #include <unistd.h>
 #include <wctype.h>
-#include <cstring>
-#include <cwchar>
-#include <thread>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <cwchar>
 #include <functional>
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include "autoload.h"
 #include "builtin.h"
 #include "color.h"
 #include "common.h"
@@ -104,7 +106,7 @@ static bool should_test_function(const char *func_name) {
 #define ESCAPE_TEST_COUNT 100000
 /// The average length of strings to unescape.
 #define ESCAPE_TEST_LENGTH 100
-/// The higest character number of character to try and escape.
+/// The highest character number of character to try and escape.
 #define ESCAPE_TEST_CHAR 4000
 
 /// Number of encountered errors.
@@ -125,22 +127,14 @@ static void err(const wchar_t *blah, ...) {
     va_start(va, blah);
     err_count++;
 
-    // Xcode's term doesn't support color (even though TERM claims it does).
-    bool colorize = !getenv("RUNNING_IN_XCODE");
-
     // Show errors in red.
-    if (colorize) {
-        std::fputws(L"\x1B[31m", stdout);
-    }
+    std::fputws(L"\x1B[31m", stdout);
     std::fwprintf(stdout, L"Error: ");
     std::vfwprintf(stdout, blah, va);
     va_end(va);
 
     // Return to normal color.
-    if (colorize) {
-        std::fputws(L"\x1B[0m", stdout);
-    }
-
+    std::fputws(L"\x1B[0m", stdout);
     std::fwprintf(stdout, L"\n");
 }
 
@@ -562,61 +556,61 @@ static void test_convert_nulls() {
 /// Test the tokenizer.
 static void test_tokenizer() {
     say(L"Testing tokenizer");
-    tok_t token;
-
     {
-        bool got = false;
         const wchar_t *str = L"alpha beta";
         tokenizer_t t(str, 0);
+        maybe_t<tok_t> token{};
 
-        got = t.next(&token);  // alpha
-        do_test(got);
-        do_test(token.type == TOK_STRING);
-        do_test(token.offset == 0);
-        do_test(token.length == 5);
-        do_test(t.text_of(token) == L"alpha");
+        token = t.next();  // alpha
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::string);
+        do_test(token->offset == 0);
+        do_test(token->length == 5);
+        do_test(t.text_of(*token) == L"alpha");
 
-        got = t.next(&token);  // beta
-        do_test(got);
-        do_test(token.type == TOK_STRING);
-        do_test(token.offset == 6);
-        do_test(token.length == 4);
-        do_test(t.text_of(token) == L"beta");
+        token = t.next();  // beta
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::string);
+        do_test(token->offset == 6);
+        do_test(token->length == 4);
+        do_test(t.text_of(*token) == L"beta");
 
-        got = t.next(&token);
-        do_test(!got);
+        token = t.next();
+        do_test(!token.has_value());
     }
 
     const wchar_t *str =
         L"string <redirection  2>&1 'nested \"quoted\" '(string containing subshells "
         L"){and,brackets}$as[$well (as variable arrays)] not_a_redirect^ ^ ^^is_a_redirect "
+        L"&| &> "
         L"&&& ||| "
         L"&& || & |"
         L"Compress_Newlines\n  \n\t\n   \nInto_Just_One";
-    const int types[] = {TOK_STRING, TOK_REDIRECT,   TOK_STRING,   TOK_REDIRECT, TOK_STRING,
-                         TOK_STRING, TOK_STRING,     TOK_REDIRECT, TOK_REDIRECT, TOK_STRING,
-                         TOK_ANDAND, TOK_BACKGROUND, TOK_OROR,     TOK_PIPE,     TOK_ANDAND,
-                         TOK_OROR,   TOK_BACKGROUND, TOK_PIPE,     TOK_STRING,   TOK_END,
-                         TOK_STRING};
+    using tt = token_type_t;
+    const token_type_t types[] = {
+        tt::string,     tt::redirect,   tt::string,   tt::redirect, tt::string, tt::string,
+        tt::string,     tt::redirect,   tt::redirect, tt::string,   tt::pipe,   tt::redirect,
+        tt::andand,     tt::background, tt::oror,     tt::pipe,     tt::andand, tt::oror,
+        tt::background, tt::pipe,       tt::string,   tt::end,      tt::string};
 
     say(L"Test correct tokenization");
 
     {
         tokenizer_t t(str, 0);
         size_t i = 0;
-        while (t.next(&token)) {
+        while (auto token = t.next()) {
             if (i >= sizeof types / sizeof *types) {
                 err(L"Too many tokens returned from tokenizer");
-                std::fwprintf(stdout, L"Got excess token type %ld\n", (long)token.type);
+                std::fwprintf(stdout, L"Got excess token type %ld\n", (long)token->type);
                 break;
             }
-            if (types[i] != token.type) {
+            if (types[i] != token->type) {
                 err(L"Tokenization error:");
                 std::fwprintf(
                     stdout,
                     L"Token number %zu of string \n'%ls'\n, expected type %ld, got token type "
                     L"%ld\n",
-                    i + 1, str, (long)types[i], (long)token.type);
+                    i + 1, str, (long)types[i], (long)token->type);
             }
             i++;
         }
@@ -628,68 +622,108 @@ static void test_tokenizer() {
     // Test some errors.
     {
         tokenizer_t t(L"abc\\", 0);
-        do_test(t.next(&token));
-        do_test(token.type == TOK_ERROR);
-        do_test(token.error == tokenizer_error_t::unterminated_escape);
-        do_test(token.error_offset == 3);
+        auto token = t.next();
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::error);
+        do_test(token->error == tokenizer_error_t::unterminated_escape);
+        do_test(token->error_offset_within_token == 3);
     }
 
     {
         tokenizer_t t(L"abc )defg(hij", 0);
-        do_test(t.next(&token));
-        do_test(t.next(&token));
-        do_test(token.type == TOK_ERROR);
-        do_test(token.error == tokenizer_error_t::closing_unopened_subshell);
-        do_test(token.error_offset == 4);
+        auto token = t.next();
+        do_test(token.has_value());
+        token = t.next();
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::error);
+        do_test(token->error == tokenizer_error_t::closing_unopened_subshell);
+        do_test(token->offset == 4);
+        do_test(token->error_offset_within_token == 0);
     }
 
     {
         tokenizer_t t(L"abc defg(hij (klm)", 0);
-        do_test(t.next(&token));
-        do_test(t.next(&token));
-        do_test(token.type == TOK_ERROR);
-        do_test(token.error == tokenizer_error_t::unterminated_subshell);
-        do_test(token.error_offset == 4);
+        auto token = t.next();
+        do_test(token.has_value());
+        token = t.next();
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::error);
+        do_test(token->error == tokenizer_error_t::unterminated_subshell);
+        do_test(token->error_offset_within_token == 4);
     }
 
     {
         tokenizer_t t(L"abc defg[hij (klm)", 0);
-        do_test(t.next(&token));
-        do_test(t.next(&token));
-        do_test(token.type == TOK_ERROR);
-        do_test(token.error == tokenizer_error_t::unterminated_slice);
-        do_test(token.error_offset == 4);
+        auto token = t.next();
+        do_test(token.has_value());
+        token = t.next();
+        do_test(token.has_value());
+        do_test(token->type == token_type_t::error);
+        do_test(token->error == tokenizer_error_t::unterminated_slice);
+        do_test(token->error_offset_within_token == 4);
     }
 
-    // Test redirection_type_for_string.
-    if (redirection_type_for_string(L"<") != redirection_type_t::input)
+    // Test some redirection parsing.
+    auto pipe_or_redir = [](const wchar_t *s) { return pipe_or_redir_t::from_string(s); };
+    do_test(pipe_or_redir(L"|")->is_pipe);
+    do_test(pipe_or_redir(L"0>|")->is_pipe);
+    do_test(pipe_or_redir(L"0>|")->fd == 0);
+    do_test(pipe_or_redir(L"2>|")->is_pipe);
+    do_test(pipe_or_redir(L"2>|")->fd == 2);
+    do_test(pipe_or_redir(L">|")->is_pipe);
+    do_test(pipe_or_redir(L">|")->fd == STDOUT_FILENO);
+    do_test(!pipe_or_redir(L">")->is_pipe);
+    do_test(pipe_or_redir(L">")->fd == STDOUT_FILENO);
+    do_test(pipe_or_redir(L"2>")->fd == STDERR_FILENO);
+    do_test(pipe_or_redir(L"9999999999999>")->fd == -1);
+    do_test(pipe_or_redir(L"9999999999999>&2")->fd == -1);
+    do_test(pipe_or_redir(L"9999999999999>&2")->is_valid() == false);
+    do_test(pipe_or_redir(L"9999999999999>&2")->is_valid() == false);
+
+    do_test(pipe_or_redir(L"&|")->is_pipe);
+    do_test(pipe_or_redir(L"&|")->stderr_merge);
+    do_test(!pipe_or_redir(L"&>")->is_pipe);
+    do_test(pipe_or_redir(L"&>")->stderr_merge);
+    do_test(pipe_or_redir(L"&>>")->stderr_merge);
+    do_test(pipe_or_redir(L"&>?")->stderr_merge);
+
+    auto get_redir_mode = [](const wchar_t *s) -> maybe_t<redirection_mode_t> {
+        if (auto redir = pipe_or_redir_t::from_string(s)) {
+            return redir->mode;
+        }
+        return none();
+    };
+
+    if (get_redir_mode(L"<") != redirection_mode_t::input)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"^") != redirection_type_t::overwrite)
+    if (get_redir_mode(L"^") != redirection_mode_t::overwrite)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L">") != redirection_type_t::overwrite)
+    if (get_redir_mode(L">") != redirection_mode_t::overwrite)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"2>") != redirection_type_t::overwrite)
+    if (get_redir_mode(L"2>") != redirection_mode_t::overwrite)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L">>") != redirection_type_t::append)
+    if (get_redir_mode(L">>") != redirection_mode_t::append)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"2>>") != redirection_type_t::append)
+    if (get_redir_mode(L"2>>") != redirection_mode_t::append)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"2>?") != redirection_type_t::noclob)
+    if (get_redir_mode(L"2>?") != redirection_mode_t::noclob)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"9999999999999999>?"))
+    if (get_redir_mode(L"9999999999999999>?") != redirection_mode_t::noclob)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"2>&3") != redirection_type_t::fd)
+    if (get_redir_mode(L"2>&3") != redirection_mode_t::fd)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
-    if (redirection_type_for_string(L"2>|"))
+    if (get_redir_mode(L"3<&0") != redirection_mode_t::fd)
+        err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
+    if (get_redir_mode(L"3</tmp/filetxt") != redirection_mode_t::input)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
 
     // Test ^ with our feature flag on and off.
     auto saved_flags = fish_features();
     mutable_fish_features().set(features_t::stderr_nocaret, false);
-    if (redirection_type_for_string(L"^") != redirection_type_t::overwrite)
+    if (get_redir_mode(L"^") != redirection_mode_t::overwrite)
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
     mutable_fish_features().set(features_t::stderr_nocaret, true);
-    if (redirection_type_for_string(L"^") != none())
+    if (get_redir_mode(L"^") != none())
         err(L"redirection_type_for_string failed on line %ld", (long)__LINE__);
     mutable_fish_features() = saved_flags;
 }
@@ -733,13 +767,14 @@ static void test_iothread() {
 
 static void test_pthread() {
     say(L"Testing pthreads");
-    pthread_t result = {};
-    int val = 3;
-    bool made = make_pthread(&result, [&val]() { val += 2; });
+    std::atomic<int> val{3};
+    std::promise<void> promise;
+    bool made = make_detached_pthread([&]() {
+        val = val + 2;
+        promise.set_value();
+    });
     do_test(made);
-    void *ignore = nullptr;
-    int ret = pthread_join(result, &ignore);
-    do_test(ret == 0);
+    promise.get_future().wait();
     do_test(val == 5);
 }
 
@@ -847,6 +882,10 @@ static void test_parser() {
 
     if (parse_util_detect_errors(L"true | ") != PARSER_TEST_INCOMPLETE) {
         err(L"unterminated pipe not reported properly");
+    }
+
+    if (parse_util_detect_errors(L"echo (\nfoo\n  bar") != PARSER_TEST_INCOMPLETE) {
+        err(L"unterminated multiline subhsell not reported properly");
     }
 
     if (parse_util_detect_errors(L"begin ; true ; end | ") != PARSER_TEST_INCOMPLETE) {
@@ -964,16 +1003,16 @@ static void test_parser() {
     // Ensure that we don't crash on infinite self recursion and mutual recursion. These must use
     // the principal parser because we cannot yet execute jobs on other parsers.
     say(L"Testing recursion detection");
-    parser->eval(L"function recursive ; recursive ; end ; recursive; ", io_chain_t(), TOP);
+    parser->eval(L"function recursive ; recursive ; end ; recursive; ", io_chain_t());
 #if 0
     // This is disabled since it produces a long backtrace. We should find a way to either visually
     // compress the backtrace, or disable error spewing.
     parser->.eval(L"function recursive1 ; recursive2 ; end ; "
-            L"function recursive2 ; recursive1 ; end ; recursive1; ", io_chain_t(), TOP);
+            L"function recursive2 ; recursive1 ; end ; recursive1; ", io_chain_t());
 #endif
 
     say(L"Testing empty function name");
-    parser->eval(L"function '' ; echo fail; exit 42 ; end ; ''", io_chain_t(), TOP);
+    parser->eval(L"function '' ; echo fail; exit 42 ; end ; ''", io_chain_t());
 
     say(L"Testing eval_args");
     completion_list_t comps = parser_t::expand_argument_list(
@@ -985,7 +1024,7 @@ static void test_parser() {
 }
 
 static void test_1_cancellation(const wchar_t *src) {
-    auto filler = io_bufferfill_t::create(io_chain_t{});
+    auto filler = io_bufferfill_t::create(fd_set_t{});
     pthread_t thread = pthread_self();
     double delay = 0.25 /* seconds */;
     iothread_perform([=]() {
@@ -993,25 +1032,26 @@ static void test_1_cancellation(const wchar_t *src) {
         usleep(delay * 1E6);
         pthread_kill(thread, SIGINT);
     });
-    parser_t::principal_parser().eval(src, io_chain_t{filler}, TOP);
+    eval_result_t ret = parser_t::principal_parser().eval(src, io_chain_t{filler});
     auto buffer = io_bufferfill_t::finish(std::move(filler));
     if (buffer->buffer().size() != 0) {
-        err(L"Expected 0 bytes in out_buff, but instead found %lu bytes\n",
-            buffer->buffer().size());
+        err(L"Expected 0 bytes in out_buff, but instead found %lu bytes, for command %ls\n",
+            buffer->buffer().size(), src);
     }
+    // TODO: cancelling out of command substitutions is currently reported as an error, not a
+    // cancellation.
+    // do_test(ret == eval_result_t::cancelled);
+    (void)ret;
     iothread_drain_all();
 }
 
 static void test_cancellation() {
-    if (getenv("RUNNING_IN_XCODE")) {
-        say(L"Skipping Ctrl-C cancellation test because we are running in Xcode debugger");
-        return;
-    }
     say(L"Testing Ctrl-C cancellation. If this hangs, that's a bug!");
 
     // Enable fish's signal handling here. We need to make this interactive for fish to install its
     // signal handlers.
-    proc_push_interactive(1);
+    parser_t &parser = parser_t::principal_parser();
+    scoped_push<bool> interactive{&parser.libdata().is_interactive, true};
     signal_set_handlers(true);
 
     // This tests that we can correctly ctrl-C out of certain loop constructs, and that nothing gets
@@ -1034,11 +1074,11 @@ static void test_cancellation() {
     bool iis = is_interactive_session();
     set_interactive_session(true);
     const wchar_t *child_self_destructor = L"while true ; sh -c 'sleep .25; kill -s INT $$' ; end";
-    parser_t::principal_parser().eval(child_self_destructor, io_chain_t(), TOP);
+    parser_t::principal_parser().eval(child_self_destructor, io_chain_t());
     set_interactive_session(iis);
 
     // Restore signal handling.
-    proc_pop_interactive();
+    interactive.restore();
     signal_reset_handlers();
 
     // Ensure that we don't think we should cancel.
@@ -1584,7 +1624,10 @@ struct pwd_environment_t : public environment_t {
         return {};
     }
 
-    wcstring_list_t get_names(int flags) const override { UNUSED(flags); return {L"PWD"}; }
+    wcstring_list_t get_names(int flags) const override {
+        UNUSED(flags);
+        return {L"PWD"};
+    }
 };
 
 /// Perform parameter expansion and test if the output equals the zero-terminated parameter list
@@ -1608,7 +1651,7 @@ static bool expand_test(const wchar_t *in, expand_flags_t flags, ...) {
         if (errors.empty()) {
             err(L"Bug: Parse error reported but no error text found.");
         } else {
-            err(L"%ls", errors.at(0).describe(wcstring(in)).c_str());
+            err(L"%ls", errors.at(0).describe(in, parser->is_interactive()).c_str());
         }
         return false;
     }
@@ -1869,54 +1912,48 @@ static void test_abbreviations() {
     if (!mresult) err(L"Unexpected failure with foo abbreviation");
     if (*mresult != L"bar") err(L"Wrong abbreviation result for foo");
 
-    bool expanded;
-    wcstring result;
-    expanded = reader_expand_abbreviation_in_command(L"just a command", 3, vars, &result);
-    if (expanded) err(L"Command wrongly expanded on line %ld", (long)__LINE__);
-    expanded = reader_expand_abbreviation_in_command(L"gc somebranch", 0, vars, &result);
-    if (!expanded) err(L"Command not expanded on line %ld", (long)__LINE__);
+    maybe_t<wcstring> result;
+    result = reader_expand_abbreviation_in_command(L"just a command", 3, vars);
+    if (result) err(L"Command wrongly expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(L"gc somebranch", 0, vars);
+    if (!result) err(L"Command not expanded on line %ld", (long)__LINE__);
 
-    expanded =
-        reader_expand_abbreviation_in_command(L"gc somebranch", std::wcslen(L"gc"), vars, &result);
-    if (!expanded) err(L"gc not expanded");
+    result = reader_expand_abbreviation_in_command(L"gc somebranch", std::wcslen(L"gc"), vars);
+    if (!result) err(L"gc not expanded");
     if (result != L"git checkout somebranch")
-        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result.c_str());
+        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result->c_str());
 
     // Space separation.
-    expanded =
-        reader_expand_abbreviation_in_command(L"gx somebranch", std::wcslen(L"gc"), vars, &result);
-    if (!expanded) err(L"gx not expanded");
+    result = reader_expand_abbreviation_in_command(L"gx somebranch", std::wcslen(L"gc"), vars);
+    if (!result) err(L"gx not expanded");
     if (result != L"git checkout somebranch")
-        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result.c_str());
+        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result->c_str());
 
-    expanded = reader_expand_abbreviation_in_command(L"echo hi ; gc somebranch",
-                                                     std::wcslen(L"echo hi ; g"), vars, &result);
-    if (!expanded) err(L"gc not expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(L"echo hi ; gc somebranch",
+                                                   std::wcslen(L"echo hi ; g"), vars);
+    if (!result) err(L"gc not expanded on line %ld", (long)__LINE__);
     if (result != L"echo hi ; git checkout somebranch")
         err(L"gc incorrectly expanded on line %ld", (long)__LINE__);
 
-    expanded = reader_expand_abbreviation_in_command(
-        L"echo (echo (echo (echo (gc ", std::wcslen(L"echo (echo (echo (echo (gc"), vars, &result);
-    if (!expanded) err(L"gc not expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(
+        L"echo (echo (echo (echo (gc ", std::wcslen(L"echo (echo (echo (echo (gc"), vars);
+    if (!result) err(L"gc not expanded on line %ld", (long)__LINE__);
     if (result != L"echo (echo (echo (echo (git checkout ")
-        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result.c_str());
+        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result->c_str());
 
     // If commands should be expanded.
-    expanded =
-        reader_expand_abbreviation_in_command(L"if gc", std::wcslen(L"if gc"), vars, &result);
-    if (!expanded) err(L"gc not expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(L"if gc", std::wcslen(L"if gc"), vars);
+    if (!result) err(L"gc not expanded on line %ld", (long)__LINE__);
     if (result != L"if git checkout")
-        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result.c_str());
+        err(L"gc incorrectly expanded on line %ld to '%ls'", (long)__LINE__, result->c_str());
 
     // Others should not be.
-    expanded =
-        reader_expand_abbreviation_in_command(L"of gc", std::wcslen(L"of gc"), vars, &result);
-    if (expanded) err(L"gc incorrectly expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(L"of gc", std::wcslen(L"of gc"), vars);
+    if (result) err(L"gc incorrectly expanded on line %ld", (long)__LINE__);
 
     // Others should not be.
-    expanded = reader_expand_abbreviation_in_command(L"command gc", std::wcslen(L"command gc"),
-                                                     vars, &result);
-    if (expanded) err(L"gc incorrectly expanded on line %ld", (long)__LINE__);
+    result = reader_expand_abbreviation_in_command(L"command gc", std::wcslen(L"command gc"), vars);
+    if (result) err(L"gc incorrectly expanded on line %ld", (long)__LINE__);
 
     vars.pop();
 }
@@ -1945,6 +1982,13 @@ static void test_path() {
         err(L"Bug in canonical PATH code on line %ld", (long)__LINE__);
     if (!paths_are_equivalent(L"/", L"/"))
         err(L"Bug in canonical PATH code on line %ld", (long)__LINE__);
+
+    do_test(path_apply_working_directory(L"abc", L"/def/") == L"/def/abc");
+    do_test(path_apply_working_directory(L"abc/", L"/def/") == L"/def/abc/");
+    do_test(path_apply_working_directory(L"/abc/", L"/def/") == L"/abc/");
+    do_test(path_apply_working_directory(L"/abc", L"/def/") == L"/abc");
+    do_test(path_apply_working_directory(L"", L"/def/") == L"");
+    do_test(path_apply_working_directory(L"abc", L"") == L"abc");
 }
 
 static void test_pager_navigation() {
@@ -2416,7 +2460,7 @@ static void test_dup2s() {
     using std::make_shared;
     io_chain_t chain;
     chain.push_back(make_shared<io_close_t>(17));
-    chain.push_back(make_shared<io_fd_t>(3, 19, true));
+    chain.push_back(make_shared<io_fd_t>(3, 19));
     auto list = dup2_list_t::resolve_chain(chain);
     do_test(list.has_value());
     do_test(list->get_actions().size() == 2);
@@ -2428,15 +2472,6 @@ static void test_dup2s() {
     auto act2 = list->get_actions().at(1);
     do_test(act2.src == 19);
     do_test(act2.target == 3);
-
-    // Invalid files should fail to open.
-    // Suppress the debug() message.
-    int saved_debug_level = debug_level;
-    debug_level = -1;
-    chain.push_back(make_shared<io_file_t>(2, L"/definitely/not/a/valid/path/for/this/test", 0666));
-    list = dup2_list_t::resolve_chain(chain);
-    do_test(!list.has_value());
-    debug_level = saved_debug_level;
 }
 
 static void test_dup2s_fd_for_target_fd() {
@@ -2444,10 +2479,10 @@ static void test_dup2s_fd_for_target_fd() {
     io_chain_t chain;
     // note io_fd_t params are backwards from dup2.
     chain.push_back(make_shared<io_close_t>(10));
-    chain.push_back(make_shared<io_fd_t>(9, 10, true));
-    chain.push_back(make_shared<io_fd_t>(5, 8, true));
-    chain.push_back(make_shared<io_fd_t>(1, 4, true));
-    chain.push_back(make_shared<io_fd_t>(3, 5, true));
+    chain.push_back(make_shared<io_fd_t>(9, 10));
+    chain.push_back(make_shared<io_fd_t>(5, 8));
+    chain.push_back(make_shared<io_fd_t>(1, 4));
+    chain.push_back(make_shared<io_fd_t>(3, 5));
     auto list = dup2_list_t::resolve_chain(chain);
 
     do_test(list.has_value());
@@ -2477,6 +2512,84 @@ static void test_colors() {
     do_test(rgb_color_t(L"magenta").is_named());
     do_test(rgb_color_t(L"MaGeNTa").is_named());
     do_test(rgb_color_t(L"mooganta").is_none());
+}
+
+// This class allows accessing private bits of autoload_t.
+struct autoload_tester_t {
+    static void run(const wchar_t *fmt, ...) {
+        va_list va;
+        va_start(va, fmt);
+        wcstring cmd = vformat_string(fmt, va);
+        va_end(va);
+
+        int status = system(wcs2string(cmd).c_str());
+        do_test(status == 0);
+    }
+
+    static void touch_file(const wcstring &path) {
+        int fd = wopen_cloexec(path, O_RDWR | O_CREAT, 0666);
+        do_test(fd >= 0);
+        write_loop(fd, "Hello", 5);
+        close(fd);
+    }
+
+    static void run_test() {
+        char t1[] = "/tmp/fish_test_autoload.XXXXXX";
+        wcstring p1 = str2wcstring(mkdtemp(t1));
+        char t2[] = "/tmp/fish_test_autoload.XXXXXX";
+        wcstring p2 = str2wcstring(mkdtemp(t2));
+
+        const wcstring_list_t paths = {p1, p2};
+
+        autoload_t autoload(L"test_var");
+        do_test(!autoload.resolve_command(L"file1", paths));
+        do_test(!autoload.resolve_command(L"nothing", paths));
+        do_test(autoload.get_autoloaded_commands().empty());
+
+        run(L"touch %ls/file1.fish", p1.c_str());
+        run(L"touch %ls/file2.fish", p2.c_str());
+        autoload.invalidate_cache();
+
+        do_test(!autoload.autoload_in_progress(L"file1"));
+        do_test(autoload.resolve_command(L"file1", paths));
+        do_test(!autoload.resolve_command(L"file1", paths));
+        do_test(autoload.autoload_in_progress(L"file1"));
+        do_test(autoload.get_autoloaded_commands() == wcstring_list_t{L"file1"});
+        autoload.mark_autoload_finished(L"file1");
+        do_test(!autoload.autoload_in_progress(L"file1"));
+        do_test(autoload.get_autoloaded_commands() == wcstring_list_t{L"file1"});
+
+        do_test(!autoload.resolve_command(L"file1", paths));
+        do_test(!autoload.resolve_command(L"nothing", paths));
+        do_test(autoload.resolve_command(L"file2", paths));
+        do_test(!autoload.resolve_command(L"file2", paths));
+        autoload.mark_autoload_finished(L"file2");
+        do_test(!autoload.resolve_command(L"file2", paths));
+        do_test((autoload.get_autoloaded_commands() == wcstring_list_t{L"file1", L"file2"}));
+
+        autoload.clear();
+        do_test(autoload.resolve_command(L"file1", paths));
+        autoload.mark_autoload_finished(L"file1");
+        do_test(!autoload.resolve_command(L"file1", paths));
+        do_test(!autoload.resolve_command(L"nothing", paths));
+        do_test(autoload.resolve_command(L"file2", paths));
+        do_test(!autoload.resolve_command(L"file2", paths));
+        autoload.mark_autoload_finished(L"file2");
+
+        do_test(!autoload.resolve_command(L"file1", paths));
+        touch_file(format_string(L"%ls/file1.fish", p1.c_str()));
+        autoload.invalidate_cache();
+        do_test(autoload.resolve_command(L"file1", paths));
+        autoload.mark_autoload_finished(L"file1");
+
+        run(L"rm -Rf %ls", p1.c_str());
+        run(L"rm -Rf %ls", p2.c_str());
+    }
+};
+
+static void test_autoload() {
+    say(L"Testing autoload");
+    autoload_tester_t::run_test();
 }
 
 static void test_complete() {
@@ -2534,6 +2647,8 @@ static void test_complete() {
 
     if (system("mkdir -p 'test/complete_test'")) err(L"mkdir failed");
     if (system("touch 'test/complete_test/has space'")) err(L"touch failed");
+    if (system("touch 'test/complete_test/bracket[abc]'")) err(L"touch failed");
+    if (system(R"(touch 'test/complete_test/gnarlybracket\[abc]')")) err(L"touch failed");
     if (system("touch 'test/complete_test/testfile'")) err(L"touch failed");
     if (system("chmod 700 'test/complete_test/testfile'")) err(L"chmod failed");
 
@@ -2558,12 +2673,36 @@ static void test_complete() {
     do_test(completions.size() == 1);
     do_test(completions.at(0).completion == L"space");
 
+    // Brackets - see #5831
+    completions.clear();
+    complete(L"echo (ls test/complete_test/bracket[", &completions, {}, vars, parser);
+    do_test(completions.size() == 1);
+    do_test(completions.at(0).completion == L"test/complete_test/bracket[abc]");
+
+    wcstring cmdline = L"touch test/complete_test/bracket[";
+    completions.clear();
+    complete(cmdline, &completions, {}, vars, parser);
+    do_test(completions.size() == 1);
+    do_test(completions.front().completion == L"test/complete_test/bracket[abc]");
+    size_t where = cmdline.size();
+    wcstring newcmdline = completion_apply_to_command_line(
+        completions.front().completion, completions.front().flags, cmdline, &where, false);
+    do_test(newcmdline == L"touch test/complete_test/bracket\\[abc\\] ");
+
+    completions.clear();
+    cmdline = LR"(touch test/complete_test/gnarlybracket\\[)";
+    complete(cmdline, &completions, {}, vars, parser);
+    do_test(completions.size() == 1);
+    do_test(completions.front().completion == LR"(test/complete_test/gnarlybracket\[abc])");
+    where = cmdline.size();
+    newcmdline = completion_apply_to_command_line(
+        completions.front().completion, completions.front().flags, cmdline, &where, false);
+    do_test(newcmdline == LR"(touch test/complete_test/gnarlybracket\\\[abc\] )");
+
     // Add a function and test completing it in various ways.
-    // Note we're depending on function_data_t not complaining when given missing parsed_source /
+    // Note we're depending on function_add not complaining when given missing parsed_source /
     // body_node.
-    struct function_data_t func_data = {};
-    func_data.name = L"scuttlebutt";
-    function_add(func_data, parser_t::principal_parser());
+    function_add(L"scuttlebutt", {}, nullptr, {});
 
     // Complete a function name.
     completions.clear();
@@ -2675,9 +2814,7 @@ static void test_complete() {
 
     // Test abbreviations.
     auto &pvars = parser_t::principal_parser().vars();
-    function_data_t fd;
-    fd.name = L"testabbrsonetwothreefour";
-    function_add(fd, parser_t::principal_parser());
+    function_add(L"testabbrsonetwothreefour", {}, nullptr, {});
     int ret = pvars.set_one(L"_fish_abbr_testabbrsonetwothreezero", ENV_LOCAL, L"expansion");
     complete(L"testabbrsonetwothree", &completions, {}, pvars, parser);
     do_test(ret == 0);
@@ -2731,8 +2868,10 @@ static void test_completion_insertions() {
 #define TEST_1_COMPLETION(a, b, c, d, e) test_1_completion(a, b, c, d, e, __LINE__)
     say(L"Testing completion insertions");
     TEST_1_COMPLETION(L"foo^", L"bar", 0, false, L"foobar ^");
-    // We really do want to insert two spaces here - otherwise it's hidden by the cursor.
-    TEST_1_COMPLETION(L"foo^ baz", L"bar", 0, false, L"foobar ^ baz");
+    // An unambiguous completion of a token that is already trailed by a space character.
+    // After completing, the cursor moves on to the next token, suggesting to the user that the
+    // current token is finished.
+    TEST_1_COMPLETION(L"foo^ baz", L"bar", 0, false, L"foobar ^baz");
     TEST_1_COMPLETION(L"'foo^", L"bar", 0, false, L"'foobar' ^");
     TEST_1_COMPLETION(L"'foo'^", L"bar", 0, false, L"'foobar' ^");
     TEST_1_COMPLETION(L"'foo\\'^", L"bar", 0, false, L"'foo\\'bar' ^");
@@ -2740,7 +2879,7 @@ static void test_completion_insertions() {
 
     // Test append only.
     TEST_1_COMPLETION(L"foo^", L"bar", 0, true, L"foobar ^");
-    TEST_1_COMPLETION(L"foo^ baz", L"bar", 0, true, L"foobar ^ baz");
+    TEST_1_COMPLETION(L"foo^ baz", L"bar", 0, true, L"foobar ^baz");
     TEST_1_COMPLETION(L"'foo^", L"bar", 0, true, L"'foobar' ^");
     TEST_1_COMPLETION(L"'foo'^", L"bar", 0, true, L"'foo'bar ^");
     TEST_1_COMPLETION(L"'foo\\'^", L"bar", 0, true, L"'foo\\'bar' ^");
@@ -2754,6 +2893,9 @@ static void test_completion_insertions() {
 
     TEST_1_COMPLETION(L"foo^", L"bar", COMPLETE_REPLACES_TOKEN, false, L"bar ^");
     TEST_1_COMPLETION(L"'foo^", L"bar", COMPLETE_REPLACES_TOKEN, false, L"bar ^");
+
+    // See #6130
+    TEST_1_COMPLETION(L": (:^ ''", L"", 0, false, L": (: ^''");
 }
 
 static void perform_one_autosuggestion_cd_test(const wcstring &command, const wcstring &expected,
@@ -3003,26 +3145,46 @@ static bool history_contains(const std::unique_ptr<history_t> &history, const wc
 
 static void test_input() {
     say(L"Testing input");
+    inputter_t input{parser_t::principal_parser()};
     // Ensure sequences are order independent. Here we add two bindings where the first is a prefix
     // of the second, and then emit the second key list. The second binding should be invoked, not
     // the first!
     wcstring prefix_binding = L"qqqqqqqa";
     wcstring desired_binding = prefix_binding + L'a';
-    input_mapping_add(prefix_binding.c_str(), L"up-line");
-    input_mapping_add(desired_binding.c_str(), L"down-line");
+
+    {
+        auto input_mapping = input_mappings();
+        input_mapping->add(prefix_binding.c_str(), L"up-line");
+        input_mapping->add(desired_binding.c_str(), L"down-line");
+    }
 
     // Push the desired binding to the queue.
     for (size_t idx = 0; idx < desired_binding.size(); idx++) {
-        input_queue_ch(desired_binding.at(idx));
+        input.queue_ch(desired_binding.at(idx));
     }
 
     // Now test.
-    auto evt = input_readch();
+    auto evt = input.readch();
     if (!evt.is_readline()) {
         err(L"Event is not a readline");
     } else if (evt.get_readline() != readline_cmd_t::down_line) {
         err(L"Expected to read char down_line");
     }
+}
+
+static void test_fd_set() {
+    say(L"Testing fd_set");
+    fd_set_t fds;
+    do_test(!fds.contains(0));
+    do_test(!fds.contains(100));
+    fds.add(1);
+    do_test(!fds.contains(0));
+    do_test(!fds.contains(100));
+    do_test(fds.contains(1));
+    fds.add(1);
+    do_test(!fds.contains(0));
+    do_test(!fds.contains(100));
+    do_test(fds.contains(1));
 }
 
 static void test_line_iterator() {
@@ -3400,15 +3562,6 @@ static wcstring random_string() {
     return result;
 }
 
-// Helper to lowercase a string.
-static wcstring lower(const wcstring &s) {
-    wcstring result;
-    for (wchar_t c : s) {
-        result.push_back(towlower(c));
-    }
-    return result;
-}
-
 void history_tests_t::test_history() {
     history_search_t searcher;
     say(L"Testing history");
@@ -3440,8 +3593,8 @@ void history_tests_t::test_history() {
     test_history_matches(searcher, expected, __LINE__);
 
     // Items matching "alpha", case-insensitive.
-    searcher = history_search_t(history, L"AlPhA", HISTORY_SEARCH_TYPE_CONTAINS, nocase);
-    set_expected([](const wcstring &s) { return lower(s).find(L"alpha") != wcstring::npos; });
+    searcher = history_search_t(history, L"AlPhA", history_search_type_t::contains, nocase);
+    set_expected([](const wcstring &s) { return wcstolower(s).find(L"alpha") != wcstring::npos; });
     test_history_matches(searcher, expected, __LINE__);
 
     // Items matching "et", case-sensitive.
@@ -3450,24 +3603,24 @@ void history_tests_t::test_history() {
     test_history_matches(searcher, expected, __LINE__);
 
     // Items starting with "be", case-sensitive.
-    searcher = history_search_t(history, L"be", HISTORY_SEARCH_TYPE_PREFIX, 0);
+    searcher = history_search_t(history, L"be", history_search_type_t::prefix, 0);
     set_expected([](const wcstring &s) { return string_prefixes_string(L"be", s); });
     test_history_matches(searcher, expected, __LINE__);
 
     // Items starting with "be", case-insensitive.
-    searcher = history_search_t(history, L"be", HISTORY_SEARCH_TYPE_PREFIX, nocase);
+    searcher = history_search_t(history, L"be", history_search_type_t::prefix, nocase);
     set_expected(
         [](const wcstring &s) { return string_prefixes_string_case_insensitive(L"be", s); });
     test_history_matches(searcher, expected, __LINE__);
 
     // Items exactly matching "alph", case-sensitive.
-    searcher = history_search_t(history, L"alph", HISTORY_SEARCH_TYPE_EXACT, 0);
+    searcher = history_search_t(history, L"alph", history_search_type_t::exact, 0);
     set_expected([](const wcstring &s) { return s == L"alph"; });
     test_history_matches(searcher, expected, __LINE__);
 
     // Items exactly matching "alph", case-insensitive.
-    searcher = history_search_t(history, L"alph", HISTORY_SEARCH_TYPE_EXACT, nocase);
-    set_expected([](const wcstring &s) { return lower(s) == L"alph"; });
+    searcher = history_search_t(history, L"alph", history_search_type_t::exact, nocase);
+    set_expected([](const wcstring &s) { return wcstolower(s) == L"alph"; });
     test_history_matches(searcher, expected, __LINE__);
 
     // Test item removal case-sensitive.
@@ -3831,6 +3984,7 @@ void history_tests_t::test_history_formats() {
         // The results are in the reverse order that they appear in the bash history file.
         // We don't expect whitespace to be elided (#4908: except for leading/trailing whitespace)
         const wchar_t *expected[] = {L"sleep 123",
+                                     L"a && echo valid construct",
                                      L"final line",
                                      L"echo supsup",
                                      L"export XVAR='exported'",
@@ -4148,7 +4302,7 @@ static void test_new_parser_errors() {
                 L"code %lu",
                 src.c_str(), expected_code, (unsigned long)errors.at(0).code);
             for (size_t i = 0; i < errors.size(); i++) {
-                err(L"\t\t%ls", errors.at(i).describe(src).c_str());
+                err(L"\t\t%ls", errors.at(i).describe(src, true).c_str());
             }
         }
     }
@@ -4387,7 +4541,16 @@ static void test_highlighting() {
 
     highlight_tests.push_back({
         {L"echo", highlight_role_t::command},
-        {L"'single_quote", highlight_role_t::error},
+        {L"'", highlight_role_t::error},
+        {L"single_quote", highlight_role_t::quote},
+        {L"$stuff", highlight_role_t::quote},
+    });
+
+    highlight_tests.push_back({
+        {L"echo", highlight_role_t::command},
+        {L"\"", highlight_role_t::error},
+        {L"double_quote", highlight_role_t::quote},
+        {L"$stuff", highlight_role_t::operat},
     });
 
     highlight_tests.push_back({
@@ -4453,6 +4616,25 @@ static void test_highlighting() {
         {L"%self", highlight_role_t::operat},
         {L"not%self", highlight_role_t::param},
         {L"self%not", highlight_role_t::param},
+    });
+
+    highlight_tests.push_back({
+        {L"false", highlight_role_t::command},
+        {L"&|", highlight_role_t::statement_terminator},
+        {L"true", highlight_role_t::command},
+    });
+
+    highlight_tests.push_back({
+        {L"HOME=.", highlight_role_t::param},
+        {L"false", highlight_role_t::command},
+        {L"|&", highlight_role_t::error},
+        {L"true", highlight_role_t::command},
+        {L"stuff", highlight_role_t::param},
+    });
+
+    highlight_tests.push_back({
+        {L"echo", highlight_role_t::command},
+        {L")", highlight_role_t::error},
     });
 
     auto &vars = parser_t::principal_parser().vars();
@@ -5012,13 +5194,11 @@ static void test_illegal_command_exit_code() {
         {L"abc?def", STATUS_UNMATCHED_WILDCARD},
     };
 
-    int res = 0;
-    UNUSED(res);
     const io_chain_t empty_ios;
     parser_t &parser = parser_t::principal_parser();
 
     for (const auto &test : tests) {
-        res = parser.eval(test.txt, empty_ios, TOP);
+        parser.eval(test.txt, empty_ios);
 
         int exit_status = parser.get_last_status();
         if (exit_status != test.result) {
@@ -5306,7 +5486,7 @@ int main(int argc, char **argv) {
     if (should_test_function("format")) test_format();
     if (should_test_function("convert")) test_convert();
     if (should_test_function("convert_nulls")) test_convert_nulls();
-    if (should_test_function("tok")) test_tokenizer();
+    if (should_test_function("tokenizer")) test_tokenizer();
     if (should_test_function("iothread")) test_iothread();
     if (should_test_function("pthread")) test_pthread();
     if (should_test_function("parser")) test_parser();
@@ -5333,7 +5513,9 @@ int main(int argc, char **argv) {
     if (should_test_function("is_potential_path")) test_is_potential_path();
     if (should_test_function("colors")) test_colors();
     if (should_test_function("complete")) test_complete();
+    if (should_test_function("autoload")) test_autoload();
     if (should_test_function("input")) test_input();
+    if (should_test_function("io")) test_fd_set();
     if (should_test_function("line_iterator")) test_line_iterator();
     if (should_test_function("universal")) test_universal();
     if (should_test_function("universal")) test_universal_output();

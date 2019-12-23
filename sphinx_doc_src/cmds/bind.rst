@@ -6,18 +6,14 @@ bind - handle fish key bindings
 Synopsis
 --------
 
-``bind [(-M | --mode) MODE] [(-m | --sets-mode) NEW_MODE] [--preset | --user] [(-s | --silent)] [(-k | --key)] SEQUENCE COMMAND [COMMAND...]``
+::
 
-``bind [(-M | --mode) MODE] [(-k | --key)] [--preset] [--user] SEQUENCE``
-
-``bind (-K | --key-names) [(-a | --all)] [--preset] [--user]``
-
-``bind (-f | --function-names)``
-
-``bind (-L | --list-modes)``
-
-``bind (-e | --erase) [(-M | --mode) MODE] [--preset] [--user] (-a | --all | [(-k | --key)] SEQUENCE [SEQUENCE...])``
-
+    bind [(-M | --mode) MODE] [(-m | --sets-mode) NEW_MODE] [--preset | --user] [(-s | --silent)] [(-k | --key)] SEQUENCE COMMAND [COMMAND...]
+    bind [(-M | --mode) MODE] [(-k | --key)] [--preset] [--user] SEQUENCE
+    bind (-K | --key-names) [(-a | --all)] [--preset] [--user]
+    bind (-f | --function-names)
+    bind (-L | --list-modes)
+    bind (-e | --erase) [(-M | --mode) MODE] [--preset] [--user] (-a | --all | [(-k | --key)] SEQUENCE [SEQUENCE...])
 
 Description
 -----------
@@ -36,7 +32,7 @@ When ``COMMAND`` is a shellscript command, it is a good practice to put the actu
 
 If a script produces output, it should finish by calling ``commandline -f repaint`` to tell fish that a repaint is in order.
 
-When multiple ``COMMAND``s are provided, they are all run in the specified order when the key is pressed. Note that special input functions cannot be combined with ordinary shell script commands. The commands must be entirely a sequence of special input functions (from ``bind -f``) or all shell script commands (i.e., valid fish script).
+When multiple ``COMMAND``\s are provided, they are all run in the specified order when the key is pressed. Note that special input functions cannot be combined with ordinary shell script commands. The commands must be entirely a sequence of special input functions (from ``bind -f``) or all shell script commands (i.e., valid fish script).
 
 If no ``SEQUENCE`` is provided, all bindings (or just the bindings in the specified ``MODE``) are printed. If ``SEQUENCE`` is provided without ``COMMAND``, just the binding matching that sequence is printed.
 
@@ -102,6 +98,10 @@ The following special input functions are available:
 
 - ``delete-char``, delete one character to the right of the cursor
 
+- ``delete-or-exit``, deletes one character to the right of the cursor or exits the shell if the commandline is empty.
+
+- ``down-line``, move down one line
+
 - ``downcase-word``, make the current word lowercase
 
 - ``end-of-buffer``, moves to the end of the buffer, i.e. the end of the first line
@@ -123,6 +123,14 @@ The following special input functions are available:
 - ``history-search-backward``, search the history for the previous match
 
 - ``history-search-forward``, search the history for the next match
+
+- ``history-prefix-search-backward``, search the history for the previous prefix match
+
+- ``history-prefix-search-forward``, search the history for the next prefix match
+
+- ``history-token-search-backward``, search the history for the previous matching argument
+
+- ``history-token-search-forward``, search the history for the next matching argument
 
 - ``kill-bigword``, move the next whitespace-delimited word to the killring
 
@@ -147,6 +155,8 @@ The following special input functions are available:
 - ``transpose-chars``,  transpose two characters to the left of the cursor
 
 - ``transpose-words``, transpose two words to the left of the cursor
+
+- ``up-line``, move up one line
 
 - ``upcase-word``, make the current word uppercase
 
@@ -183,6 +193,7 @@ Performs a history search when the :kbd:`Page Up` key is pressed.
 
 Turns on Vi key bindings and rebinds :kbd:`Control+C` to clear the input line.
 
+.. _cmd-bind-escape:
 
 Special Case: The escape Character
 ----------------------------------

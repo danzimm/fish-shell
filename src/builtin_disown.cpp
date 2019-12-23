@@ -1,13 +1,13 @@
 // Implementation of the disown builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <signal.h>
+#include "builtin_disown.h"
 
+#include <cerrno>
+#include <csignal>
 #include <set>
 
 #include "builtin.h"
-#include "builtin_disown.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
@@ -34,7 +34,7 @@ static int disown_job(const wchar_t *cmd, parser_t &parser, io_streams_t &stream
     // We cannot directly remove the job from the jobs() list as `disown` might be called
     // within the context of a subjob which will cause the parent job to crash in exec_job().
     // Instead, we set a flag and the parser removes the job from the jobs list later.
-    j->set_flag(job_flag_t::DISOWN_REQUESTED, true);
+    j->mut_flags().disown_requested = true;
     add_disowned_pgid(j->pgid);
 
     return STATUS_CMD_OK;
@@ -51,11 +51,11 @@ int builtin_disown(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
-    if (argv[1] == 0) {
+    if (argv[1] == nullptr) {
         // Select last constructed job (ie first job in the job queue) that is possible to disown.
         // Stopped jobs can be disowned (they will be continued).
         // Foreground jobs can be disowned.

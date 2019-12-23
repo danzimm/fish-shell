@@ -3,6 +3,15 @@
 fish_git_prompt - output git information for use in a prompt
 ============================================================
 
+Synopsis
+--------
+
+::
+
+     function fish_prompt
+          echo -n (pwd)(fish_git_prompt) '$ '
+     end
+
 Description
 -----------
 
@@ -18,8 +27,10 @@ There are numerous customization options, which can be controlled with git optio
 
 - ``$__fish_git_prompt_showuntrackedfiles`` or the git option ``bash.showUntrackedFiles`` can be set to show if the repository has untracked files (that aren't ignored).
 
-- ``$__fish_git_prompt_showupstream`` can be set to a number of values to determine how changes between HEAD and upstream are shown:
+- ``$__fish_git_prompt_showupstream`` can be set to a list of values to determine how changes between HEAD and upstream are shown:
 
+     ``auto``
+          summarize the difference between HEAD and its upstream
      ``verbose``
           show number of commits ahead/behind (+/-) upstream
      ``name``
@@ -37,7 +48,7 @@ There are numerous customization options, which can be controlled with git optio
 
 - ``$__fish_git_prompt_shorten_branch_len`` can be set to the number of characters that the branch name will be shortened to.
 
-- ``$__fish_git_prompt_describe_style`` can be set to a number of styles that describe the current HEAD:
+- ``$__fish_git_prompt_describe_style`` can be set to one of the following styles to describe the current HEAD:
 
      ``contains``
          relative to newer annotated tag, such as ``(v1.6.3.2~35)``
@@ -50,7 +61,7 @@ There are numerous customization options, which can be controlled with git optio
 
 - ``$__fish_git_prompt_showcolorhints`` can be set to enable coloring for the branch name and status symbols.
 
-A number of variables set characters and color used as indicators. Many of these have a different default if used with informative status enabled. The usual default is given first, then the informative default (if it is different). If no default for the colors is given, they default to ``$__fish_git_prompt_color``.
+A number of variables set characters and color used as indicators. Many of these have a different default if used with informative status enabled, or ``$__fish_git_prompt_use_informative_chars`` set. The usual default is given first, then the informative default (if it is different). If no default for the colors is given, they default to ``$__fish_git_prompt_color``.
 
 - ``$__fish_git_prompt_char_stateseparator`` (' ', `|`)
 - ``$__fish_git_prompt_color`` ('')
@@ -112,5 +123,3 @@ A simple prompt that displays git info::
         set -g __fish_git_prompt_showupstream auto
         printf '%s %s$' $PWD (fish_git_prompt)
     end
-
-

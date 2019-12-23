@@ -30,7 +30,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
         set -U fish_greeting "$line1$line2"
     end
 
-    if set -q fish_private_mode
+    if set -q fish_private_mode; and string length -q -- $fish_greeting
         set -l line (_ "fish is running in private mode, history will not be persisted.")
         set -g fish_greeting $fish_greeting.\n$line
     end
@@ -44,9 +44,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
 
     #
     # If we are starting up for the first time, set various defaults.
-    #
-    # bump this to 2_4_0 when rolling release if anything changes after 9/10/2016
-    if not set -q __fish_init_2_39_8
+    if not set -q __fish_init_3_1_0
 
         # Regular syntax highlighting colors
         __init_uvar fish_color_normal normal
@@ -61,9 +59,9 @@ function __fish_config_interactive -d "Initializations that should be performed 
         __init_uvar fish_color_quote 999900
         __init_uvar fish_color_autosuggestion 555 brblack
         __init_uvar fish_color_user brgreen
-
         __init_uvar fish_color_host normal
         __init_uvar fish_color_valid_path --underline
+        __init_uvar fish_color_status red
 
         __init_uvar fish_color_cwd green
         __init_uvar fish_color_cwd_root red
@@ -92,7 +90,8 @@ function __fish_config_interactive -d "Initializations that should be performed 
         #
         __init_uvar fish_color_history_current --bold
 
-        set -U __fish_init_2_39_8
+        set -e __fish_init_2_39_8
+        set -U __fish_init_3_1_0
     end
 
     #
@@ -111,7 +110,11 @@ function __fish_config_interactive -d "Initializations that should be performed 
             set -l update_args -B $__fish_data_dir/tools/create_manpage_completions.py --manpath --cleanup-in '~/.config/fish/completions' --cleanup-in '~/.config/fish/generated_completions'
             for py in python{3,2,}
                 if command -sq $py
-                    $py $update_args >/dev/null 2>&1 &
+                    set -l c $py $update_args
+                    # Run python directly in the background and swallow all output
+                    $c (: fish_update_completions: generating completions from man pages) >/dev/null 2>&1 &
+                    # Then disown the job so that it continues to run in case of an early exit (#6269)
+                    disown 2>&1 >/dev/null
                     break
                 end
             end
@@ -138,7 +141,11 @@ function __fish_config_interactive -d "Initializations that should be performed 
     # fish_color_cwd{,_root} changes value. Like all event handlers, it can't be
     # autoloaded.
     #
-    function __fish_repaint -v fish_color_cwd -v fish_color_cwd_root -d "Event handler, repaints the prompt when fish_color_cwd* changes"
+    set -l varargs --on-variable fish_key_bindings
+    for var in user host cwd{,_root} status
+        set -a varargs --on-variable fish_color_$var
+    end
+    function __fish_repaint $varargs -d "Event handler, repaints the prompt when fish_color_cwd* changes"
         if status --is-interactive
             set -e __fish_prompt_cwd
             commandline -f repaint 2>/dev/null
@@ -163,11 +170,12 @@ function __fish_config_interactive -d "Initializations that should be performed 
     # the user tries [ interactively.
     #
     complete -c [ --wraps test
+    complete -c ! --wraps not
 
     #
     # Only a few builtins take filenames; initialize the rest with no file completions
     #
-    complete -c(builtin -n | string match -rv 'source|cd|exec|realpath') --no-files
+    complete -c(builtin -n | string match -rv '(source|cd|exec|realpath|set|\\[|test|for)') --no-files
 
     # Reload key bindings when binding variable change
     function __fish_reload_key_bindings -d "Reload key bindings when binding variable change" --on-variable fish_key_bindings

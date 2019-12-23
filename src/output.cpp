@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <cstring>
 #if HAVE_CURSES_H
 #include <curses.h>
@@ -17,8 +18,8 @@
 #include <ncurses/term.h>
 #endif
 #include <limits.h>
-#include <cwchar>
 
+#include <cwchar>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,7 +36,9 @@
 static color_support_t color_support = 0;
 
 /// Returns true if we think tparm can handle outputting a color index
-static bool term_supports_color_natively(unsigned int c) { return (unsigned)max_colors >= c + 1; }
+static bool term_supports_color_natively(unsigned int c) {
+    return static_cast<unsigned>(max_colors) >= c + 1;
+}
 
 color_support_t output_get_color_support() { return color_support; }
 
@@ -360,7 +363,7 @@ int outputter_t::term_puts(const char *str, int affcnt) {
     scoped_push<outputter_t *> push(&s_tputs_receiver, this);
     // On some systems, tputs takes a char*, on others a const char*.
     // Like tparm, we just cast it to unconst, that should work everywhere.
-    return tputs((char *)str, affcnt, tputs_writer);
+    return tputs(const_cast<char *>(str), affcnt, tputs_writer);
 }
 
 /// Write a wide character to the outputter. This should only be used when writing characters from
@@ -383,7 +386,7 @@ int outputter_t::writech(wint_t ch) {
     } else {
         mbstate_t state = {};
         len = std::wcrtomb(buff, ch, &state);
-        if (len == (size_t)-1) {
+        if (len == static_cast<size_t>(-1)) {
             return 1;
         }
     }
@@ -398,8 +401,8 @@ int outputter_t::writech(wint_t ch) {
 void outputter_t::writestr(const wchar_t *str) {
     assert(str && "Empty input string");
 
-    size_t len = wcstombs(0, str, 0);  // figure amount of space needed
-    if (len == (size_t)-1) {
+    size_t len = wcstombs(nullptr, str, 0);  // figure amount of space needed
+    if (len == static_cast<size_t>(-1)) {
         debug(1, L"Tried to print invalid wide character string");
         return;
     }
@@ -432,8 +435,7 @@ rgb_color_t best_color(const std::vector<rgb_color_t> &candidates, color_support
     }
 
     rgb_color_t first_rgb = rgb_color_t::none(), first_named = rgb_color_t::none();
-    for (size_t i = 0; i < candidates.size(); i++) {
-        const rgb_color_t &color = candidates.at(i);
+    for (const auto &color : candidates) {
         if (first_rgb.is_none() && color.is_rgb()) {
             first_rgb = color;
         }
@@ -466,17 +468,18 @@ rgb_color_t parse_color(const env_var_t &var, bool is_background) {
 
     std::vector<rgb_color_t> candidates;
 
-    wcstring_list_t el;
-    var.to_list(el);
-
-    for (size_t j = 0; j < el.size(); j++) {
-        const wcstring &next = el.at(j);
-        wcstring color_name;
+    wcstring color_name;
+    for (const wcstring &next : var.as_list()) {
+        color_name.clear();
         if (is_background) {
             // Look for something like "--background=red".
-            const wcstring prefix = L"--background=";
+            const wchar_t *prefix = L"--background=";
             if (string_prefixes_string(prefix, next)) {
-                color_name = wcstring(next, prefix.size());
+                color_name = wcstring(next, wcslen(prefix));
+            }
+            // Reverse should be meaningful in either context
+            if (next == L"--reverse" || next == L"-r") {
+                is_reverse = true;
             }
         } else {
             if (next == L"--bold" || next == L"-o")
@@ -522,7 +525,7 @@ rgb_color_t parse_color(const env_var_t &var, bool is_background) {
 /// Write specified multibyte string.
 void writembs_check(outputter_t &outp, const char *mbs, const char *mbs_name, bool critical,
                     const char *file, long line) {
-    if (mbs != NULL) {
+    if (mbs != nullptr) {
         outp.term_puts(mbs, 1);
     } else if (critical) {
         auto term = env_stack_t::globals().get(L"TERM");

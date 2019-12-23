@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+
 #include <cstring>
 #if defined(__linux__)
 #include <sys/statfs.h>
@@ -19,9 +20,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <wctype.h>
-#include <cwchar>
 
 #include <atomic>
+#include <cwchar>
 #include <string>
 #include <unordered_map>
 
@@ -30,9 +31,15 @@
 #include "flog.h"
 #include "wutil.h"  // IWYU pragma: keep
 
-typedef std::string cstring;
+using cstring = std::string;
 
-const file_id_t kInvalidFileID = {(dev_t)-1LL, (ino_t)-1LL, (uint64_t)-1LL, -1, -1, -1, -1};
+const file_id_t kInvalidFileID = {static_cast<dev_t>(-1LL),
+                                  static_cast<ino_t>(-1LL),
+                                  static_cast<uint64_t>(-1LL),
+                                  -1,
+                                  -1,
+                                  -1,
+                                  -1};
 
 /// Map used as cache by wgettext.
 static owning_lock<std::unordered_map<wcstring, wcstring>> wgettext_map;
@@ -95,7 +102,7 @@ bool wreaddir(DIR *dir, wcstring &out_name) {
 }
 
 bool wreaddir_for_dirs(DIR *dir, wcstring *out_name) {
-    struct dirent *result = NULL;
+    struct dirent *result = nullptr;
     while (!result) {
         result = readdir(dir);
         if (!result) break;
@@ -120,8 +127,7 @@ bool wreaddir_for_dirs(DIR *dir, wcstring *out_name) {
     if (result && out_name) {
         *out_name = str2wcstring(result->d_name);
     }
-    if (!result) return false;
-    return true;
+    return result != nullptr;
 }
 
 const wcstring wgetcwd() {
@@ -133,11 +139,6 @@ const wcstring wgetcwd() {
 
     FLOGF(error, _(L"getcwd() failed with errno %d/%s"), errno, std::strerror(errno));
     return wcstring();
-}
-
-int wchdir(const wcstring &dir) {
-    cstring tmp = wcs2string(dir);
-    return chdir(tmp.c_str());
 }
 
 FILE *wfopen(const wcstring &path, const char *mode) {
@@ -160,7 +161,7 @@ FILE *wfopen(const wcstring &path, const char *mode) {
         }
         default: {
             errno = EINVAL;
-            return NULL;
+            return nullptr;
         }
     }
     // Skip binary.
@@ -170,23 +171,30 @@ FILE *wfopen(const wcstring &path, const char *mode) {
     if (mode[idx] == '+') permissions = O_RDWR;
 
     int fd = wopen_cloexec(path, permissions | options, 0666);
-    if (fd < 0) return NULL;
+    if (fd < 0) return nullptr;
     FILE *result = fdopen(fd, mode);
-    if (result == NULL) close(fd);
+    if (result == nullptr) close(fd);
     return result;
 }
 
-bool set_cloexec(int fd) {
+int set_cloexec(int fd, bool should_set) {
     // Note we don't want to overwrite existing flags like O_NONBLOCK which may be set. So fetch the
-    // existing flags and OR in our new one.
+    // existing flags and modify them.
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags < 0) {
-        return false;
+        return -1;
     }
-    if (flags & FD_CLOEXEC) {
-        return true;
+    int new_flags = flags;
+    if (should_set) {
+        new_flags |= FD_CLOEXEC;
+    } else {
+        new_flags &= ~FD_CLOEXEC;
     }
-    return fcntl(fd, F_SETFD, flags | FD_CLOEXEC) >= 0;
+    if (flags == new_flags) {
+        return 0;
+    } else {
+        return fcntl(fd, F_SETFD, new_flags);
+    }
 }
 
 int open_cloexec(const std::string &cstring, int flags, mode_t mode, bool cloexec) {
@@ -208,6 +216,11 @@ int open_cloexec(const std::string &cstring, int flags, mode_t mode, bool cloexe
     }
 #endif
     return fd;
+}
+
+int wopen(const wcstring &pathname, int flags, mode_t mode) {
+    cstring tmp = wcs2string(pathname);
+    return open(tmp.c_str(), flags, mode);
 }
 
 int wopen_cloexec(const wcstring &pathname, int flags, mode_t mode) {
@@ -330,7 +343,7 @@ const char *safe_strerror(int err) {
     return std::strerror(err);
 #elif defined(HAVE__SYS__ERRS) || defined(HAVE_SYS_ERRLIST)
 #ifdef HAVE_SYS_ERRLIST
-    if (err >= 0 && err < sys_nerr && sys_errlist[err] != NULL) {
+    if (err >= 0 && err < sys_nerr && sys_errlist[err] != nullptr) {
         return sys_errlist[err];
     }
 #elif defined(HAVE__SYS__ERRS)
@@ -611,7 +624,7 @@ int fish_wcswidth(const wchar_t *str) { return fish_wcswidth(str, std::wcslen(st
 int fish_wcswidth(const wcstring &str) { return fish_wcswidth(str.c_str(), str.size()); }
 
 locale_t fish_c_locale() {
-    static const locale_t loc = newlocale(LC_ALL_MASK, "C", NULL);
+    static const locale_t loc = newlocale(LC_ALL_MASK, "C", nullptr);
     return loc;
 }
 
@@ -651,7 +664,7 @@ int fish_wcstoi(const wchar_t *str, const wchar_t **endptr, int base) {
         }
     }
     if (endptr) *endptr = _endptr;
-    return (int)result;
+    return static_cast<int>(result);
 }
 
 /// An enhanced version of wcstol().

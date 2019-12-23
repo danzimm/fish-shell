@@ -82,7 +82,7 @@ class pager_t {
    public:
     /// Data structure describing one or a group of related completions.
     struct comp_t {
-        /// The list of all completin strings this entry applies to.
+        /// The list of all completion strings this entry applies to.
         wcstring_list_t comp;
         /// The description.
         wcstring desc;
@@ -131,7 +131,7 @@ class pager_t {
 
     bool completion_info_passes_filter(const comp_t &info) const;
 
-    void completion_print(size_t cols, const size_t *width_per_column, size_t row_start,
+    void completion_print(size_t cols, const size_t *width_by_column, size_t row_start,
                           size_t row_stop, const wcstring &prefix, const comp_info_list_t &lst,
                           page_rendering_t *rendering) const;
     line_t completion_print_item(const wcstring &prefix, const comp_t *c, size_t row, size_t column,
@@ -143,7 +143,7 @@ class pager_t {
     editable_line_t search_field_line;
 
     // Sets the set of completions.
-    void set_completions(const completion_list_t &comp);
+    void set_completions(const completion_list_t &raw_completions);
 
     // Sets the prefix.
     void set_prefix(const wcstring &pref);

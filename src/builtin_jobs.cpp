@@ -1,9 +1,10 @@
 // Functions for executing the jobs builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stddef.h>
 #include <sys/time.h>
+
+#include <cerrno>
+#include <cstddef>
 
 #include "builtin.h"
 #include "common.h"
@@ -32,14 +33,14 @@ static int cpu_use(const job_t *j) {
     for (const process_ptr_t &p : j->processes) {
         struct timeval t;
         int jiffies;
-        gettimeofday(&t, 0);
+        gettimeofday(&t, nullptr);
         jiffies = proc_get_jiffies(p.get());
 
         double t1 = 1000000.0 * p->last_time.tv_sec + p->last_time.tv_usec;
         double t2 = 1000000.0 * t.tv_sec + t.tv_usec;
 
         // std::fwprintf( stderr, L"t1 %f t2 %f p1 %d p2 %d\n", t1, t2, jiffies, p->last_jiffies );
-        u += ((double)(jiffies - p->last_jiffies)) / (t2 - t1);
+        u += (static_cast<double>(jiffies - p->last_jiffies)) / (t2 - t1);
     }
     return u * 1000000;
 }
@@ -118,17 +119,17 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     int print_last = 0;
 
     static const wchar_t *const short_options = L":cghlpq";
-    static const struct woption long_options[] = {{L"command", no_argument, NULL, 'c'},
-                                                  {L"group", no_argument, NULL, 'g'},
-                                                  {L"help", no_argument, NULL, 'h'},
-                                                  {L"last", no_argument, NULL, 'l'},
-                                                  {L"pid", no_argument, NULL, 'p'},
-                                                  {L"quiet", no_argument, NULL, 'q'},
-                                                  {nullptr, 0, NULL, 0}};
+    static const struct woption long_options[] = {{L"command", no_argument, nullptr, 'c'},
+                                                  {L"group", no_argument, nullptr, 'g'},
+                                                  {L"help", no_argument, nullptr, 'h'},
+                                                  {L"last", no_argument, nullptr, 'l'},
+                                                  {L"pid", no_argument, nullptr, 'p'},
+                                                  {L"quiet", no_argument, nullptr, 'q'},
+                                                  {nullptr, 0, nullptr, 0}};
 
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
         switch (opt) {
             case 'p': {
                 mode = JOBS_PRINT_PID;
@@ -151,7 +152,7 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
                 break;
             }
             case 'h': {
-                builtin_print_help(parser, streams, cmd, streams.out);
+                builtin_print_help(parser, streams, cmd);
                 return STATUS_CMD_OK;
             }
             case ':': {
@@ -174,9 +175,10 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         for (const auto &j : parser.jobs()) {
             if (j->is_visible()) {
                 builtin_jobs_print(j.get(), mode, !streams.out_is_redirected, streams);
-                return STATUS_CMD_ERROR;
+                return STATUS_CMD_OK;
             }
         }
+        return STATUS_CMD_ERROR;
 
     } else {
         if (w.woptind < argc) {

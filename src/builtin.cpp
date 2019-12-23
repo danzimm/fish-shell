@@ -17,17 +17,18 @@
 // 4). Use 'git add sphinx_doc_src/NAME.txt' to start tracking changes to the documentation file.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stdlib.h>
+#include "builtin.h"
+
 #include <unistd.h>
-#include <cstring>
-#include <cwchar>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
 #include <memory>
 #include <string>
 
-#include "builtin.h"
 #include "builtin_argparse.h"
 #include "builtin_bg.h"
 #include "builtin_bind.h"
@@ -88,11 +89,11 @@ bool builtin_data_t::operator<(const builtin_data_t *other) const {
 /// Counts the number of arguments in the specified null-terminated array
 int builtin_count_args(const wchar_t *const *argv) {
     int argc;
-    for (argc = 1; argv[argc] != NULL;) {
+    for (argc = 1; argv[argc] != nullptr;) {
         argc++;
     }
 
-    assert(argv[argc] == NULL);
+    assert(argv[argc] == nullptr);
     return argc;
 }
 
@@ -100,11 +101,11 @@ int builtin_count_args(const wchar_t *const *argv) {
 /// to stderr. Used by the builtin commands.
 void builtin_wperror(const wchar_t *s, io_streams_t &streams) {
     char *err = std::strerror(errno);
-    if (s != NULL) {
+    if (s != nullptr) {
         streams.err.append(s);
         streams.err.append(L": ");
     }
-    if (err != NULL) {
+    if (err != nullptr) {
         const wcstring werr = str2wcstring(err);
         streams.err.append(werr);
         streams.err.push_back(L'\n');
@@ -112,15 +113,15 @@ void builtin_wperror(const wchar_t *s, io_streams_t &streams) {
 }
 
 static const wchar_t *const short_options = L"+:h";
-static const struct woption long_options[] = {{L"help", no_argument, NULL, 'h'},
-                                              {NULL, 0, NULL, 0}};
+static const struct woption long_options[] = {{L"help", no_argument, nullptr, 'h'},
+                                              {nullptr, 0, nullptr, 0}};
 
 int parse_help_only_cmd_opts(struct help_only_cmd_opts_t &opts, int *optind, int argc,
                              wchar_t **argv, parser_t &parser, io_streams_t &streams) {
     wchar_t *cmd = argv[0];
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
         switch (opt) {  //!OCLINT(too few branches)
             case 'h': {
                 opts.print_help = true;
@@ -145,42 +146,27 @@ int parse_help_only_cmd_opts(struct help_only_cmd_opts_t &opts, int *optind, int
     return STATUS_CMD_OK;
 }
 
-/// Obtain help/usage information for the specified builtin from manpage in subshell
+/// Display help/usage information for the specified builtin or function from manpage
 ///
 /// @param  name
-///    builtin name to get up help for
+///    builtin or function name to get up help for
 ///
-/// @return
-///    A wcstring with a formatted manpage.
-///
-wcstring builtin_help_get(parser_t &parser, io_streams_t &streams, const wchar_t *name) {
-    UNUSED(parser);
+/// Process and print help for the specified builtin or function.
+void builtin_print_help(parser_t &parser, io_streams_t &streams, const wchar_t *name,
+                        wcstring *error_message) {
     UNUSED(streams);
     // This won't ever work if no_exec is set.
-    if (no_exec()) return wcstring();
-
-    wcstring_list_t lst;
-    wcstring out;
-    const wcstring name_esc = escape_string(name, 1);
-    wcstring cmd = format_string(L"__fish_print_help %ls", name_esc.c_str());
-    if (exec_subshell(cmd, parser, lst, false /* don't apply exit status */) >= 0) {
-        for (size_t i = 0; i < lst.size(); i++) {
-            out.append(lst.at(i));
-            out.push_back(L'\n');
-        }
+    if (no_exec()) return;
+    const wcstring name_esc = escape_string(name, ESCAPE_ALL);
+    wcstring cmd = format_string(L"__fish_print_help %ls ", name_esc.c_str());
+    io_chain_t ios;
+    if (error_message) {
+        cmd.append(escape_string(*error_message, ESCAPE_ALL));
+        // If it's an error, redirect the output of __fish_print_help to stderr
+        ios.push_back(std::make_shared<io_fd_t>(STDOUT_FILENO, STDERR_FILENO));
     }
-    return out;
-}
-
-/// Process and print for the specified builtin. If @c b is `sb_err`, also print the line
-/// information.
-///
-/// If @c b is the buffer representing standard error, and the help message is about to be printed
-/// to an interactive screen, it may be shortened to fit the screen.
-///
-void builtin_print_help(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
-                        output_stream_t &b) {
-    b.append(builtin_help_get(parser, streams, cmd));
+    parser.eval(cmd, ios);
+    // ignore the exit status of __fish_print_help
 }
 
 /// Perform error reporting for encounter with unknown option.
@@ -220,14 +206,14 @@ static int builtin_generic(parser_t &parser, io_streams_t &streams, wchar_t **ar
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
     // Hackish - if we have no arguments other than the command, we are a "naked invocation" and we
     // just print help.
     if (argc == 1) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_INVALID_ARGS;
     }
 
@@ -236,7 +222,7 @@ static int builtin_generic(parser_t &parser, io_streams_t &streams, wchar_t **ar
 
 // How many bytes we read() at once.
 // Since this is just for counting, it can be massive.
-#define COUNT_CHUNK_SIZE 512 * 256
+#define COUNT_CHUNK_SIZE (512 * 256)
 /// Implementation of the builtin count command, used to count the number of arguments sent to it.
 static int builtin_count(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
@@ -271,22 +257,23 @@ static int builtin_break_continue(parser_t &parser, io_streams_t &streams, wchar
     int argc = builtin_count_args(argv);
 
     if (argc != 1) {
-        streams.err.append_format(BUILTIN_ERR_UNKNOWN, argv[0], argv[1]);
-
-        builtin_print_help(parser, streams, argv[0], streams.err);
+        wcstring error_message = format_string(BUILTIN_ERR_UNKNOWN, argv[0], argv[1]);
+        builtin_print_help(parser, streams, argv[0], &error_message);
         return STATUS_INVALID_ARGS;
     }
 
     // Paranoia: ensure we have a real loop.
     bool has_loop = false;
-    for (size_t loop_idx = 0; loop_idx < parser.block_count() && !has_loop; loop_idx++) {
-        const block_t *b = parser.block_at_index(loop_idx);
-        if (b->type() == WHILE || b->type() == FOR) has_loop = true;
-        if (b->type() == FUNCTION_CALL) break;
+    for (const auto &b : parser.blocks()) {
+        if (b.type() == block_type_t::while_block || b.type() == block_type_t::for_block) {
+            has_loop = true;
+            break;
+        }
+        if (b.is_function_call()) break;
     }
     if (!has_loop) {
-        streams.err.append_format(_(L"%ls: Not inside of loop\n"), argv[0]);
-        builtin_print_help(parser, streams, argv[0], streams.err);
+        wcstring error_message = format_string(_(L"%ls: Not inside of loop\n"), argv[0]);
+        builtin_print_help(parser, streams, argv[0], &error_message);
         return STATUS_CMD_ERROR;
     }
 
@@ -298,20 +285,20 @@ static int builtin_break_continue(parser_t &parser, io_streams_t &streams, wchar
 /// Implementation of the builtin breakpoint command, used to launch the interactive debugger.
 static int builtin_breakpoint(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     wchar_t *cmd = argv[0];
-    if (argv[1] != NULL) {
+    if (argv[1] != nullptr) {
         streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, cmd, 0, builtin_count_args(argv) - 1);
         return STATUS_INVALID_ARGS;
     }
 
     // If we're not interactive then we can't enter the debugger. So treat this command as a no-op.
-    if (!shell_is_interactive()) {
+    if (!parser.is_interactive()) {
         return STATUS_CMD_ERROR;
     }
 
     // Ensure we don't allow creating a breakpoint at an interactive prompt. There may be a simpler
     // or clearer way to do this but this works.
     const block_t *block1 = parser.block_at_index(1);
-    if (!block1 || block1->type() == BREAKPOINT) {
+    if (!block1 || block1->type() == block_type_t::breakpoint) {
         streams.err.append_format(_(L"%ls: Command not valid at an interactive prompt\n"), cmd);
         return STATUS_ILLEGAL_CMD;
     }
@@ -325,7 +312,7 @@ static int builtin_breakpoint(parser_t &parser, io_streams_t &streams, wchar_t *
 int builtin_true(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
     UNUSED(streams);
-    if (argv[1] != NULL) {
+    if (argv[1] != nullptr) {
         streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, argv[0], 0, builtin_count_args(argv) - 1);
         return STATUS_INVALID_ARGS;
     }
@@ -335,7 +322,7 @@ int builtin_true(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 int builtin_false(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
     UNUSED(streams);
-    if (argv[1] != NULL) {
+    if (argv[1] != nullptr) {
         streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, argv[0], 0, builtin_count_args(argv) - 1);
         return STATUS_INVALID_ARGS;
     }
@@ -351,7 +338,7 @@ int builtin_false(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 // NOTE: These must be kept in sorted order!
 static const builtin_data_t builtin_datas[] = {
     {L"[", &builtin_test, N_(L"Test a condition")},
-    {L"and", &builtin_generic, N_(L"Execute command if previous command suceeded")},
+    {L"and", &builtin_generic, N_(L"Execute command if previous command succeeded")},
     {L"argparse", &builtin_argparse, N_(L"Parse options in fish script")},
     {L"begin", &builtin_generic, N_(L"Create a block of code")},
     {L"bg", &builtin_bg, N_(L"Send job to background")},
@@ -423,7 +410,7 @@ static const builtin_data_t *builtin_lookup(const wcstring &name) {
     if (found != array_end && name == found->name) {
         return found;
     }
-    return NULL;
+    return nullptr;
 }
 
 /// Initialize builtin data.
@@ -448,13 +435,14 @@ static bool cmd_needs_help(const wchar_t *cmd) { return contains(help_builtins, 
 proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_streams_t &streams) {
     UNUSED(parser);
     UNUSED(streams);
-    if (argv == NULL || argv[0] == NULL) return proc_status_t::from_exit_code(STATUS_INVALID_ARGS);
+    if (argv == nullptr || argv[0] == nullptr)
+        return proc_status_t::from_exit_code(STATUS_INVALID_ARGS);
 
     // We can be handed a keyword by the parser as if it was a command. This happens when the user
     // follows the keyword by `-h` or `--help`. Since it isn't really a builtin command we need to
     // handle displaying help for it here.
     if (argv[1] && !argv[2] && parse_util_argument_is_help(argv[1]) && cmd_needs_help(argv[0])) {
-        builtin_print_help(parser, streams, argv[0], streams.out);
+        builtin_print_help(parser, streams, argv[0]);
         return proc_status_t::from_exit_code(STATUS_CMD_OK);
     }
 
@@ -478,18 +466,18 @@ proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_str
 wcstring_list_t builtin_get_names() {
     wcstring_list_t result;
     result.reserve(BUILTIN_COUNT);
-    for (size_t i = 0; i < BUILTIN_COUNT; i++) {
-        result.push_back(builtin_datas[i].name);
+    for (const auto &builtin_data : builtin_datas) {
+        result.push_back(builtin_data.name);
     }
     return result;
 }
 
 /// Insert all builtin names into list.
 void builtin_get_names(std::vector<completion_t> *list) {
-    assert(list != NULL);
+    assert(list != nullptr);
     list->reserve(list->size() + BUILTIN_COUNT);
-    for (size_t i = 0; i < BUILTIN_COUNT; i++) {
-        append_completion(list, builtin_datas[i].name);
+    for (const auto &builtin_data : builtin_datas) {
+        append_completion(list, builtin_data.name);
     }
 }
 

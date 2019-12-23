@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <wctype.h>
+
 #include <string>
 
 #ifdef HAVE_XLOCALE_H
@@ -21,8 +22,11 @@
 /// Wide character version of fopen(). This sets CLO_EXEC.
 FILE *wfopen(const wcstring &path, const char *mode);
 
-/// Sets CLO_EXEC on a given fd.
-bool set_cloexec(int fd);
+/// Sets CLO_EXEC on a given fd according to the value of \p should_set.
+int set_cloexec(int fd, bool should_set = true);
+
+/// Wide character version of open().
+int wopen(const wcstring &pathname, int flags, mode_t mode = 0);
 
 /// Wide character version of open() that also sets the close-on-exec flag (atomically when
 /// possible).
@@ -52,10 +56,10 @@ int wstat(const wcstring &file_name, struct stat *buf);
 int lwstat(const wcstring &file_name, struct stat *buf);
 
 /// Wide character version of access().
-int waccess(const wcstring &pathname, int mode);
+int waccess(const wcstring &file_name, int mode);
 
 /// Wide character version of unlink().
-int wunlink(const wcstring &pathname);
+int wunlink(const wcstring &file_name);
 
 /// Wide character version of perror().
 void wperror(const wchar_t *s);
@@ -68,9 +72,6 @@ const char *safe_strerror(int err);
 
 /// Wide character version of getcwd().
 const wcstring wgetcwd();
-
-/// Wide character version of chdir().
-int wchdir(const wcstring &dir);
 
 /// Wide character version of realpath function.
 /// \returns the canonicalized path, or none if the path is invalid.
@@ -112,10 +113,10 @@ std::wstring wbasename(const std::wstring &path);
 const wcstring &wgettext(const wchar_t *in);
 
 /// Wide character version of mkdir.
-int wmkdir(const wcstring &dir, int mode);
+int wmkdir(const wcstring &name, int mode);
 
 /// Wide character version of rename.
-int wrename(const wcstring &oldName, const wcstring &newName);
+int wrename(const wcstring &oldName, const wcstring &newv);
 
 #define PUA1_START 0xE000
 #define PUA1_END 0xF900
@@ -141,10 +142,11 @@ int fish_wcswidth(const wcstring &str);
 // returns an immortal locale_t corresponding to the C locale.
 locale_t fish_c_locale();
 
-int fish_wcstoi(const wchar_t *str, const wchar_t **endptr = NULL, int base = 10);
-long fish_wcstol(const wchar_t *str, const wchar_t **endptr = NULL, int base = 10);
-long long fish_wcstoll(const wchar_t *str, const wchar_t **endptr = NULL, int base = 10);
-unsigned long long fish_wcstoull(const wchar_t *str, const wchar_t **endptr = NULL, int base = 10);
+int fish_wcstoi(const wchar_t *str, const wchar_t **endptr = nullptr, int base = 10);
+long fish_wcstol(const wchar_t *str, const wchar_t **endptr = nullptr, int base = 10);
+long long fish_wcstoll(const wchar_t *str, const wchar_t **endptr = nullptr, int base = 10);
+unsigned long long fish_wcstoull(const wchar_t *str, const wchar_t **endptr = nullptr,
+                                 int base = 10);
 double fish_wcstod(const wchar_t *str, wchar_t **endptr);
 
 /// Class for representing a file's inode. We use this to detect and avoid symlink loops, among

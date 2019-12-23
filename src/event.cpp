@@ -1,6 +1,8 @@
 // Functions for handling event triggers.
 #include "config.h"  // IWYU pragma: keep
 
+#include "event.h"
+
 #include <signal.h>
 #include <stddef.h>
 #include <unistd.h>
@@ -13,7 +15,6 @@
 #include <type_traits>
 
 #include "common.h"
-#include "event.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "input_common.h"
 #include "io.h"
@@ -84,17 +85,14 @@ class pending_signals_t {
 static pending_signals_t s_pending_signals;
 
 /// List of event handlers.
-static event_handler_list_t s_event_handlers;
-
-/// List of events that have been sent but have not yet been delivered because they are blocked.
-using event_list_t = std::vector<shared_ptr<event_t>>;
-static event_list_t blocked;
+static owning_lock<event_handler_list_t> s_event_handlers;
 
 /// Variables (one per signal) set when a signal is observed. This is inspected by a signal handler.
-static volatile bool s_observed_signals[NSIG] = {};
+static volatile sig_atomic_t s_observed_signals[NSIG] = {};
+
 static void set_signal_observed(int sig, bool val) {
-    ASSERT_IS_MAIN_THREAD();
-    if (sig >= 0 && (size_t)sig < sizeof s_observed_signals / sizeof *s_observed_signals) {
+    if (sig >= 0 &&
+        static_cast<size_t>(sig) < sizeof s_observed_signals / sizeof *s_observed_signals) {
         s_observed_signals[sig] = val;
     }
 }
@@ -130,11 +128,9 @@ static bool handler_matches(const event_handler_t &classv, const event_t &instan
 }
 
 /// Test if specified event is blocked.
-static int event_is_blocked(const event_t &e) {
+static int event_is_blocked(parser_t &parser, const event_t &e) {
     (void)e;
     const block_t *block;
-    parser_t &parser = parser_t::principal_parser();
-
     size_t idx = 0;
     while ((block = parser.block_at_index(idx++))) {
         if (event_block_list_blocks_type(block->event_blocks)) return true;
@@ -196,8 +192,8 @@ wcstring event_get_desc(const event_t &evt) {
 #if 0
 static void show_all_handlers(void) {
     std::fwprintf(stdout, L"event handlers:\n");
-    for (event_list_t::const_iterator iter = events.begin(); iter != events.end(); ++iter) {
-        const event_t *foo = *iter;
+    for (const auto& event : events) {
+        auto foo = event;
         wcstring tmp = event_get_desc(foo);
         std::fwprintf(stdout, L"    handler now %ls\n", tmp.c_str());
     }
@@ -206,27 +202,27 @@ static void show_all_handlers(void) {
 
 void event_add_handler(std::shared_ptr<event_handler_t> eh) {
     if (eh->desc.type == event_type_t::signal) {
-        signal_handle(eh->desc.param1.signal, 1);
+        signal_handle(eh->desc.param1.signal);
         set_signal_observed(eh->desc.param1.signal, true);
     }
 
-    s_event_handlers.push_back(std::move(eh));
+    s_event_handlers.acquire()->push_back(std::move(eh));
 }
 
 void event_remove_function_handlers(const wcstring &name) {
-    ASSERT_IS_MAIN_THREAD();
-    auto begin = s_event_handlers.begin(), end = s_event_handlers.end();
-    s_event_handlers.erase(std::remove_if(begin, end,
-                                          [&](const shared_ptr<event_handler_t> &eh) {
-                                              return eh->function_name == name;
-                                          }),
-                           end);
+    auto handlers = s_event_handlers.acquire();
+    auto begin = handlers->begin(), end = handlers->end();
+    handlers->erase(std::remove_if(begin, end,
+                                   [&](const shared_ptr<event_handler_t> &eh) {
+                                       return eh->function_name == name;
+                                   }),
+                    end);
 }
 
 event_handler_list_t event_get_function_handlers(const wcstring &name) {
-    ASSERT_IS_MAIN_THREAD();
+    auto handlers = s_event_handlers.acquire();
     event_handler_list_t result;
-    for (const shared_ptr<event_handler_t> &eh : s_event_handlers) {
+    for (const shared_ptr<event_handler_t> &eh : *handlers) {
         if (eh->function_name == name) {
             result.push_back(eh);
         }
@@ -237,7 +233,8 @@ event_handler_list_t event_get_function_handlers(const wcstring &name) {
 bool event_is_signal_observed(int sig) {
     // We are in a signal handler! Don't allocate memory, etc.
     bool result = false;
-    if (sig >= 0 && (unsigned long)sig < sizeof(s_observed_signals) / sizeof(*s_observed_signals)) {
+    if (sig >= 0 && static_cast<unsigned long>(sig) <
+                        sizeof(s_observed_signals) / sizeof(*s_observed_signals)) {
         result = s_observed_signals[sig];
     }
     return result;
@@ -246,15 +243,17 @@ bool event_is_signal_observed(int sig) {
 /// Perform the specified event. Since almost all event firings will not be matched by even a single
 /// event handler, we make sure to optimize the 'no matches' path. This means that nothing is
 /// allocated/initialized unless needed.
-static void event_fire_internal(const event_t &event) {
-    ASSERT_IS_MAIN_THREAD();
-    auto &ld = parser_t::principal_parser().libdata();
+static void event_fire_internal(parser_t &parser, const event_t &event) {
+    auto &ld = parser.libdata();
     assert(ld.is_event >= 0 && "is_event should not be negative");
     scoped_push<decltype(ld.is_event)> inc_event{&ld.is_event, ld.is_event + 1};
 
+    // Suppress fish_trace during events.
+    scoped_push<bool> suppress_trace{&ld.suppress_fish_trace, true};
+
     // Capture the event handlers that match this event.
     event_handler_list_t fire;
-    for (const auto &handler : s_event_handlers) {
+    for (const auto &handler : *s_event_handlers.acquire()) {
         // Check if this event is a match.
         if (handler_matches(*handler, event)) {
             fire.push_back(handler);
@@ -263,8 +262,11 @@ static void event_fire_internal(const event_t &event) {
 
     // Iterate over our list of matching events. Fire the ones that are still present.
     for (const shared_ptr<event_handler_t> &handler : fire) {
-        // Only fire if this event is still present
-        if (!contains(s_event_handlers, handler)) {
+        // Only fire if this event is still present.
+        // TODO: this is kind of crazy. We want to support removing (and thereby suppressing) an
+        // event handler from another, but we also don't want to hold the lock across callouts. How
+        // can we make this less silly?
+        if (!contains(*s_event_handlers.acquire(), handler)) {
             continue;
         }
 
@@ -280,31 +282,25 @@ static void event_fire_internal(const event_t &event) {
 
         // Event handlers are not part of the main flow of code, so they are marked as
         // non-interactive.
-        proc_push_interactive(0);
-        parser_t &parser = parser_t::principal_parser();
+        scoped_push<bool> interactive{&ld.is_interactive, false};
         auto prev_statuses = parser.get_last_statuses();
 
         block_t *b = parser.push_block(block_t::event_block(event));
-        parser.eval(buffer, io_chain_t(), TOP);
+        parser.eval(buffer, io_chain_t());
         parser.pop_block(b);
-        proc_pop_interactive();
         parser.set_last_statuses(std::move(prev_statuses));
     }
 }
 
 /// Handle all pending signal events.
-void event_fire_delayed() {
-    // Hack: only allow events on the main thread.
-    // TODO: rationalize how events work with multiple threads.
-    if (!is_main_thread()) return;
-
-    auto &parser = parser_t::principal_parser();
+void event_fire_delayed(parser_t &parser) {
+    auto &ld = parser.libdata();
     // Do not invoke new event handlers from within event handlers.
-    if (parser.libdata().is_event) return;
+    if (ld.is_event) return;
 
-    event_list_t to_send;
-    to_send.swap(blocked);
-    assert(blocked.empty());
+    std::vector<shared_ptr<event_t>> to_send;
+    to_send.swap(ld.blocked_events);
+    assert(ld.blocked_events.empty());
 
     // Append all signal events to to_send.
     auto signals = s_pending_signals.acquire_pending();
@@ -321,10 +317,10 @@ void event_fire_delayed() {
 
     // Fire or re-block all events.
     for (const auto &evt : to_send) {
-        if (event_is_blocked(*evt)) {
-            blocked.push_back(evt);
+        if (event_is_blocked(parser, *evt)) {
+            ld.blocked_events.push_back(evt);
         } else {
-            event_fire_internal(*evt);
+            event_fire_internal(parser, *evt);
         }
     }
 }
@@ -334,18 +330,14 @@ void event_enqueue_signal(int signal) {
     s_pending_signals.mark(signal);
 }
 
-void event_fire(const event_t &event) {
-    // Hack: only allow events on the main thread.
-    // TODO: rationalize how events work with multiple threads.
-    if (!is_main_thread()) return;
-
+void event_fire(parser_t &parser, const event_t &event) {
     // Fire events triggered by signals.
-    event_fire_delayed();
+    event_fire_delayed(parser);
 
-    if (event_is_blocked(event)) {
-        blocked.push_back(std::make_shared<event_t>(event));
+    if (event_is_blocked(parser, event)) {
+        parser.libdata().blocked_events.push_back(std::make_shared<event_t>(event));
     } else {
-        event_fire_internal(event);
+        event_fire_internal(parser, event);
     }
 }
 
@@ -381,7 +373,7 @@ static const wchar_t *event_name_for_type(event_type_t type) {
 }
 
 void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
-    event_handler_list_t tmp = s_event_handlers;
+    event_handler_list_t tmp = *s_event_handlers.acquire();
     std::sort(tmp.begin(), tmp.end(),
               [](const shared_ptr<event_handler_t> &e1, const shared_ptr<event_handler_t> &e2) {
                   const event_description_t &d1 = e1->desc;
@@ -440,13 +432,13 @@ void event_print(io_streams_t &streams, maybe_t<event_type_t> type_filter) {
     }
 }
 
-void event_fire_generic(const wchar_t *name, const wcstring_list_t *args) {
+void event_fire_generic(parser_t &parser, const wchar_t *name, const wcstring_list_t *args) {
     assert(name && "Null name");
 
     event_t ev(event_type_t::generic);
     ev.desc.str_param1 = name;
     if (args) ev.arguments = *args;
-    event_fire(ev);
+    event_fire(parser, ev);
 }
 
 event_description_t event_description_t::signal(int sig) {

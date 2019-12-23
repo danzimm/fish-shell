@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <time.h>
+
 #include <cstring>
 #include <memory>
 #if FISH_USE_POSIX_SPAWN
@@ -39,9 +40,9 @@
 
 /// Called only by the child to set its own process group (possibly creating a new group in the
 /// process if it is the first in a JOB_CONTROL job.
-/// Returns true on sucess, false on failiure.
+/// Returns true on success, false on failure.
 bool child_set_group(job_t *j, process_t *p) {
-    if (j->get_flag(job_flag_t::JOB_CONTROL)) {
+    if (j->wants_job_control()) {
         if (j->pgid == INVALID_PID) {
             j->pgid = p->pid;
         }
@@ -59,7 +60,7 @@ bool child_set_group(job_t *j, process_t *p) {
                     continue;
                 } else if (errno == EINTR) {
                     // I don't think signals are blocked here. The parent (fish) redirected the
-                    // signal handlers and `setup_child_process()` calls `signal_reset_handlers()`
+                    // signal handlers and `child_setup_process()` calls `signal_reset_handlers()`
                     // after we're done here (and not `signal_unblock()`). We're already in a loop,
                     // so let's just handle EINTR just in case.
                     continue;
@@ -96,10 +97,8 @@ bool child_set_group(job_t *j, process_t *p) {
             return false;
         }
     } else {
-        // The child does not actually use this field.
         j->pgid = getpgrp();
     }
-
     return true;
 }
 
@@ -109,7 +108,7 @@ bool child_set_group(job_t *j, process_t *p) {
 /// group in the case of JOB_CONTROL, and we can give the new process group control of the terminal
 /// if it's to run in the foreground.
 bool set_child_group(job_t *j, pid_t child_pid) {
-    if (j->get_flag(job_flag_t::JOB_CONTROL)) {
+    if (j->wants_job_control()) {
         assert(j->pgid != INVALID_PID &&
                "set_child_group called with JOB_CONTROL before job pgid determined!");
 
@@ -136,50 +135,54 @@ bool set_child_group(job_t *j, pid_t child_pid) {
     return true;
 }
 
-bool maybe_assign_terminal(const job_t *j) {
-    if (j->get_flag(job_flag_t::TERMINAL) && j->is_foreground()) {  //!OCLINT(early exit)
-        if (tcgetpgrp(STDIN_FILENO) == j->pgid) {
-            // We've already assigned the process group control of the terminal when the first
-            // process in the job was started. There's no need to do so again, and on some platforms
-            // this can cause an EPERM error. In addition, if we've given control of the terminal to
-            // a process group, attempting to call tcsetpgrp from the background will cause SIGTTOU
-            // to be sent to everything in our process group (unless we handle it).
-            FLOGF(proc_termowner, L"Process group %d already has control of terminal", j->pgid);
-        } else {
-            // No need to duplicate the code here, a function already exists that does just this.
-            return terminal_give_to_job(j, false /*new job, so not continuing*/);
-        }
-    }
-
-    return true;
-}
-
-int setup_child_process(process_t *p, const dup2_list_t &dup2s) {
+int child_setup_process(pid_t new_termowner, bool is_forked, const dup2_list_t &dup2s) {
+    // Note we are called in a forked child.
     for (const auto &act : dup2s.get_actions()) {
-        int err = act.target < 0 ? close(act.src) : dup2(act.src, act.target);
+        int err;
+        if (act.target < 0) {
+            err = close(act.src);
+        } else if (act.target != act.src) {
+            // Normal redirection.
+            err = dup2(act.src, act.target);
+        } else {
+            // This is a weird case like /bin/cmd 6< file.txt
+            // The opened file (which is CLO_EXEC) wants to be dup2'd to its own fd.
+            // We need to unset the CLO_EXEC flag.
+            err = set_cloexec(act.src, false);
+        }
         if (err < 0) {
-            // We have a null p if this is for the exec (non-fork) path.
-            if (p != nullptr) {
-                debug_safe(4, "redirect_in_child_after_fork failed in setup_child_process");
+            if (is_forked) {
+                debug_safe(4, "redirect_in_child_after_fork failed in child_setup_process");
                 exit_without_destructors(1);
             }
             return err;
         }
     }
+    if (new_termowner != INVALID_PID) {
+        // Assign the terminal within the child to avoid the well-known race between tcsetgrp() in
+        // the parent and the child executing. We are not interested in error handling here, except
+        // we try to avoid this for non-terminals; in particular pipelines often make non-terminal
+        // stdin.
+        if (isatty(STDIN_FILENO)) {
+            // Ensure this doesn't send us to the background (see #5963)
+            signal(SIGTTIN, SIG_IGN);
+            signal(SIGTTOU, SIG_IGN);
+            (void)tcsetpgrp(STDIN_FILENO, new_termowner);
+        }
+    }
     // Set the handling for job control signals back to the default.
+    // Do this after any tcsetpgrp call so that we swallow SIGTTIN.
     signal_reset_handlers();
     return 0;
 }
 
-int g_fork_count = 0;
-
 /// This function is a wrapper around fork. If the fork calls fails with EAGAIN, it is retried
 /// FORK_LAPS times, with a very slight delay between each lap. If fork fails even then, the process
 /// will exit with an error message.
-pid_t execute_fork(bool wait_for_threads_to_die) {
+pid_t execute_fork() {
     ASSERT_IS_MAIN_THREAD();
 
-    if (wait_for_threads_to_die || JOIN_THREADS_BEFORE_FORK) {
+    if (JOIN_THREADS_BEFORE_FORK) {
         // Make sure we have no outstanding threads before we fork. This is a pretty sketchy thing
         // to do here, both because exec.cpp shouldn't have to know about iothreads, and because the
         // completion handlers may do unexpected things.
@@ -190,8 +193,6 @@ pid_t execute_fork(bool wait_for_threads_to_die) {
     pid_t pid;
     struct timespec pollint;
     int i;
-
-    g_fork_count++;
 
     for (i = 0; i < FORK_LAPS; i++) {
         pid = fork();
@@ -209,7 +210,7 @@ pid_t execute_fork(bool wait_for_threads_to_die) {
         // Don't sleep on the final lap - sleeping might change the value of errno, which will break
         // the error reporting below.
         if (i != FORK_LAPS - 1) {
-            nanosleep(&pollint, NULL);
+            nanosleep(&pollint, nullptr);
         }
     }
 
@@ -235,7 +236,7 @@ bool fork_actions_make_spawn_properties(posix_spawnattr_t *attr,
 
     bool should_set_process_group_id = false;
     int desired_process_group_id = 0;
-    if (j->get_flag(job_flag_t::JOB_CONTROL)) {
+    if (j->wants_job_control()) {
         should_set_process_group_id = true;
 
         // set_child_group puts each job into its own process group

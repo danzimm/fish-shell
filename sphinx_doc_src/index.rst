@@ -4,185 +4,53 @@
 Introduction
 ============
 
-This is the documentation for *fish*: the **f**\ riendly **i**\ nteractive **sh**\ ell.
+This is the documentation for *fish*, the **f**\ riendly **i**\ nteractive **sh**\ ell.
 
-A shell is a commandline interpreter. It reads text input from the commandline and interpretes it as commands to operating system, see: `What is a Shell`_.
+A shell is a program which helps you operate your computer by starting other programs. fish offers a command-line interface focused on usability and interactive use.
 
-So shells serve as user-interface between applications and the operating system. There are many different shells. They differ on how this interface is implemented. *fish* specializes in the following ways:
+Unlike other shells, fish does not follow the POSIX standard, but still roughly belongs to the same family.
 
-- **Extensive UI**: *fish* supports the user with syntax highlighting, autosuggestions, tab completions and selections lists, that can be navigated and filtered, see: `Autosuggestions`_ and `Tab Completion`_.
+Some of the special features of fish are:
 
-- **No configuration needed**: *fish* comes preconfigured so that it will be an efficient helper on the commandline out of the box.
+- **Extensive UI**: `syntax highlighting`_, autosuggestions_, `tab completion`_ and selection lists that can be navigated and filtered.
 
-- **Add new commands easily**: in *fish* new commands can be added on the fly. The syntax is easy to learn and there is no administrative overhead, see `Functions`_.
+- **No configuration needed**: fish is designed to be ready to use immediately, without requiring extensive configuration.
 
-- **Interactive shell**: *fish* focuses on commands that will be run in an interactive session: While it supports job control for external commands, its own commands share the process of the shell, that started them.
+- **Easy scripting**: new functions_ can be added on the fly. The syntax is easy to learn and use.
 
-What is a Shell
-===============
-
-This section is about the basics of shells. *fish* is a shell and shells have a lot in common:
-
-- `Shell Standards`_ Why shells adjust to standards
-- `Manual Pages`_: Commands usually come with a standardized manual page
-- `Command Syntax`_: Shell commands have a standard syntax
-- `Commands versus Programs`_: Commands differ from normal programs
-- `Shebang Line`_: How the shell knows the language of a script
-
-Shell Standards
----------------
-
-A shell is an interface to the operating system that reads from the commandline of a terminal. A shell's task is to identify and interpret commands. The commands can come from different applications and can be written in different programming languages.
-
-This can only work smoothly if shells adapt to some common standards. For shells there is the POSIX standard, see `Command-line interpreters  <https://en.wikipedia.org/wiki/Command-line_interface#Command-line_interpreter>`_. ``fish`` tries to satisfy the POSIX standard wherever it does not get into the way of its own design principles, see :ref:`Design <Design>`.
-
-Manual Pages
-------------
-
-There is a common standard on how to receive help on shell commands: applications provide a manual page to their commands that can be opened with the ``man`` command:
-
-
-::
-
-    > man COMMAND
-
-
-This convention helps to make sure help can be found on commands no matter where they originate from. *fish*'s internal commands all come with a manual page.
-
-Command Syntax
---------------
-
-Shells also support some common syntax for executing commands. That way a command can be started in the same way, regardless of the application, where it comes from, and the shell, where it is executed in.
-
-The pattern below is a basic pattern:
-
-
-
-::
-
-    COMMAND [OPTIONS] ARGUMENTS
-
-
-- **COMMAND**: the name of the executeable
-
-- **[OPTIONS]**: options can change the behaviour of a command
-
-- **ARGUMENTS**: input to the command
-
-For external **commands** the executable is usually stored on file and the file path must be included in the variable ``$PATH``, so that the file can be found: see `Special Variables`_.
-
-**Options** come in two forms: a short name, that is a hyphen with a single letter; or a long name, consisting of two hyphens with words connected by hyphens. Example: ``-h`` and ``--help`` are often used to print a help message. Options are a fixed set, described in the manual pages of the command, see `Manual Pages <#man-page>`_.
-
-**Arguments** are the arbitrary input part of a command: often it is a file or directory name, sometimes it is a string or a list.
-
-Example:
-
-
-
-::
-
-    >echo -s Hallo World!
-    HalloWorld!
-
-
--  both ``Hallo`` and ``World!`` are arguments to the echo command
-- ``-s`` is an option that suppresses spaces in the output of the command
-
-Commands versus Programs
-------------------------
-
-**Programs** in other languages can often be regarded as black boxes: they get complex input and return complex output. Sometimes they produce side effects such as writing to a file or reporting an error, but the emphasis is on: arguments in and return values out:
-
-Arguments → Program → Return Values
-
-**Shell commands** are different:
-
-- the side effects take the center of the stage: they transform an **input stream of data** into an **output stream of data**. Both of these streams are usually the terminal, but they can be redirected.
-- the arguments become options or switches paired with data: the switches influence the behaviour of the command
-- the return value shrinks to an **exit code**: this exit code is 0 when the command executes normally and between 1 and 255 otherwise.
-
-This leads to another way of programming and especially of combining commands:
-
-There are two ways to combine shell commands:
-
-- Commands can pass on their streams to each other: one command takes the output stream of another command as its input stream and the two commands execute in parallel. This is called piping, see `Piping`_.
-
-Example::
-
-    # Every line of the ``ls`` command is immediatelly passed on to the ``grep`` command
-    >ls -l | grep "my topic"
-
-
-- Commands can pass on all their output as a chunk: the output stream of one command is bundled and taken as data argument for the second command. This is called command substitution, see `Command Substitution`_.
-
-Example::
-
-    # the output of the inner ``ls`` command is taken as the input argument for the outer ``echo`` command
-    >echo (ls a*)
-
-
-Shebang Line
-------------
-
-Since script for shell commands can be written in many different languages, they need to carry information about what interpreter is needed to execute them: For this they are expected to have a first line, the shebang line, which names an executable for this purpose:
-
-Example:
-
-A scripts written in ``bash`` it would need a first line like this::
-
-    #!/bin/bash
-
-
-This line tells the shell to execute the file with the *bash* interpreter, that is located at the path ``/bin/bash``.
-
-For a script, written in another language, just replace the interpreter ``/bin/bash`` with the language interpreter of that other language (for example ``/bin/python`` for a ``python`` script)
-
-This line is only needed when scripts are executed by another interpreter, so for *fish* internal commands, that are executed by *fish* the shebang line is not necessary.
-
+This bit of the documentation is a quick guide on how to get going. If you are new to this, see the :ref:`tutorial <tutorial>`.
 
 Installation and Start
 ======================
 
-This section is on how to install, uninstall, start and exit a *fish* shell and on how to make *fish* the default shell:
+This section is on how to install, uninstall, start and exit a fish shell and on how to make fish the default shell:
 
-- `Installation`_: How to install *fish*
-- `Default Shell`_: How to switch to *fish* as the default shell
-- `Starting and Exiting`_ How to start and exit a *fish* shell
-- `Uninstalling`_: How to uninstall *fish*
-- `Executing Bash`_: How to execute *bash* commands in *fish*
+- `Installation`_: How to install fish
+- `Starting and Exiting`_ How to start and exit a fish shell
+- `Executing Bash`_: How to execute bash commands in fish
+- `Default Shell`_: How to switch to fish as the default shell
+- `Uninstalling`_: How to uninstall fish
+
 
 Installation
 ------------
 
-Instructions for installing fish are on the `fish homepage <https://fishshell.com/>`_. Search that page for "Go fish".
+Up-to-date instructions for installing the latest version of fish are on the `fish homepage <https://fishshell.com/>`_.
 
-To install the development version of *fish* see the instructions at the `project's GitHub page <https://github.com/fish-shell/fish-shell>`_.
+To install the development version of fish see the instructions at the `project's GitHub page <https://github.com/fish-shell/fish-shell>`_.
 
-Default Shell
--------------
-
-You can make *fish* your default shell by adding *fish*'s  executable in two places:
-- add ``/usr/local/bin/fish``  to  ``/etc/shells``
-- change your default shell with ``chsh -s`` to ``/usr/local/bin/fish``
-
-For for detailed instructions see `Switching to fish <tutorial.html#tut_switching_to_fish>`_.
-
-Uninstalling
-------------
-
-For uninstalling *fish*: see :ref:`FAQ: Uninstalling fish <faq-uninstalling>`.
 
 Starting and Exiting
 --------------------
 
-Once *fish* has been installed, open a terminal. If *fish* is not the default shell:
+Once fish has been installed, open a terminal. If fish is not the default shell:
 
-- Enter ``fish`` to start a *fish* shell::
+- Enter ``fish`` to start a fish shell::
 
     > fish
 
 
-- Enter ``exit`` to exit a *fish* shell::
+- Enter ``exit`` to exit a fish shell::
 
     > exit
 
@@ -190,7 +58,7 @@ Once *fish* has been installed, open a terminal. If *fish* is not the default sh
 Executing Bash
 --------------
 
-If *fish* is your default shell and you want to copy commands from the internet, that are written in a different shell language, *bash* for example, you can proceed in the following way:
+If fish is your default shell and you want to copy commands from the internet that are written in a different shell language, bash for example, you can proceed in the following way:
 
 Consider, that ``bash`` is also a command. With ``man bash`` you can see that there are two ways to do this:
 
@@ -199,15 +67,47 @@ Consider, that ``bash`` is also a command. With ``man bash`` you can see that th
     > bash -c SomeBashCommand
 
 
-or ``bash`` without a switch, opens a *bash* shell that you can use and ``exit`` afterwards.
+or ``bash`` without a switch, opens a bash shell that you can use and ``exit`` afterwards.
 
+
+Default Shell
+-------------
+
+You can make fish your default shell by adding fish's  executable in two places:
+- add ``/usr/local/bin/fish``  to  ``/etc/shells``
+- change your default shell with ``chsh -s`` to ``/usr/local/bin/fish``
+
+For for detailed instructions see `Switching to fish <tutorial.html#tut_switching_to_fish>`_.
+
+Uninstalling
+------------
+
+For uninstalling fish: see :ref:`FAQ: Uninstalling fish <faq-uninstalling>`.
+
+Shebang Line
+------------
+
+Since scripts for shell commands can be written in many different languages, they need to carry information about what interpreter is needed to execute them: For this they are expected to have a first line, the shebang line, which names an executable for this purpose:
+
+Example:
+
+A scripts written in ``bash`` it would need a first line like this::
+
+    #!/bin/bash
+
+
+This line tells the shell to execute the file with the bash interpreter, that is located at the path ``/bin/bash``.
+
+For a script, written in another language, just replace the interpreter ``/bin/bash`` with the language interpreter of that other language (for example ``/bin/python`` for a ``python`` script)
+
+This line is only needed when scripts are executed without specifying the interpreter. For functions inside fish or when executing a script with ```fish /path/to/script`` they aren't required (but don't hurt either!).
 
 .. _syntax:
 
 Syntax overview
 ===============
 
-Shells like fish are used by giving them commands. Every ``fish`` command follows the same simple syntax.
+Shells like fish are used by giving them commands. Every ``fish`` command follows the same basic syntax.
 
 A command is executed by writing the name of the command followed by any arguments.
 
@@ -215,13 +115,13 @@ Example::
 
    echo hello world
 
-This calls the ``echo`` command. ``echo`` is a command which will write its arguments to the screen. In the example above, the output will be 'hello world'. Everything in fish is done with commands. There are commands for performing a set of commands multiple times, commands for assigning variables, commands for treating a group of commands as a single command, etc.. And every single command follows the same simple syntax.
+This calls the ``echo`` command. ``echo`` is a command which will write its arguments to the screen. In the example above, the output will be 'hello world'. Everything in fish is done with commands. There are commands for performing a set of commands multiple times, commands for assigning variables, commands for treating a group of commands as a single command, etc.. And every single command follows the same basic syntax.
 
 If you want to find out more about the echo command used above, read the manual page for the echo command by writing: ``man echo``
 
 ``man`` is a command for displaying a manual page on a given topic. The man command takes the name of the manual page to display as an argument. There are manual pages for almost every command on most computers. There are also manual pages for many other things, such as system libraries and important files.
 
-Every program on your computer can be used as a command in ``fish``. If the program file is located in one of the directories in the PATH_, it is sufficient to type the name of the program to use it. Otherwise the whole filename, including the directory (like ``/home/me/code/checkers/checkers`` or ``../checkers``) has to be used.
+Every program on your computer can be used as a command in ``fish``. If the program file is located in one of the directories in the PATH_, you can just use the name of the program to use it. Otherwise the whole filename, including the directory (like ``/home/me/code/checkers/checkers`` or ``../checkers``) has to be used.
 
 Here is a list of some useful commands:
 
@@ -250,7 +150,7 @@ This is a short explanation of some of the commonly used words in fish.
 
 - **builtin** a command that is implemented in the shell. Builtins are commands that are so closely tied to the shell that it is impossible to implement them as external commands.
 
-- **command** a program that the shell can run.
+- **command** a program that the shell can run. In another sense also specifically an external command (i.e. neither a function or builtin).
 
 - **function** a block of commands that can be called as if they were a single command. By using functions, it is possible to string together multiple smaller commands into one more advanced command.
 
@@ -299,7 +199,7 @@ Some characters can not be written directly on the command line. For these chara
 - ``\r`` represents the carriage return character
 - ``\t`` represents the tab character
 - ``\v`` represents the vertical tab character
-- ``\\ `` escapes the space character
+- :code:`\ `  escapes the space character
 - ``\$`` escapes the dollar character
 - ``\\`` escapes the backslash character
 - ``\*`` escapes the star character
@@ -336,10 +236,10 @@ Some characters can not be written directly on the command line. For these chara
 
 .. _redirects:
 
-Input/Output (IO) Redirection
+Input/Output Redirection
 -----------------------------
 
-Most programs use three input/output (IO) streams, each represented by a number called a file descriptor (FD). These are:
+Most programs use three input/output [#]_ streams, each represented by a number called a file descriptor (FD). These are:
 
 - Standard input, FD 0, for reading, defaults to reading from the keyboard.
 
@@ -347,18 +247,16 @@ Most programs use three input/output (IO) streams, each represented by a number 
 
 - Standard error, FD 2, for writing errors and warnings, defaults to writing to the screen.
 
-The reason for providing for two output file descriptors is to allow separation of errors and warnings from regular program output.
-
-Any file descriptor can be directed to a different output than its default through a simple mechanism called a redirection.
+Any file descriptor can be directed to a different output than its default through a mechanism called a redirection.
 
 An example of a file redirection is ``echo hello > output.txt``, which directs the output of the echo command to the file output.txt.
 
 - To read standard input from a file, write ``<SOURCE_FILE``
 - To write standard output to a file, write ``>DESTINATION``
-- To write standard error to a file, write ``2>DESTINATION``
+- To write standard error to a file, write ``2>DESTINATION`` [#]_
 - To append standard output to a file, write ``>>DESTINATION_FILE``
 - To append standard error to a file, write ``2>>DESTINATION_FILE``
-- To not overwrite ("clobber") an existing file, write ``>?DESTINATION`` or ``2>?DESTINATION``
+- To not overwrite ("clobber") an existing file, write ``>?DESTINATION`` or ``2>?DESTINATION`` (this is also known as the "noclobber" redirection)
 
 ``DESTINATION`` can be one of the following:
 
@@ -368,9 +266,11 @@ An example of a file redirection is ``echo hello > output.txt``, which directs t
 
 - An ampersand followed by a minus sign (``&-``). The file descriptor will be closed.
 
+As a convenience, the redirection ``&>`` can be used to direct both stdout and stderr to the same file.
+
 Example:
 
-To redirect both standard output and standard error to the file 'all_output.txt', you can write ``echo Hello > all_output.txt 2>&1``.
+To redirect both standard output and standard error to the file 'all_output.txt', you can write ``echo Hello &> all_output.txt``, which is a convenience for ``echo Hello > all_output.txt 2>&1``.
 
 Any file descriptor can be redirected in an arbitrary way by prefixing the redirection with the file descriptor.
 
@@ -380,10 +280,13 @@ Any file descriptor can be redirected in an arbitrary way by prefixing the redir
 
 Example: ``echo Hello 2>output.stderr`` writes the standard error (file descriptor 2) of the target program to ``output.stderr``.
 
+.. [#] Also shortened as "I/O" or "IO".
+.. [#] Previous versions of fish also allowed spelling this as ``^DESTINATION``, but that made another character special so it was deprecated and will be removed in future.
+
 Piping
 ------
 
-The user can string together multiple commands into a so called pipeline. This means that the standard output of one command will be read in as standard input into the next command. This is done by separating the commands by the pipe character '``|``'. For example
+The user can string together multiple commands into a *pipeline*. This means that the standard output of one command will be read in as standard input into the next command. This is done by separating the commands by the pipe character '``|``'. For example
 
 ::
 
@@ -398,6 +301,7 @@ Pipes usually connect file descriptor 1 (standard output) of the first process t
 
 will attempt to build the fish program, and any errors will be shown using the less pager.
 
+As a convenience, the pipe ``&|`` may be used to redirect both stdout and stderr to the same process. (Note this is different from bash, which uses ``|&``).
 
 .. _syntax-background:
 
@@ -424,7 +328,7 @@ Most programs allow you to suspend the program's execution and return control to
 If you instead want to put a suspended job into the background, use the :ref:`bg <cmd-bg>` command.
 
 To get a listing of all currently started jobs, use the :ref:`jobs <cmd-jobs>` command.
-
+These listed jobs can be removed with the :ref:`disown <cmd-disown>` command.
 
 .. _syntax-function:
 
@@ -456,7 +360,7 @@ There are a few important things that need to be noted about aliases:
 
 - Always take care to add the ``$argv`` variable to the list of parameters to the wrapped command. This makes sure that if the user specifies any additional parameters to the function, they are passed on to the underlying command.
 
-- If the alias has the same name as the aliased command, it is necessary to prefix the call to the program with ``command`` in order to tell fish that the function should not call itself, but rather a command with the same name. Failing to do so will cause infinite recursion bugs.
+- If the alias has the same name as the aliased command, you need to prefix the call to the program with ``command`` to tell fish that the function should not call itself, but rather a command with the same name. If you forget to do so, the function would call itself until the end of time. Usually fish is smart enough to figure this out and will refrain from doing so (which is hopefully in your interest).
 
 - Autoloading isn't applicable to aliases. Since, by definition, the function is created at the time the alias command is executed. You cannot autoload aliases.
 
@@ -467,11 +371,15 @@ To easily create a function of this form, you can use the :ref:`alias <cmd-alias
 Autoloading functions
 ---------------------
 
-Functions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. This method of defining functions has several advantages. An autoloaded function becomes available automatically to all running shells. If the function definition is changed, all running shells will automatically reload the altered version. Startup time and memory usage is improved, etc.
+Functions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. This has some advantages:
 
-Fish automatically searches through any directories in the list variable ``$fish_function_path``, and any functions defined are automatically loaded when needed. A function definition file must have a filename consisting of the name of the function plus the suffix '``.fish``'.
+- An autoloaded function becomes available automatically to all running shells.
+- If the function definition is changed, all running shells will automatically reload the altered version.
+- Startup time and memory usage is improved, etc.
 
-By default, Fish searches the following for functions, using the first available file that it finds:
+When fish needs to load a function, it searches through any directories in the list variable ``$fish_function_path`` for a file with a name consisting of the name of the function plus the suffix '``.fish``' and loads the first it finds.
+
+By default ``$fish_function_path`` contains the following:
 
 - A directory for end-users to keep their own functions, usually ``~/.config/fish/functions`` (controlled by the ``XDG_CONFIG_HOME`` environment variable).
 - A directory for systems administrators to install functions for all users on the system, usually ``/etc/fish/functions`` (really ``$__fish_sysconfdir/functions``).
@@ -502,182 +410,10 @@ The ``switch`` command is used to execute one of possibly many blocks of command
 The other conditionals use the `exit status <#variables-status>`_ of a command to decide if a command or a block of commands should be executed. See their documentation for more information.
 
 
-Help
-====
-
-``fish`` has an extensive help system. Use the :ref:`help <cmd-help>` command to obtain help on a specific subject or command. For instance, writing ``help syntax`` displays the `syntax section <#syntax>`_ of this documentation.
-
-``fish`` also has man pages for its commands. For example, ``man set`` will show the documentation for ``set`` as a man page.
-
-Help on a specific builtin can also be obtained with the ``-h`` parameter. For instance, to obtain help on the ``fg`` builtin, either type ``fg -h`` or ``help fg``.
-
-Autosuggestions
-===============
-
-fish suggests commands as you type, based on command history, completions, and valid file paths. As you type commands, you will see a suggestion offered after the cursor, in a muted gray color (which can be changed with the ``fish_color_autosuggestion`` variable).
-
-To accept the autosuggestion (replacing the command line contents), press right arrow or :kbd:`Control+F`. To accept the first suggested word, press :kbd:`Alt+→,Right` or :kbd:`Alt+F`. If the autosuggestion is not what you want, just ignore it: it won't execute unless you accept it.
-
-Autosuggestions are a powerful way to quickly summon frequently entered commands, by typing the first few characters. They are also an efficient technique for navigating through directory hierarchies.
-
-
-Tab Completion
-==============
-
-Tab completion is one of the most time saving features of any modern shell. By tapping the tab key, the user asks ``fish`` to guess the rest of the command or parameter that the user is currently typing. If  ``fish`` can only find one possible completion, ``fish`` will write it out. If there is more than one completion, ``fish`` will write out the longest prefix that all completions have in common. If the completions differ on the first character, a list of all possible completions is printed. The list features descriptions of the completions and if the list doesn't fit the screen, it is scrollable by using the arrow keys, the page up/page down keys, the tab key or the space bar.
-
-If the list is visible, pressing control-S (or the ``pager-toggle-search`` binding) will allow filtering the list. Shift-tab (or the ``complete-and-search`` binding) will trigger completion with the search field immediately visible.
-These are the general purpose tab completions that ``fish`` provides:
-
-- Completion of commands (builtins, functions and regular programs).
-
-- Completion of shell variable names.
-
-- Completion of usernames for tilde expansion.
-
-- Completion of filenames, even on strings with wildcards such as '``*``' and '``**``'.
-
-``fish`` provides a large number of program specific completions. Most of these completions are simple options like the ``-l`` option for ``ls``, but some are more advanced. The latter include:
-
-- The programs ``man`` and ``whatis`` show all installed manual pages as completions.
-
-- The ``make`` program uses all targets in the Makefile in the current directory as completions.
-
-- The ``mount`` command uses all mount points specified in fstab as completions.
-
-- The ``ssh`` command uses all hosts that are stored in the known_hosts file as completions. (See the ssh documentation for more information)
-
-- The ``su`` command uses all users on the system as completions.
-
-- The ``apt-get``, ``rpm`` and ``yum`` commands use all installed packages as completions.
-
-
-.. _completion-own:
-
-Writing your own completions
-----------------------------
-
-Specifying your own completions is not difficult. To specify a completion, use the ``complete`` command. ``complete`` takes as a parameter the name of the command to specify a completion for. For example, to add a completion for the program ``myprog``, one would start the completion command with ``complete -c myprog ...``
-
-To provide a list of possible completions for myprog, use the ``-a`` switch. If ``myprog`` accepts the arguments start and stop, this can be specified as ``complete -c myprog -a 'start stop'``. The argument to the ``-a`` switch is always a single string. At completion time, it will be tokenized on spaces and tabs, and variable expansion, command substitution and other forms of parameter expansion will take place.
-
-``fish`` has a special syntax to support specifying switches accepted by a command. The switches ``-s``, ``-l`` and ``-o`` are used to specify a short switch (single character, such as ``-l``), a gnu style long switch (such as '``--color``') and an old-style long switch (like '``-shuffle``'), respectively. If the command 'myprog' has an option '-o' which can also be written as '``--output``', and which can take an additional value of either 'yes' or 'no', this can be specified by writing::
-
-  complete -c myprog -s o -l output -a "yes no"
-
-
-There are also special switches for specifying that a switch requires an argument, to disable filename completion, to create completions that are only available in some combinations, etc..  For a complete description of the various switches accepted by the ``complete`` command, see the documentation for the :ref:`complete <cmd-complete>` builtin, or write ``complete --help`` inside the ``fish`` shell.
-
-As a simple example, here's an excerpt of the completions for systemd's ``timedatectl``::
-
-  # All subcommands that timedatectl knows - this is useful for later.
-  set -l commands status set-time set-timezone list-timezones set-local-rtc set-ntp
-
-  # Disable file completions for the entire command
-  # because it does not take files anywhere
-  # Note that this can't be undone,
-  # so it's often better to only disable it for certain completions.
-  #
-  # File completions also need to be disabled
-  # if you wish to offer a certain set of files (e.g. just directories).
-  complete -c timedatectl -f
-
-  # This line offers the subcommands
-  # -"status",
-  # -"set-timezone",
-  # -"set-time"
-  # -"list-timezones"
-  # if no subcommand has been given so far.
-  #
-  # The `-n`/`--condition` option takes script as a string, which it executes.
-  # If it returns true, the completion is offered.
-  # Here the condition is the `__fish_seen_subcommands_from` helper function.
-  # If returns true if any of the given commands is used on the commandline,
-  # as determined by a simple heuristic.
-  # For more complex uses, you can write your own function.
-  # See e.g. the git completions for an example.
-  #
-  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "status set-time set-timezone list-timezones"
-
-  # If the "set-timezone" subcommand is used,
-  # offer the output of `timedatectl list-timezones` as completions.
-  # Each line of output is used as a separate candidate,
-  # and anything after a tab is taken as the description.
-  # It's often useful to transform command output with `string` into that form.
-  complete -c timedatectl -n "__fish_seen_subcommand_from set-timezone" -a "(timedatectl list-timezones)"
-
-  # Completion candidates can also be described via `-d`,
-  # which is useful if the description is constant.
-  # Try to keep these short, because that means the user gets to see more at once.
-  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "set-local-rtc" -d "Maintain RTC in local time"
-
-  # We can also limit options to certain subcommands by using conditions.
-  complete -c timedatectl -n "__fish_seen_subcommand_from set-local-rtc" -l adjust-system-clock -d 'Synchronize system clock from the RTC'
-
-  # These are simple options that can be used everywhere.
-  complete -c timedatectl -s h -l help -d 'Print a short help text and exit'
-  complete -c timedatectl -l version -d 'Print a short version string and exit'
-  complete -c timedatectl -l no-pager -d 'Do not pipe output into a pager'
-
-For examples of how to write your own complex completions, study the completions in ``/usr/share/fish/completions``. (The exact path depends on your chosen installation prefix and may be slightly different)
-
-.. _completion-func:
-
-Useful functions for writing completions
-----------------------------------------
-
-``fish`` ships with several functions that are very useful when writing command specific completions. Most of these functions name begins with the string '``__fish_``'. Such functions are internal to ``fish`` and their name and interface may change in future fish versions. Still, some of them may be very useful when writing completions. A few of these functions are described here. Be aware that they may be removed or changed in future versions of fish.
-
-Functions beginning with the string ``__fish_print_`` print a newline separated list of strings. For example, ``__fish_print_filesystems`` prints a list of all known file systems. Functions beginning with ``__fish_complete_`` print out a newline separated list of completions with descriptions. The description is separated from the completion by a tab character.
-
-- ``__fish_complete_directories STRING DESCRIPTION`` performs path completion on STRING, allowing only directories, and giving them the description DESCRIPTION.
-
-- ``__fish_complete_path STRING DESCRIPTION`` performs path completion on STRING, giving them the description DESCRIPTION.
-
-- ``__fish_complete_groups`` prints a list of all user groups with the groups members as description.
-
-- ``__fish_complete_pids`` prints a list of all processes IDs with the command name as description.
-
-- ``__fish_complete_suffix SUFFIX`` performs file completion allowing only files ending in SUFFIX, with an optional description.
-
-- ``__fish_complete_users`` prints a list of all users with their full name as description.
-
-- ``__fish_print_filesystems`` prints a list of all known file systems. Currently, this is a static list, and not dependent on what file systems the host operating system actually understands.
-
-- ``__fish_print_hostnames`` prints a list of all known hostnames. This functions searches the fstab for nfs servers, ssh for known hosts and checks the ``/etc/hosts`` file.
-
-- ``__fish_print_interfaces`` prints a list of all known network interfaces.
-
-- ``__fish_print_packages`` prints a list of all installed packages. This function currently handles Debian, rpm and Gentoo packages.
-
-.. _completion-path:
-
-Where to put completions
-------------------------
-
-Completions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. Fish automatically searches through any directories in the list variable ``$fish_complete_path``, and any completions defined are automatically loaded when needed. A completion file must have a filename consisting of the name of the command to complete and the suffix '``.fish``'.
-
-By default, Fish searches the following for completions, using the first available file that it finds:
-
-- A directory for end-users to keep their own completions, usually ``~/.config/fish/completions`` (controlled by the ``XDG_CONFIG_HOME`` environment variable);
-- A directory for systems administrators to install completions for all users on the system, usually ``/etc/fish/completions``;
-- A directory for third-party software vendors to ship their own completions for their software, usually ``/usr/share/fish/vendor_completions.d``;
-- The completions shipped with fish, usually installed in ``/usr/share/fish/completions``; and
-- Completions automatically generated from the operating system's manual, usually stored in ``~/.local/share/fish/generated_completions``.
-
-These paths are controlled by parameters set at build, install, or run time, and may vary from the defaults listed above.
-
-This wide search may be confusing. If you are unsure, your completions probably belong in ``~/.config/fish/completions``.
-
-If you have written new completions for a common Unix command, please consider sharing your work by submitting it via the instructions in `Further help and development <#more-help>`_.
-
-If you are developing another program and would like to ship completions with your program, install them to the "vendor" completions directory. As this path may vary from system to system, the ``pkgconfig`` framework should be used to discover this path with the output of ``pkg-config --variable completionsdir fish``.
-
-
 .. _expand:
 
 Parameter expansion (Globbing)
-==============================
+------------------------------
 
 When an argument for a program is given on the commandline, it undergoes the process of parameter expansion before it is sent on to the command. Parameter expansion is a powerful mechanism that allows you to expand the parameter in various ways, including performing wildcard matching on files, inserting the value of a shell variable into the parameter or even using the output of another command as a parameter list.
 
@@ -739,7 +475,7 @@ Command substitution
 
 The output of a series of commands can be used as the parameters to another command. If a parameter contains a set of parenthesis, the text enclosed by the parenthesis will be interpreted as a list of commands. On expansion, this list is executed, and substituted by the output. If the output is more than one line long, each line will be expanded to a new parameter. Setting ``IFS`` to the empty string will disable line splitting.
 
-If the output is piped to :ref:`string split <cmd-string-split>` or `string split0 <cmd-string-split0>` as the last step, those splits are used as they appear and no additional splitting on newlines takes place.
+If the output is piped to :ref:`string split or string split0 <cmd-string-split>` as the last step, those splits are used as they appear and no additional splitting on newlines takes place.
 
 The exit status of the last run command substitution is available in the `status <#variables-status>`_ variable if the substitution occurs in the context of a ``set`` command.
 
@@ -811,19 +547,20 @@ To use a "," as an element, `quote <#quotes>`_ or `escape <#escapes>`_ it.
 Variable expansion
 ------------------
 
-A dollar sign followed by a string of characters is expanded into the value of the shell variable with the same name. For an introduction to the concept of shell variables, read the `Shell variables <#variables>`_ section.
-
-Undefined and empty variables expand to nothing.
-
-To separate a variable name from text encase the variable within double-quotes or braces.
+A dollar sign followed by a string of characters is expanded into the value of the shell variable with the same name. For more on shell variables, read the `Shell variables <#variables>`_ section.
 
 Examples::
 
     echo $HOME
     # Prints the home directory of the current user.
 
+Undefined and empty variables expand to nothing::
+
+
     echo $nonexistentvariable
     # Prints no output.
+
+To separate a variable name from text encase the variable within double-quotes or braces::
 
     echo The plural of $WORD is "$WORD"s
     # Prints "The plural of cat is cats" when $WORD is set to cat.
@@ -837,9 +574,9 @@ The latter syntax ``{$WORD}`` works by exploiting `brace expansion <#expand-brac
 
 In these cases, the expansion eliminates the string, as a result of the implicit :ref:`cartesian product <cartesian-product>`.
 
-If, in the example above, $WORD is undefined or an empty list, the "s" is not printed. However, it is printed, if $WORD is the empty string.
+If, in the example above, $WORD is undefined or an empty list, the "s" is not printed. However, it is printed if $WORD is the empty string (like after ``set WORD ""``).
 
-Unlike all other expanions, variable expansion also happens in double quoted strings. Inside double quotes (``"these"``), variables will always expand to exactly one argument. If they are empty or undefined, it will result in an empty string. If they have one element, they'll expand to that element. If they have more than that, the elements will be joined with spaces.
+Unlike all the other expansions, variable expansion also happens in double quoted strings. Inside double quotes (``"these"``), variables will always expand to exactly one argument. If they are empty or undefined, it will result in an empty string. If they have one element, they'll expand to that element. If they have more than that, the elements will be joined with spaces [#]_.
 
 Outside of double quotes, variables will expand to as many arguments as they have elements. That means an empty list will expand to nothing, a variable with one element will expand to that element, and a variable with multiple elements will expand to each of those elements separately.
 
@@ -860,6 +597,8 @@ The ``$`` symbol can also be used multiple times, as a kind of "dereference" ope
 
 When using this feature together with list brackets, the brackets will always match the innermost ``$`` dereference. Thus, ``$$foo[5]`` will always mean the fifth element of the ``foo`` variable should be dereferenced, not the fifth element of the doubly dereferenced variable ``foo``. The latter can instead be expressed as ``$$foo[1][5]``.
 
+
+.. [#] Unlike bash or zsh, which will join with the first character of $IFS (which usually is space).
 
 .. _cartesian-product:
 
@@ -916,12 +655,17 @@ Examples::
 Index range expansion
 ---------------------
 
-Both command substitution and shell variable expansion support accessing only specific items by providing a set of indices in square brackets. It's often needed to access a sequence of elements. To do this, use the range operator '``..``' for this. A range '``a..b``', where range limits 'a' and 'b' are integer numbers, is expanded into a sequence of indices '``a a+1 a+2 ... b``' or '``a a-1 a-2 ... b``' depending on which of 'a' or 'b' is higher. The negative range limits are calculated from the end of the list or command substitution. Note that invalid indexes for either end are silently clamped to one or the size of the list as appropriate.
+Sometimes it's necessary to access only some of the elements of a list, or some of the lines a command substitution outputs. Both allow this by providing a set of indices in square brackets.
 
-Range expansion will go in reverse if the end element is earlier in the list than the start and forward if the end is later than the start, unless exactly one of the given indices is negative. This is to enable clamping without changing direction if the list has fewer elements than expected.
+Sequences of elements can be written with the range operator '``..``'. A range '``a..b``' ('a' and 'b' being integers) is expanded into a sequence of indices '``a a+1 a+2 ... b``' or '``a a-1 a-2 ... b``' depending on which of 'a' or 'b' is higher. Negative range limits are calculated from the end of the list. If an index is too large or small it's silently clamped to one or the size of the list as appropriate.
+
+If the end is smaller than the start, or the start is larger than the end, range expansion will go in reverse. This is unless exactly one of the given indices is negative, so the direction doesn't change if the list has fewer elements than expected.
 
 Some examples::
 
+
+    echo (seq 10)[1 2 3]
+    # Prints: 1 2 3
 
     # Limit the command substitution output
     echo (seq 10)[2..5]
@@ -969,6 +713,15 @@ However using variables as indices for command substitution is currently not sup
     set sequence (seq 5) # It needs to be written on two lines like this.
     echo $sequence[$index] # returns '2'
 
+When using indirect variable expansion with multiple `$` (``$$name``), you have to give all indices up to the variable you want to slice::
+
+    > set -l list 1 2 3 4 5
+    > set -l name list
+    > echo $$name[1]
+    1 2 3 4 5
+    > echo $$name[1..-1][1..3] # or $$name[1][1..3], since $name only has one element.
+    1 2 3
+
 .. _expand-home:
 
 Home directory expansion
@@ -1000,9 +753,9 @@ If the current directory contains the files 'foo' and 'bar', the command ``echo 
 .. _identifiers:
 
 Shell variable and function names
-=================================
+---------------------------------
 
-The names given to shell objects such as variables and function names are known as "identifiers". Each type of identifier has rules that define the valid sequence of characters which compose the identifier.
+The names given to shell objects like variables and function names are known as "identifiers". Each type of identifier has rules that define what sequences of characters are valid to use.
 
 A variable name cannot be empty. It can contain only letters, digits, and underscores. It may begin and end with any of those characters.
 
@@ -1013,7 +766,7 @@ A bind mode name (e.g., ``bind -m abc ...``) is restricted to the rules for vali
 .. _variables:
 
 Shell variables
-===============
+---------------
 
 Shell variables are named pieces of data, which can be created, deleted and their values changed and used by the user.  Variables may optionally be "exported", so that a copy of the variable is available to any subprocesses the shell creates. An exported variable is referred to as an "environment variable".
 
@@ -1034,15 +787,19 @@ To use the value of the variable ``smurf_color``, write ``$`` (dollar symbol) fo
 Variable scope
 --------------
 
-There are three kinds of variables in fish: universal, global and local variables. Universal variables are shared between all fish sessions a user is running on one computer. Global variables are specific to the current fish session, but are not associated with any specific block scope, and will never be erased unless the user explicitly requests it using ``set -e``. Local variables are specific to the current fish session, and associated with a specific block of commands, and is automatically erased when a specific block goes out of scope. A block of commands is a series of commands that begins with one of the commands ``for``, ``while`` , ``if``, ``function``, ``begin`` or ``switch``, and ends with the command ``end``. The user can specify that a variable should have either global or local scope using the ``-g/--global`` or ``-l/--local`` switches.
+There are three kinds of variables in fish: universal, global and local variables.
+
+- Universal variables are shared between all fish sessions a user is running on one computer.
+- Global variables are specific to the current fish session, but are not associated with any specific block scope, and will never be erased unless the user explicitly requests it using ``set -e``.
+- Local variables are specific to the current fish session, and associated with a specific block of commands, and is automatically erased when a specific block goes out of scope. A block of commands is a series of commands that begins with one of the commands ``for``, ``while`` , ``if``, ``function``, ``begin`` or ``switch``, and ends with the command ``end``.
 
 Variables can be explicitly set to be universal with the ``-U`` or ``--universal`` switch, global with the ``-g`` or ``--global`` switch, or local with the ``-l`` or ``--local`` switch.  The scoping rules when creating or updating a variable are:
 
--# If a variable is explicitly set to either universal, global or local, that setting will be honored. If a variable of the same name exists in a different scope, that variable will not be changed.
+- If a variable is explicitly set to a scope (universal, global or local), that setting will be honored. If a variable of the same name exists in a different scope, that variable will not be changed.
 
--# If a variable is not explicitly set to be either universal, global or local, but has been previously defined, the variable scope is not changed.
+- If a variable is not explicitly set to a scope, but has been previously defined, the variable scope is not changed.
 
--# If a variable is not explicitly set to be either universal, global or local and has never before been defined, the variable will be local to the currently executing function. Note that this is different from using the ``-l`` or ``--local`` flag. If one of those flags is used, the variable will be local to the most inner currently executing block, while without these the variable will be local to the function. If no function is executing, the variable will be global.
+- If a variable is not explicitly set to a scope and has not been defined, the variable will be local to the currently executing function. Note that this is different from using the ``-l`` or ``--local`` flag. If one of those flags is used, the variable will be local to the most inner currently executing block, while without these the variable will be local to the function. If no function is executing, the variable will be global.
 
 There may be many variables with the same name, but different scopes. When using a variable, the variable scope will be searched from the inside out, i.e. a local variable will be used rather than a global variable with the same name, a global variable will be used rather than a universal variable with the same name.
 
@@ -1086,7 +843,7 @@ For example::
     end
 
     function avast
-        set phrase 'Avast, mateys'
+        set --local phrase 'Avast, mateys'
         # Calling the shiver function here can not
         # change any variables in the local scope
         shiver
@@ -1103,19 +860,21 @@ For example::
 Exporting variables
 -------------------
 
-Variables in fish can be exported. This means the variable will be inherited by any commands started by fish. It is convention that exported variables are in uppercase and unexported variables are in lowercase.
+Variables in fish can be "exported", so they will be inherited by any commands started by fish. In particular, this is necessary for variables used to configure external commands like $LESS or $GOPATH, but also for variables that contain general system settings like $PATH or $LANGUAGE. If an external command needs to know a variable, it needs to be exported.
 
-Variables can be explicitly set to be exported with the ``-x`` or ``--export`` switch, or not exported with the ``-u`` or ``--unexport`` switch.  The exporting rules when creating or updating a variable are identical to the scoping rules for variables:
+Variables can be explicitly set to be exported with the ``-x`` or ``--export`` switch, or not exported with the ``-u`` or ``--unexport`` switch.  The exporting rules when setting a variable are identical to the scoping rules for variables:
 
--# If a variable is explicitly set to either be exported or not exported, that setting will be honored.
+- If a variable is explicitly set to either be exported or not exported, that setting will be honored.
 
--# If a variable is not explicitly set to be exported or not exported, but has been previously defined, the previous exporting rule for the variable is kept.
+- If a variable is not explicitly set to be exported or not exported, but has been previously defined, the previous exporting rule for the variable is kept.
 
--# If a variable is not explicitly set to be either exported or not exported and has never before been defined, the variable will not be exported.
+- Otherwise, by default, the variable will not be exported.
 
--# If a variable has local scope and is exported, any function called receives a _copy_ of it, so any changes it makes to the variable disappear once the function returns.
+- If a variable has local scope and is exported, any function called receives a _copy_ of it, so any changes it makes to the variable disappear once the function returns.
 
--# If a variable has global scope, it is accessible read-write to functions whether it is exported or not.
+- Global variables are accessible to functions whether they are exported or not.
+
+As a naming convention, exported variables are in uppercase and unexported variables are in lowercase.
 
 .. _variables-lists:
 
@@ -1208,11 +967,11 @@ The user can change the settings of ``fish`` by changing the values of certain v
 
 - A large number of variable starting with the prefixes ``fish_color`` and ``fish_pager_color``. See `Variables for changing highlighting colors <#variables-color>`__ for more information.
 
-- ``fish_emoji_width`` controls the computed width of certain characters, in particular emoji, whose rendered width varies across terminal emulators. This should be set to 1 if your terminal emulator renders emoji single-width, or 2 if double-width. Set this only if you see graphical glitching when printing emoji.
+- ``fish_emoji_width`` controls the computed width of certain characters, in particular emoji, whose rendered width changed in Unicode 9 and hence varies across terminal emulators. This should be set to 2 if your terminal emulator supports Unicode >= 9 and renders them double-width, and 1 otherwise. Set this only if you see graphical glitching when printing emoji, typically it will be automatically detected.
 
-- ``fish_ambiguous_width`` controls the computed width of ambiguous East Asian characters. This should be set to 1 if your terminal emulator renders these characters as single-width (typical), or 2 if double-width.
+- ``fish_ambiguous_width`` controls the computed width of ambiguous-width characters. This should be set to 1 if your terminal emulator renders these characters as single-width (typical), or 2 if double-width.
 
-- ``fish_escape_delay_ms`` overrides the default timeout of 30ms after seeing an escape character before giving up on matching a key binding. See the documentation for the `bind <cmds/bind.html#special-case-the-escape-character>`__ builtin command. This delay facilitates using escape as a meta key.
+- ``fish_escape_delay_ms`` overrides the default timeout of 30ms after seeing an escape character before giving up on matching a key binding. This is explained in the documentation for the :ref:`bind <cmd-bind-escape>` builtin command. This delay facilitates using escape as a meta key.
 
 - ``fish_greeting``, the greeting message printed on startup.
 
@@ -1221,6 +980,8 @@ The user can change the settings of ``fish`` by changing the values of certain v
   variable. If unset, or set to ``default``, the default session name "fish" is used. If set to an
   empty string, history is not saved to disk (but is still available within the interactive
   session).
+
+- ``fish_trace``, if set and not empty, will cause fish to print commands before they execute, similar to `set -x` in bash. The trace is printed to the path given by the :ref:`--debug-output <cmd-fish>` option to fish (stderr by default).
 
 - ``fish_user_paths``, a list of directories that are prepended to ``PATH``. This can be a universal variable.
 
@@ -1385,18 +1146,195 @@ The most common way to set the locale to use a command like 'set -x LANG en_GB.u
 .. _builtin-overview:
 
 Builtin commands
-================
+----------------
 
 Many other shells have a large library of builtin commands. Most of these commands are also available as standalone commands, but have been implemented in the shell anyway. To avoid code duplication, and to avoid the confusion of subtly differing versions of the same command, ``fish`` generally only implements builtins for actions which cannot be performed by a regular command.
 
 For a list of all builtins, functions and commands shipped with fish, see the :ref:`list of commands <Commands>`. The documentation is also available by using the ``--help`` switch of the command.
+
+Interactive use
+===============
+
+Fish prides itself on being really nice to use interactively. That's down to a few features we'll explain in the next few sections.
+
+
+Help
+----
+
+``fish`` has an extensive help system. Use the :ref:`help <cmd-help>` command to obtain help on a specific subject or command. For instance, writing ``help syntax`` displays the `syntax section <#syntax>`_ of this documentation.
+
+``fish`` also has man pages for its commands. For example, ``man set`` will show the documentation for ``set`` as a man page.
+
+Help on a specific builtin can also be obtained with the ``-h`` parameter. For instance, to obtain help on the ``fg`` builtin, either type ``fg -h`` or ``help fg``.
+
+Autosuggestions
+---------------
+
+fish suggests commands as you type, based on `command history <#history-search>`_, completions, and valid file paths. As you type commands, you will see a suggestion offered after the cursor, in a muted gray color (which can be changed with the ``fish_color_autosuggestion`` variable).
+
+To accept the autosuggestion (replacing the command line contents), press right arrow or :kbd:`Control+F`. To accept the first suggested word, press :kbd:`Alt+→,Right` or :kbd:`Alt+F`. If the autosuggestion is not what you want, just ignore it: it won't execute unless you accept it.
+
+Autosuggestions are a powerful way to quickly summon frequently entered commands, by typing the first few characters. They are also an efficient technique for navigating through directory hierarchies.
+
+
+Tab Completion
+--------------
+
+Tab completion is one of the most time saving features of any modern shell. By tapping the tab key, the user asks ``fish`` to guess the rest of the command or parameter that the user is currently typing. If  ``fish`` can only find one possible completion, ``fish`` will write it out. If there is more than one completion, ``fish`` will write out the longest prefix that all completions have in common. If the completions differ on the first character, a list of all possible completions is printed. The list features descriptions of the completions and if the list doesn't fit the screen, it is scrollable by using the arrow keys, the page up/page down keys, the tab key or the space bar.
+
+If the list is visible, pressing control-S (or the ``pager-toggle-search`` binding) will allow filtering the list. Shift-tab (or the ``complete-and-search`` binding) will trigger completion with the search field immediately visible.
+These are the general purpose tab completions that ``fish`` provides:
+
+- Completion of commands (builtins, functions and regular programs).
+
+- Completion of shell variable names.
+
+- Completion of usernames for tilde expansion.
+
+- Completion of filenames, even on strings with wildcards such as '``*``' and '``**``'.
+
+``fish`` provides a large number of program specific completions. Most of these completions are simple options like the ``-l`` option for ``ls``, but some are more advanced. The latter include:
+
+- The programs ``man`` and ``whatis`` show all installed manual pages as completions.
+
+- The ``make`` program uses all targets in the Makefile in the current directory as completions.
+
+- The ``mount`` command uses all mount points specified in fstab as completions.
+
+- The ``ssh`` command uses all hosts that are stored in the known_hosts file as completions. (See the ssh documentation for more information)
+
+- The ``su`` command uses all users on the system as completions.
+
+- The ``apt-get``, ``rpm`` and ``yum`` commands use all installed packages as completions.
+
+
+.. _completion-own:
+
+Writing your own completions
+----------------------------
+
+To specify a completion, use the ``complete`` command. ``complete`` takes as a parameter the name of the command to specify a completion for. For example, to add a completion for the program ``myprog``, one would start the completion command with ``complete -c myprog ...``
+
+To provide a list of possible completions for myprog, use the ``-a`` switch. If ``myprog`` accepts the arguments start and stop, this can be specified as ``complete -c myprog -a 'start stop'``. The argument to the ``-a`` switch is always a single string. At completion time, it will be tokenized on spaces and tabs, and variable expansion, command substitution and other forms of parameter expansion will take place.
+
+``fish`` has a special syntax to support specifying switches accepted by a command. The switches ``-s``, ``-l`` and ``-o`` are used to specify a short switch (single character, such as ``-l``), a gnu style long switch (such as '``--color``') and an old-style long switch (like '``-shuffle``'), respectively. If the command 'myprog' has an option '-o' which can also be written as '``--output``', and which can take an additional value of either 'yes' or 'no', this can be specified by writing::
+
+  complete -c myprog -s o -l output -a "yes no"
+
+
+There are also special switches for specifying that a switch requires an argument, to disable filename completion, to create completions that are only available in some combinations, etc..  For a complete description of the various switches accepted by the ``complete`` command, see the documentation for the :ref:`complete <cmd-complete>` builtin, or write ``complete --help`` inside the ``fish`` shell.
+
+As a more comprehensive example, here's a commented excerpt of the completions for systemd's ``timedatectl``::
+
+  # All subcommands that timedatectl knows - this is useful for later.
+  set -l commands status set-time set-timezone list-timezones set-local-rtc set-ntp
+
+  # Disable file completions for the entire command
+  # because it does not take files anywhere
+  # Note that this can be undone by using "-F".
+  #
+  # File completions also need to be disabled
+  # if you want to have more control over what files are offered (e.g. just directories, or just files ending in ".mp3").
+  complete -c timedatectl -f
+
+  # This line offers the subcommands
+  # -"status",
+  # -"set-timezone",
+  # -"set-time"
+  # -"list-timezones"
+  # if no subcommand has been given so far.
+  #
+  # The `-n`/`--condition` option takes script as a string, which it executes.
+  # If it returns true, the completion is offered.
+  # Here the condition is the `__fish_seen_subcommands_from` helper function.
+  # If returns true if any of the given commands is used on the commandline,
+  # as determined by a simple heuristic.
+  # For more complex uses, you can write your own function.
+  # See e.g. the git completions for an example.
+  #
+  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "status set-time set-timezone list-timezones"
+
+  # If the "set-timezone" subcommand is used,
+  # offer the output of `timedatectl list-timezones` as completions.
+  # Each line of output is used as a separate candidate,
+  # and anything after a tab is taken as the description.
+  # It's often useful to transform command output with `string` into that form.
+  complete -c timedatectl -n "__fish_seen_subcommand_from set-timezone" -a "(timedatectl list-timezones)"
+
+  # Completion candidates can also be described via `-d`,
+  # which is useful if the description is constant.
+  # Try to keep these short, because that means the user gets to see more at once.
+  complete -c timedatectl -n "not __fish_seen_subcommand_from $commands" -a "set-local-rtc" -d "Maintain RTC in local time"
+
+  # We can also limit options to certain subcommands by using conditions.
+  complete -c timedatectl -n "__fish_seen_subcommand_from set-local-rtc" -l adjust-system-clock -d 'Synchronize system clock from the RTC'
+
+  # These are simple options that can be used everywhere.
+  complete -c timedatectl -s h -l help -d 'Print a short help text and exit'
+  complete -c timedatectl -l version -d 'Print a short version string and exit'
+  complete -c timedatectl -l no-pager -d 'Do not pipe output into a pager'
+
+For examples of how to write your own complex completions, study the completions in ``/usr/share/fish/completions``. (The exact path depends on your chosen installation prefix and may be slightly different)
+
+.. _completion-func:
+
+Useful functions for writing completions
+----------------------------------------
+
+``fish`` ships with several functions that are very useful when writing command specific completions. Most of these functions name begins with the string '``__fish_``'. Such functions are internal to ``fish`` and their name and interface may change in future fish versions. Still, some of them may be very useful when writing completions. A few of these functions are described here. Be aware that they may be removed or changed in future versions of fish.
+
+Functions beginning with the string ``__fish_print_`` print a newline separated list of strings. For example, ``__fish_print_filesystems`` prints a list of all known file systems. Functions beginning with ``__fish_complete_`` print out a newline separated list of completions with descriptions. The description is separated from the completion by a tab character.
+
+- ``__fish_complete_directories STRING DESCRIPTION`` performs path completion on STRING, allowing only directories, and giving them the description DESCRIPTION.
+
+- ``__fish_complete_path STRING DESCRIPTION`` performs path completion on STRING, giving them the description DESCRIPTION.
+
+- ``__fish_complete_groups`` prints a list of all user groups with the groups members as description.
+
+- ``__fish_complete_pids`` prints a list of all processes IDs with the command name as description.
+
+- ``__fish_complete_suffix SUFFIX`` performs file completion allowing only files ending in SUFFIX, with an optional description.
+
+- ``__fish_complete_users`` prints a list of all users with their full name as description.
+
+- ``__fish_print_filesystems`` prints a list of all known file systems. Currently, this is a static list, and not dependent on what file systems the host operating system actually understands.
+
+- ``__fish_print_hostnames`` prints a list of all known hostnames. This functions searches the fstab for nfs servers, ssh for known hosts and checks the ``/etc/hosts`` file.
+
+- ``__fish_print_interfaces`` prints a list of all known network interfaces.
+
+- ``__fish_print_packages`` prints a list of all installed packages. This function currently handles Debian, rpm and Gentoo packages.
+
+.. _completion-path:
+
+Where to put completions
+------------------------
+
+Completions can be defined on the commandline or in a configuration file, but they can also be automatically loaded. Fish automatically searches through any directories in the list variable ``$fish_complete_path``, and any completions defined are automatically loaded when needed. A completion file must have a filename consisting of the name of the command to complete and the suffix '``.fish``'.
+
+By default, Fish searches the following for completions, using the first available file that it finds:
+
+- A directory for end-users to keep their own completions, usually ``~/.config/fish/completions`` (controlled by the ``XDG_CONFIG_HOME`` environment variable);
+- A directory for systems administrators to install completions for all users on the system, usually ``/etc/fish/completions``;
+- A directory for third-party software vendors to ship their own completions for their software, usually ``/usr/share/fish/vendor_completions.d``;
+- The completions shipped with fish, usually installed in ``/usr/share/fish/completions``; and
+- Completions automatically generated from the operating system's manual, usually stored in ``~/.local/share/fish/generated_completions``.
+
+These paths are controlled by parameters set at build, install, or run time, and may vary from the defaults listed above.
+
+This wide search may be confusing. If you are unsure, your completions probably belong in ``~/.config/fish/completions``.
+
+If you have written new completions for a common Unix command, please consider sharing your work by submitting it via the instructions in `Further help and development <#more-help>`_.
+
+If you are developing another program and would like to ship completions with your program, install them to the "vendor" completions directory. As this path may vary from system to system, the ``pkgconfig`` framework should be used to discover this path with the output of ``pkg-config --variable completionsdir fish``.
+
 
 .. _editor:
 
 Command line editor
 ===================
 
-The ``fish`` editor features copy and paste, a searchable history and many editor functions that can be bound to special keyboard shortcuts.
+The ``fish`` editor features copy and paste, a `searchable history <#history-search>`_ and many editor functions that can be bound to special keyboard shortcuts.
 
 Similar to bash, fish has Emacs and Vi editing modes. The default editing mode is Emacs. You can switch to Vi mode with ``fish_vi_key_bindings`` and switch back with ``fish_default_key_bindings``. You can also make your own key bindings by creating a function and setting $fish_key_bindings to its name. For example::
 
@@ -1423,9 +1361,9 @@ Some bindings are shared between emacs- and vi-mode because they aren't text edi
 
 - :kbd:`Shift,←,Left` and :kbd:`Shift,→,Right` move the cursor one word left or right, without stopping on punctuation.
 
-- :kbd:`↑` (Up) and :kbd:`↓` (Down) (or :kbd:`Control+P` and :kbd:`Control+N` for emacs aficionados) search the command history for the previous/next command containing the string that was specified on the commandline before the search was started. If the commandline was empty when the search started, all commands match. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`↑` (Up) and :kbd:`↓` (Down) (or :kbd:`Control+P` and :kbd:`Control+N` for emacs aficionados) search the command history for the previous/next command containing the string that was specified on the commandline before the search was started. If the commandline was empty when the search started, all commands match. See the `history <#history-search>`_ section for more information on history searching.
 
-- :kbd:`Alt+↑,Up` and :kbd:`Alt+↓,Down` search the command history for the previous/next token containing the token under the cursor before the search was started. If the commandline was not on a token when the search started, all tokens match. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`Alt+↑,Up` and :kbd:`Alt+↓,Down` search the command history for the previous/next token containing the token under the cursor before the search was started. If the commandline was not on a token when the search started, all tokens match. See the `history <#history-search>`_ section for more information on history searching.
 
 - :kbd:`Control+C` cancels the entire line.
 
@@ -1453,6 +1391,8 @@ Some bindings are shared between emacs- and vi-mode because they aren't text edi
 
 - :kbd:`Alt+v` Same as :kbd:`Alt+e`.
 
+- :kbd:`Alt+s` Prepends `sudo` to the current commandline.
+
 .. _emacs-mode:
 
 Emacs mode commands
@@ -1477,7 +1417,7 @@ Emacs mode commands
 - :kbd:`Alt+t` transposes the last two words
 
 
-You can change these key bindings using the `bind <cmds/bind.html">`__ builtin.
+You can change these key bindings using the :ref:`bind <cmd-bind>` builtin.
 
 
 .. _vi-mode:
@@ -1500,9 +1440,24 @@ It is also possible to add all emacs-mode bindings to vi-mode by using something
     end
 
 
-When in vi-mode, the :ref:`fish_mode_prompt <cmd-fish_mode_prompt>` function will display a mode indicator to the left of the prompt. The ``fish_vi_cursor`` function will be used to change the cursor's shape depending on the mode in supported terminals. To disable this feature, override it with an empty function. To display the mode elsewhere (like in your right prompt), use the output of the ``fish_default_mode_prompt`` function.
+When in vi-mode, the :ref:`fish_mode_prompt <cmd-fish_mode_prompt>` function will display a mode indicator to the left of the prompt. To disable this feature, override it with an empty function. To display the mode elsewhere (like in your right prompt), use the output of the ``fish_default_mode_prompt`` function.
 
 When a binding switches the mode, it will repaint the mode-prompt if it exists, and the rest of the prompt only if it doesn't. So if you want a mode-indicator in your ``fish_prompt``, you need to erase ``fish_mode_prompt`` e.g. by adding an empty file at `~/.config/fish/functions/fish_mode_prompt.fish`. (Bindings that change the mode are supposed to call the `repaint-mode` bind function, see :ref:`bind <cmd-bind>`)
+
+The ``fish_vi_cursor`` function will be used to change the cursor's shape depending on the mode in supported terminals. The following snippet can be used to manually configure cursors after enabling vi-mode::
+
+   # Emulates vim's cursor shape behavior
+   # Set the normal and visual mode cursors to a block
+   set fish_cursor_default block
+   # Set the insert mode cursor to a line
+   set fish_cursor_insert line
+   # Set the replace mode cursor to an underscore
+   set fish_cursor_replace_one underscore
+   # The following variable can be used to configure cursor shape in
+   # visual mode, but due to fish_cursor_default, is redundant here
+   set fish_cursor_visual block
+
+Additionally, ``blink`` can be added after each of the cursor shape parameters to set a blinking cursor in the specified shape.
 
 .. _vi-mode-command:
 
@@ -1533,7 +1488,7 @@ Command mode is also known as normal mode.
 
 - :kbd:`u` search history backwards.
 
-- :kbd:`[` and :kbd:`]` search the command history for the previous/next token containing the token under the cursor before the search was started. See the `history <#history>`_ section for more information on history searching.
+- :kbd:`[` and :kbd:`]` search the command history for the previous/next token containing the token under the cursor before the search was started. See the `history <#history-search>`_ section for more information on history searching.
 
 - :kbd:`Backspace` moves the cursor left.
 
@@ -1589,6 +1544,8 @@ The command history is stored in the file ``~/.local/share/fish/fish_history`` (
 ``fish_history`` environment variable to change the name of the history session (resulting in a
 ``<session>_history`` file); both before starting the shell and while the shell is running.
 
+See the :ref:`history <cmd-history>` command for other manipulations.
+
 Examples:
 
 To search for previous entries containing the word 'make', type ``make`` in the console and press the up key.
@@ -1618,11 +1575,11 @@ Running multiple programs
 
 Normally when ``fish`` starts a program, this program will be put in the foreground, meaning it will take control of the terminal and ``fish`` will be stopped until the program finishes. Sometimes this is not desirable. For example, you may wish to start an application with a graphical user interface from the terminal, and then be able to continue using the shell. In such cases, there are several ways in which the user can change fish's behavior.
 
--# By ending a command with the ``&`` (ampersand) symbol, the user tells ``fish`` to put the specified command into the background. A background process will be run simultaneous with ``fish``. ``fish`` will retain control of the terminal, so the program will not be able to read from the keyboard.
+- By ending a command with the ``&`` (ampersand) symbol, the user tells ``fish`` to put the specified command into the background. A background process will be run simultaneous with ``fish``. ``fish`` will retain control of the terminal, so the program will not be able to read from the keyboard.
 
--# By pressing :kbd:`Control+Z`, the user stops a currently running foreground  program and returns control to ``fish``. Some programs do not support this feature, or remap it to another key. GNU Emacs uses :kbd:`Control+X` :kbd:`z` to stop running.
+- By pressing :kbd:`Control+Z`, the user stops a currently running foreground  program and returns control to ``fish``. Some programs do not support this feature, or remap it to another key. GNU Emacs uses :kbd:`Control+X` :kbd:`z` to stop running.
 
--# By using the :ref:`bg <cmd-bg>` and :ref:`fg <cmd-fg>` builtin commands, the user can send any currently running job into the foreground or background.
+- By using the :ref:`bg <cmd-bg>` and :ref:`fg <cmd-fg>` builtin commands, the user can send any currently running job into the foreground or background.
 
 Note that functions cannot be started in the background. Functions that are stopped and then restarted in the background using the ``bg`` command will not execute correctly.
 
@@ -1641,8 +1598,8 @@ Configuration files are evaluated in the following order:
 - Configuration snippets in files ending in ``.fish``, in the directories:
 
   - ``$__fish_config_dir/conf.d`` (by default, ``~/.config/fish/conf.d/``)
-  - ``$__fish_sysconf_dir/conf.d`` (by default, ``/etc/fish/conf.d``)
-  - ``/usr/share/fish/vendor_conf.d`` (set at compile time; by default, ``$__fish_data_dir/vendor_conf.d``)
+  - ``$__fish_sysconf_dir/conf.d`` (by default, ``/etc/fish/conf.d/``)
+  - ``/usr/share/fish/vendor_conf.d`` (set at compile time; by default, ``$__fish_data_dir/vendor_conf.d/``)
 
   If there are multiple files with the same name in these directories, only the first will be executed.
   They are executed in order of their filename, sorted (like globs) in a natural order (i.e. "01" sorts before "2").
@@ -1688,7 +1645,7 @@ You can see the current list of features via ``status features``::
     > status features
     stderr-nocaret  on     3.0      ^ no longer redirects stderr
     qmark-noglob    off    3.0      ? no longer globs
-    string-replace-fewer-backslashes        off     3.1     string replace -r needs fewer backslashes in the replacement
+    regex-easyesc   off    3.1      string replace -r needs fewer \\'s
 
 There are two breaking changes in fish 3.0: caret ``^`` no longer redirects stderr, and question mark ``?`` is no longer a glob.
 
@@ -1812,9 +1769,6 @@ Fish includes a built in debugging facility. The debugger allows you to stop exe
 
 To start a debug session simply run the builtin command ``breakpoint`` at the point in a function or script where you wish to gain control. Also, the default action of the TRAP signal is to call this builtin. So a running script can be debugged by sending it the TRAP signal with the ``kill`` command. Once in the debugger, it is easy to insert new breakpoints by using the funced function to edit the definition of a function.
 
-Note: At the moment the debug prompt is identical to your normal fish prompt. This can make it hard to recognize that you've entered a debug session. `Issue 1310 <https://github.com/fish-shell/fish-shell/issues/1310>`_ is open to improve this.
-
-
 .. _more-help:
 
 Further help and development
@@ -1838,6 +1792,7 @@ Other help pages
 .. toctree::
    :maxdepth: 1
 
+   self
    commands
    design
    tutorial

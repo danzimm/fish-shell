@@ -6,7 +6,9 @@ nextd - move forward through directory history
 Synopsis
 --------
 
-nextd [ -l | --list ] [POS]
+::
+
+    nextd [ -l | --list ] [POS]
 
 
 Description
@@ -29,13 +31,13 @@ Example
 
     cd /usr/src
     # Working directory is now /usr/src
-    
+
     cd /usr/src/fish-shell
     # Working directory is now /usr/src/fish-shell
-    
+
     prevd
     # Working directory is now /usr/src
-    
+
     nextd
     # Working directory is now /usr/src/fish-shell
 

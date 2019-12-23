@@ -55,11 +55,8 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
 
     bind -s --preset -M insert "" self-insert
     # Space expands abbrs _and_ inserts itself.
-    bind -s --preset -M insert " " 'commandline -i " "; commandline -f expand-abbr'
+    bind -s --preset -M insert " " self-insert expand-abbr
 
-
-    # Add way to kill current command line while in insert mode.
-    bind -s --preset -M insert \cc __fish_cancel_commandline
     # Add a way to switch from insert to normal (command) mode.
     # Note if we are paging, we want to stay in insert mode
     # See #2871
@@ -137,6 +134,7 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     bind -s --preset D kill-line
     bind -s --preset d\$ kill-line
     bind -s --preset d\^ backward-kill-line
+    bind -s --preset d0 backward-kill-line
     bind -s --preset dw kill-word
     bind -s --preset dW kill-bigword
     bind -s --preset diw forward-char forward-char backward-word kill-word
@@ -217,7 +215,19 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     #
     bind -s --preset -m replace_one r repaint-mode
     bind -s --preset -M replace_one -m default '' delete-char self-insert backward-char repaint-mode
+    bind -s --preset -M replace_one -m default \r 'commandline -f delete-char; commandline -i \n; commandline -f backward-char; commandline -f repaint-mode'
     bind -s --preset -M replace_one -m default \e cancel repaint-mode
+
+    #
+    # Uppercase R, enters replace mode
+    #
+    bind -s --preset -m replace R repaint-mode
+    bind -s --preset -M replace '' delete-char self-insert
+    bind -s --preset -M replace -m insert \r execute repaint-mode
+    bind -s --preset -M replace -m default \e cancel repaint-mode
+    # in vim (and maybe in vi), <BS> deletes the changes
+    # but this binding just move cursor backward, not delete the changes
+    bind -s --preset -M replace -k backspace backward-char
 
     #
     # visual mode
@@ -264,6 +274,7 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     # the commenting chars so the command can be further edited then executed.
     bind -s --preset -M default \# __fish_toggle_comment_commandline
     bind -s --preset -M visual \# __fish_toggle_comment_commandline
+    bind -s --preset -M replace \# __fish_toggle_comment_commandline
 
     # Set the cursor shape
     # After executing once, this will have defined functions listening for the variable.

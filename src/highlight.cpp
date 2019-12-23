@@ -6,9 +6,9 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <cwchar>
 
 #include <algorithm>
+#include <cwchar>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -215,8 +215,7 @@ bool is_potential_path(const wcstring &potential_path_fragment, const wcstring_l
 
     // debug( 1, L"%ls -> %ls ->%ls", path, tilde, unescaped );
 
-    for (size_t i = 0; i < path_with_magic.size(); i++) {
-        wchar_t c = path_with_magic.at(i);
+    for (auto c : path_with_magic) {
         switch (c) {
             case PROCESS_EXPAND_SELF:
             case VARIABLE_EXPAND:
@@ -269,7 +268,7 @@ bool is_potential_path(const wcstring &potential_path_fragment, const wcstring_l
             }
         } else {
             // We do not end with a slash; it does not have to be a directory.
-            DIR *dir = NULL;
+            DIR *dir = nullptr;
             const wcstring dir_name = wdirname(abs_path);
             const wcstring filename_fragment = wbasename(abs_path);
             if (dir_name == L"/" && filename_fragment == L"/") {
@@ -287,7 +286,7 @@ bool is_potential_path(const wcstring &potential_path_fragment, const wcstring_l
                 // access.
                 wcstring ent;
                 bool is_dir = false;
-                while (wreaddir_resolving(dir, dir_name, ent, require_dir ? &is_dir : NULL)) {
+                while (wreaddir_resolving(dir, dir_name, ent, require_dir ? &is_dir : nullptr)) {
                     // Maybe skip directories.
                     if (require_dir && !is_dir) {
                         continue;
@@ -385,8 +384,7 @@ rgb_color_t highlight_get_color(const highlight_spec_t &highlight, bool is_backg
 
 static bool has_expand_reserved(const wcstring &str) {
     bool result = false;
-    for (size_t i = 0; i < str.size(); i++) {
-        wchar_t wc = str.at(i);
+    for (auto wc : str) {
         if (wc >= EXPAND_RESERVED_BASE && wc <= EXPAND_RESERVED_END) {
             result = true;
             break;
@@ -395,23 +393,31 @@ static bool has_expand_reserved(const wcstring &str) {
     return result;
 }
 
-// Parse a command line. Return by reference the last command, and the last argument to that command
-// (as a string), if any. This is used by autosuggestions.
+// Parse a command line. Return by reference the first command, and the first argument to that
+// command (as a string), if any. This is used to validate autosuggestions.
 static bool autosuggest_parse_command(const wcstring &buff, const environment_t &vars,
-                                      wcstring *out_expanded_command, wcstring *out_last_arg) {
+                                      wcstring *out_expanded_command, wcstring *out_arg) {
     // Parse the buffer.
     parse_node_tree_t parse_tree;
     parse_tree_from_string(buff,
                            parse_flag_continue_after_error | parse_flag_accept_incomplete_tokens,
-                           &parse_tree, NULL);
+                           &parse_tree, nullptr);
 
-    // Find the last statement.
-    auto last_statement = parse_tree.find_last_node<g::plain_statement>();
-    if (last_statement &&
-        plain_statement_get_expanded_command(buff, last_statement, vars, out_expanded_command)) {
-        // Find the last argument. If we don't get one, return an invalid node.
-        if (auto last_arg = parse_tree.find_last_node<g::argument>(last_statement)) {
-            *out_last_arg = last_arg.get_source(buff);
+    // Find the first statement.
+    tnode_t<g::plain_statement> first_statement{};
+    for (const auto &node : parse_tree) {
+        if (node.type == symbol_plain_statement) {
+            first_statement = tnode_t<g::plain_statement>(&parse_tree, &node);
+            break;
+        }
+    }
+
+    if (first_statement &&
+        plain_statement_get_expanded_command(buff, first_statement, vars, out_expanded_command)) {
+        // Find the first argument.
+        auto args_and_redirs = first_statement.child<1>();
+        if (auto arg = args_and_redirs.next_in_list<grammar::argument>()) {
+            *out_arg = arg.get_source(buff);
         }
         return true;
     }
@@ -451,10 +457,9 @@ bool autosuggest_validate_from_history(const history_item_t &item,
 
     // Not handled specially so handle it here.
     bool cmd_ok = false;
-    if (path_get_path(parsed_command, NULL, vars)) {
+    if (path_get_path(parsed_command, nullptr, vars)) {
         cmd_ok = true;
-    } else if (builtin_exists(parsed_command) ||
-               function_exists_no_autoload(parsed_command, vars)) {
+    } else if (builtin_exists(parsed_command) || function_exists_no_autoload(parsed_command)) {
         cmd_ok = true;
     }
 
@@ -496,7 +501,7 @@ static size_t color_variable(const wchar_t *in, size_t in_len,
     // Handle a slice, up to dollar_count of them. Note that we currently don't do any validation of
     // the slice's contents, e.g. $foo[blah] will not show an error even though it's invalid.
     for (size_t slice_count = 0; slice_count < dollar_count && in[idx] == L'['; slice_count++) {
-        wchar_t *slice_begin = NULL, *slice_end = NULL;
+        wchar_t *slice_begin = nullptr, *slice_end = nullptr;
         int located = parse_util_locate_slice(in + idx, &slice_begin, &slice_end, false);
         if (located == 1) {
             size_t slice_begin_idx = slice_begin - in, slice_end_idx = slice_end - in;
@@ -537,6 +542,7 @@ static void color_string_internal(const wcstring &buffstr, highlight_spec_t base
     }
 
     enum { e_unquoted, e_single_quoted, e_double_quoted } mode = e_unquoted;
+    maybe_t<size_t> unclosed_quote_offset;
     int bracket_count = 0;
     for (size_t in_pos = 0; in_pos < buff_len; in_pos++) {
         const wchar_t c = buffstr.at(in_pos);
@@ -671,11 +677,13 @@ static void color_string_internal(const wcstring &buffstr, highlight_spec_t base
                         }
                         case L'\'': {
                             colors[in_pos] = highlight_role_t::quote;
+                            unclosed_quote_offset = in_pos;
                             mode = e_single_quoted;
                             break;
                         }
                         case L'\"': {
                             colors[in_pos] = highlight_role_t::quote;
+                            unclosed_quote_offset = in_pos;
                             mode = e_double_quoted;
                             break;
                         }
@@ -700,6 +708,7 @@ static void color_string_internal(const wcstring &buffstr, highlight_spec_t base
                         }
                     }
                 } else if (c == L'\'') {
+                    unclosed_quote_offset = none();
                     mode = e_unquoted;
                 }
                 break;
@@ -713,6 +722,7 @@ static void color_string_internal(const wcstring &buffstr, highlight_spec_t base
                 }
                 switch (c) {
                     case L'"': {
+                        unclosed_quote_offset = none();
                         mode = e_unquoted;
                         break;
                     }
@@ -743,6 +753,11 @@ static void color_string_internal(const wcstring &buffstr, highlight_spec_t base
             }
         }
     }
+
+    // Error on unclosed quotes.
+    if (unclosed_quote_offset) {
+        colors[*unclosed_quote_offset] = highlight_role_t::error;
+    }
 }
 
 /// Syntax highlighter helper.
@@ -759,7 +774,7 @@ class highlighter_t {
     // Working directory.
     const wcstring working_directory;
     // The resulting colors.
-    typedef std::vector<highlight_spec_t> color_array_t;
+    using color_array_t = std::vector<highlight_spec_t>;
     color_array_t color_array;
     // The parse tree of the buff.
     parse_node_tree_t parse_tree;
@@ -793,12 +808,14 @@ class highlighter_t {
           working_directory(std::move(wd)),
           color_array(str.size()) {
         // Parse the tree.
-        parse_tree_from_string(buff, parse_flag_continue_after_error | parse_flag_include_comments,
-                               &this->parse_tree, NULL);
+        parse_tree_from_string(buff,
+                               parse_flag_continue_after_error | parse_flag_include_comments |
+                                   parse_flag_accept_incomplete_tokens,
+                               &this->parse_tree, nullptr);
     }
 
     // Perform highlighting, returning an array of colors.
-    const color_array_t &highlight();
+    color_array_t highlight();
 };
 
 void highlighter_t::color_node(const parse_node_t &node, highlight_spec_t color) {
@@ -946,23 +963,24 @@ void highlighter_t::color_redirection(tnode_t<g::redirection> redirection_node) 
 
     if (redir_prim) {
         wcstring target;
-        const maybe_t<redirection_type_t> redirect_type =
-            redirection_type(redirection_node, this->buff, nullptr, &target);
+        const maybe_t<pipe_or_redir_t> redirect =
+            redirection_for_node(redirection_node, this->buff, &target);
 
         // We may get a missing redirection type if the redirection is invalid.
-        auto hl = redirect_type ? highlight_role_t::redirection : highlight_role_t::error;
+        auto hl = (redirect && redirect->is_valid()) ? highlight_role_t::redirection
+                                                     : highlight_role_t::error;
         this->color_node(redir_prim, hl);
 
         // Check if the argument contains a command substitution. If so, highlight it as a param
         // even though it's a command redirection, and don't try to do any other validation.
-        if (parse_util_locate_cmdsubst(target.c_str(), NULL, NULL, true) != 0) {
+        if (parse_util_locate_cmdsubst(target.c_str(), nullptr, nullptr, true) != 0) {
             this->color_argument(redir_target);
         } else {
             // No command substitution, so we can highlight the target file or fd. For example,
             // disallow redirections into a non-existent directory.
             bool target_is_valid = true;
 
-            if (!redirect_type) {
+            if (!redirect || !redirect->is_valid()) {
                 // not a valid redirection
                 target_is_valid = false;
             } else if (!this->io_ok) {
@@ -978,22 +996,26 @@ void highlighter_t::color_redirection(tnode_t<g::redirection> redirection_node) 
                 // redirections). Note that the target is now unescaped.
                 const wcstring target_path =
                     path_apply_working_directory(target, this->working_directory);
-                switch (*redirect_type) {
-                    case redirection_type_t::fd: {
-                        int fd = fish_wcstoi(target.c_str());
-                        target_is_valid = !errno && fd >= 0;
+                switch (redirect->mode) {
+                    case redirection_mode_t::fd: {
+                        if (target == L"-") {
+                            target_is_valid = true;
+                        } else {
+                            int fd = fish_wcstoi(target.c_str());
+                            target_is_valid = !errno && fd >= 0;
+                        }
                         break;
                     }
-                    case redirection_type_t::input: {
+                    case redirection_mode_t::input: {
                         // Input redirections must have a readable non-directory.
                         struct stat buf = {};
                         target_is_valid = !waccess(target_path, R_OK) &&
                                           !wstat(target_path, &buf) && !S_ISDIR(buf.st_mode);
                         break;
                     }
-                    case redirection_type_t::overwrite:
-                    case redirection_type_t::append:
-                    case redirection_type_t::noclob: {
+                    case redirection_mode_t::overwrite:
+                    case redirection_mode_t::append:
+                    case redirection_mode_t::noclob: {
                         // Test whether the file exists, and whether it's writable (possibly after
                         // creating it). access() returns failure if the file does not exist.
                         bool file_exists = false, file_is_writable = false;
@@ -1037,7 +1059,7 @@ void highlighter_t::color_redirection(tnode_t<g::redirection> redirection_node) 
                         // NOCLOB means that we must not overwrite files that exist.
                         target_is_valid =
                             file_is_writable &&
-                            !(file_exists && redirect_type == redirection_type_t::noclob);
+                            !(file_exists && redirect->mode == redirection_mode_t::noclob);
                         break;
                     }
                 }
@@ -1063,7 +1085,7 @@ void highlighter_t::color_children(const parse_node_t &parent, parse_token_type_
                                    highlight_spec_t color) {
     for (node_offset_t idx = 0; idx < parent.child_count; idx++) {
         const parse_node_t *child = this->parse_tree.get_child(parent, idx);
-        if (child != NULL && child->type == type) {
+        if (child != nullptr && child->type == type) {
             this->color_node(*child, color);
         }
     }
@@ -1097,13 +1119,13 @@ static bool command_is_valid(const wcstring &cmd, enum parse_statement_decoratio
     if (!is_valid && builtin_ok) is_valid = builtin_exists(cmd);
 
     // Functions
-    if (!is_valid && function_ok) is_valid = function_exists_no_autoload(cmd, vars);
+    if (!is_valid && function_ok) is_valid = function_exists_no_autoload(cmd);
 
     // Abbreviations
     if (!is_valid && abbreviation_ok) is_valid = expand_abbreviation(cmd, vars).has_value();
 
     // Regular commands
-    if (!is_valid && command_ok) is_valid = path_get_path(cmd, NULL, vars);
+    if (!is_valid && command_ok) is_valid = path_get_path(cmd, nullptr, vars);
 
     // Implicit cd
     if (!is_valid && implicit_cd_ok) {
@@ -1114,7 +1136,7 @@ static bool command_is_valid(const wcstring &cmd, enum parse_statement_decoratio
     return is_valid;
 }
 
-const highlighter_t::color_array_t &highlighter_t::highlight() {
+highlighter_t::color_array_t highlighter_t::highlight() {
     // If we are doing I/O, we must be in a background thread.
     if (io_ok) {
         ASSERT_IS_BACKGROUND_THREAD();
@@ -1176,6 +1198,12 @@ const highlighter_t::color_array_t &highlighter_t::highlight() {
                 this->color_node(node, highlight_role_t::operat);
                 break;
 
+            case symbol_variable_assignment: {
+                tnode_t<g::variable_assignment> variable_assignment = {&parse_tree, &node};
+                this->color_argument(variable_assignment.child<0>());
+                break;
+            }
+
             case parse_token_type_pipe:
             case parse_token_type_background:
             case parse_token_type_end:
@@ -1198,6 +1226,8 @@ const highlighter_t::color_array_t &highlighter_t::highlight() {
                 bool is_valid_cmd = false;
                 if (!this->io_ok) {
                     // We cannot check if the command is invalid, so just assume it's valid.
+                    is_valid_cmd = true;
+                } else if (variable_assignment_equals_pos(*cmd)) {
                     is_valid_cmd = true;
                 } else {
                     wcstring expanded_cmd;
@@ -1254,14 +1284,11 @@ const highlighter_t::color_array_t &highlighter_t::highlight() {
     }
 
     if (!this->io_ok || this->cursor_pos > this->buff.size()) {
-        return color_array;
+        return std::move(color_array);
     }
 
     // If the cursor is over an argument, and that argument is a valid path, underline it.
-    for (parse_node_tree_t::const_iterator iter = parse_tree.begin(); iter != parse_tree.end();
-         ++iter) {
-        const parse_node_t &node = *iter;
-
+    for (const auto &node : parse_tree) {
         // Must be an argument with source.
         if (node.type != symbol_argument || !node.has_source()) continue;
 
@@ -1278,7 +1305,26 @@ const highlighter_t::color_array_t &highlighter_t::highlight() {
         }
     }
 
-    return color_array;
+    return std::move(color_array);
+}
+
+/// Given a string and list of colors of the same size, return the string with ANSI escape sequences
+/// representing the colors.
+std::string colorize(const wcstring &text, const std::vector<highlight_spec_t> &colors) {
+    assert(colors.size() == text.size());
+    outputter_t outp;
+
+    highlight_spec_t last_color = highlight_role_t::normal;
+    for (size_t i = 0; i < text.size(); i++) {
+        highlight_spec_t color = colors.at(i);
+        if (color != last_color) {
+            outp.set_color(highlight_get_color(color, false), rgb_color_t::normal());
+            last_color = color;
+        }
+        outp.writech(text.at(i));
+    }
+    outp.set_color(rgb_color_t::normal(), rgb_color_t::normal());
+    return outp.contents();
 }
 
 void highlight_shell(const wcstring &buff, std::vector<highlight_spec_t> &color, size_t pos,
@@ -1371,7 +1417,7 @@ static void highlight_universal_internal(const wcstring &buffstr,
             wchar_t inc_char = c;
             int level = 0;
             bool match_found = false;
-            for (long i = pos; i >= 0 && (size_t)i < buffstr.size(); i += step) {
+            for (long i = pos; i >= 0 && static_cast<size_t>(i) < buffstr.size(); i += step) {
                 const wchar_t test_char = buffstr.at(i);
                 if (test_char == inc_char) level++;
                 if (test_char == dec_char) level--;

@@ -1,17 +1,18 @@
 // Functions for waiting for processes completed.
+#include "builtin_wait.h"
+
+#include <sys/wait.h>
+
 #include <algorithm>
 #include <vector>
 
 #include "builtin.h"
-#include "builtin_wait.h"
 #include "common.h"
 #include "parser.h"
 #include "proc.h"
 #include "signal.h"
 #include "wgetopt.h"
 #include "wutil.h"
-
-#include <sys/wait.h>
 
 /// Return the job id to which the process with pid belongs.
 /// If a specified process has already finished but the job hasn't, parser_t::job_get_from_pid()
@@ -59,10 +60,7 @@ static bool any_jobs_finished(size_t jobs_len, const parser_t &parser) {
             no_jobs_running = false;
         }
     }
-    if (no_jobs_running) {
-        return true;
-    }
-    return false;
+    return no_jobs_running;
 }
 
 static int wait_for_backgrounds(parser_t &parser, bool any_flag) {
@@ -145,7 +143,7 @@ static bool find_job_by_name(const wchar_t *proc, std::vector<job_id_t> &ids,
     bool found = false;
 
     for (const auto &j : parser.jobs()) {
-        if (j->command_is_empty()) continue;
+        if (j->command().empty()) continue;
 
         if (match_pid(j->command(), proc)) {
             if (!contains(ids, j->job_id)) {
@@ -182,12 +180,12 @@ int builtin_wait(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     bool any_flag = false;  // flag for -n option
 
     static const wchar_t *const short_options = L":n";
-    static const struct woption long_options[] = {{L"any", no_argument, NULL, 'n'},
-                                                  {NULL, 0, NULL, 0}};
+    static const struct woption long_options[] = {{L"any", no_argument, nullptr, 'n'},
+                                                  {nullptr, 0, nullptr, 0}};
 
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
         switch (opt) {
             case 'n':
                 any_flag = true;

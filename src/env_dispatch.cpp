@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <cwchar>
 
@@ -25,6 +26,7 @@
 #endif
 
 #include <assert.h>
+
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -45,6 +47,7 @@
 #include "input_common.h"
 #include "maybe.h"
 #include "output.h"
+#include "parser.h"
 #include "proc.h"
 #include "reader.h"
 #include "screen.h"
@@ -52,14 +55,6 @@
 
 #define DEFAULT_TERM1 "ansi"
 #define DEFAULT_TERM2 "dumb"
-
-/// Some configuration path environment variables.
-#define FISH_DATADIR_VAR L"__fish_data_dir"
-#define FISH_SYSCONFDIR_VAR L"__fish_sysconf_dir"
-#define FISH_HELPDIR_VAR L"__fish_help_dir"
-#define FISH_BIN_DIR L"__fish_bin_dir"
-#define FISH_CONFIG_DIR L"__fish_config_dir"
-#define FISH_USER_DATA_DIR L"__fish_user_data_dir"
 
 /// List of all locale environment variable names that might trigger (re)initializing the locale
 /// subsystem.
@@ -169,7 +164,7 @@ static void guess_emoji_width(const environment_t &vars) {
     double version = 0;
     if (auto version_var = vars.get(L"TERM_PROGRAM_VERSION")) {
         std::string narrow_version = wcs2string(version_var->as_string());
-        version = strtod(narrow_version.c_str(), NULL);
+        version = strtod(narrow_version.c_str(), nullptr);
     }
 
     if (term == L"Apple_Terminal" && version >= 400) {
@@ -210,8 +205,9 @@ static void universal_callback(env_stack_t *stack, const callback_data_t &cb) {
     const wchar_t *op = cb.is_erase() ? L"ERASE" : L"SET";
 
     env_dispatch_var_change(cb.key, *stack);
-    stack->mark_changed_exported();
-    event_fire(event_t::variable(cb.key, {L"VARIABLE", op, cb.key}));
+
+    // TODO: eliminate this principal_parser. Need to rationalize how multiple threads work here.
+    event_fire(parser_t::principal_parser(), event_t::variable(cb.key, {L"VARIABLE", op, cb.key}));
 }
 
 void env_universal_callbacks(env_stack_t *stack, const callback_data_list_t &callbacks) {
@@ -254,10 +250,6 @@ static void handle_complete_path_change(env_stack_t &vars) {
 
 static void handle_tz_change(const wcstring &var_name, env_stack_t &vars) {
     handle_timezone(var_name.c_str(), vars);
-}
-
-static void handle_magic_colon_var_change(const wcstring &var_name, env_stack_t &vars) {
-    fix_colon_delimited_var(var_name, vars);
 }
 
 static void handle_locale_change(const environment_t &vars) {
@@ -305,8 +297,6 @@ static std::unique_ptr<const var_dispatch_table_t> create_dispatch_table() {
         var_dispatch_table->add(var_name, handle_curses_change);
     }
 
-    var_dispatch_table->add(L"PATH", handle_magic_colon_var_change);
-    var_dispatch_table->add(L"CDPATH", handle_magic_colon_var_change);
     var_dispatch_table->add(L"fish_term256", handle_fish_term_change);
     var_dispatch_table->add(L"fish_term24bit", handle_fish_term_change);
     var_dispatch_table->add(L"fish_escape_delay_ms", update_wait_on_escape_ms);
@@ -332,6 +322,7 @@ static void run_inits(const environment_t &vars) {
     guess_emoji_width(vars);
     update_wait_on_escape_ms(vars);
     handle_read_limit_change(vars);
+    handle_fish_use_posix_spawn_change(vars);
 }
 
 /// Updates our idea of whether we support term256 and term24bit (see issue #10222).
@@ -358,7 +349,7 @@ static void update_fish_color_support(const environment_t &vars) {
         if (auto tp = vars.get(L"TERM_PROGRAM")) term_program = tp->as_string();
         if (auto tpv = vars.get(L"TERM_PROGRAM_VERSION")) {
             if (term_program == L"Apple_Terminal" &&
-                fish_wcstod(tpv->as_string().c_str(), NULL) > 299) {
+                fish_wcstod(tpv->as_string().c_str(), nullptr) > 299) {
                 // OS X Lion is version 299+, it has 256 color support (see github Wiki)
                 support_term256 = true;
                 debug(2, L"256 color support enabled for TERM=%ls on Terminal.app", term.c_str());
@@ -367,7 +358,7 @@ static void update_fish_color_support(const environment_t &vars) {
                 debug(2, L"256 color support enabled for TERM=%ls", term.c_str());
             }
         }
-    } else if (cur_term != NULL) {
+    } else if (cur_term != nullptr) {
         // See if terminfo happens to identify 256 colors
         support_term256 = (max_colors >= 256);
         debug(2, L"256 color support: %d colors per terminfo entry for %ls", max_colors,
@@ -406,7 +397,7 @@ static bool initialize_curses_using_fallback(const char *term) {
     if (is_interactive_session()) debug(1, _(L"Using fallback terminal type '%s'."), term);
 
     int err_ret;
-    if (setupterm((char *)term, STDOUT_FILENO, &err_ret) == OK) return true;
+    if (setupterm(const_cast<char *>(term), STDOUT_FILENO, &err_ret) == OK) return true;
     if (is_interactive_session()) {
         debug(1, _(L"Could not set up terminal using the fallback terminal type '%s'."), term);
     }
@@ -464,7 +455,7 @@ static void init_curses(const environment_t &vars) {
     }
 
     int err_ret;
-    if (setupterm(NULL, STDOUT_FILENO, &err_ret) == ERR) {
+    if (setupterm(nullptr, STDOUT_FILENO, &err_ret) == ERR) {
         auto term = vars.get(L"TERM");
         if (is_interactive_session()) {
             debug(1, _(L"Could not set up terminal."));
@@ -493,7 +484,7 @@ static void init_curses(const environment_t &vars) {
 static void init_locale(const environment_t &vars) {
     // We have to make a copy because the subsequent setlocale() call to change the locale will
     // invalidate the pointer from the this setlocale() call.
-    char *old_msg_locale = strdup(setlocale(LC_MESSAGES, NULL));
+    char *old_msg_locale = strdup(setlocale(LC_MESSAGES, nullptr));
 
     for (const auto &var_name : locale_variables) {
         const auto var = vars.get(var_name, ENV_EXPORT);
@@ -512,11 +503,11 @@ static void init_locale(const environment_t &vars) {
     fish_setlocale();
     FLOGF(env_locale, L"init_locale() setlocale(): '%s'", locale);
 
-    const char *new_msg_locale = setlocale(LC_MESSAGES, NULL);
+    const char *new_msg_locale = setlocale(LC_MESSAGES, nullptr);
     FLOGF(env_locale, L"old LC_MESSAGES locale: '%s'", old_msg_locale);
     FLOGF(env_locale, L"new LC_MESSAGES locale: '%s'", new_msg_locale);
 #ifdef HAVE__NL_MSG_CAT_CNTR
-    if (std::strcmp(old_msg_locale, new_msg_locale)) {
+    if (std::strcmp(old_msg_locale, new_msg_locale) != 0) {
         // Make change known to GNU gettext.
         extern int _nl_msg_cat_cntr;
         _nl_msg_cat_cntr++;

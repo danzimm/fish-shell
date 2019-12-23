@@ -8,11 +8,11 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <cstdint>
 #include <cstring>
 // We need the sys/file.h for the flock() declaration on Linux but not OS X.
 #include <sys/file.h>  // IWYU pragma: keep
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -34,6 +34,7 @@
 #include "flog.h"
 #include "global_safety.h"
 #include "history.h"
+#include "history_file.h"
 #include "io.h"
 #include "iothread.h"
 #include "lru.h"
@@ -76,50 +77,18 @@ static constexpr int max_save_tries = 1024;
 
 namespace {
 
-static size_t safe_strlen(const char *s) { return s ? std::strlen(s) : 0; }
-/// Helper class for certain output. This is basically a string that allows us to ensure we only
-/// flush at record boundaries, and avoids the copying of ostringstream. Have you ever tried to
-/// implement your own streambuf? Total insanity.
-class history_output_buffer_t {
-    std::vector<char> buffer;
-
-   public:
-    /// Add a bit more to HISTORY_OUTPUT_BUFFER_SIZE because we flush once we've exceeded that size.
-    explicit history_output_buffer_t(size_t reserve_amt = HISTORY_OUTPUT_BUFFER_SIZE + 128) {
-        buffer.reserve(reserve_amt);
+/// If the size of \p buffer is at least \p min_size, output the contents of a string \p str to \p
+/// fd, and clear the string. \return 0 on success, an error code on failure.
+static int flush_to_fd(std::string *buffer, int fd, size_t min_size) {
+    if (buffer->empty() || buffer->size() < min_size) {
+        return 0;
     }
-
-    /// Append one or more strings.
-    void append(const char *s1, const char *s2 = NULL, const char *s3 = NULL) {
-        constexpr size_t ptr_count = 3;
-        const char *ptrs[ptr_count] = {s1, s2, s3};
-        size_t lengths[ptr_count] = {safe_strlen(s1), safe_strlen(s2), safe_strlen(s3)};
-
-        // Determine the additional size we'll need.
-        size_t additional_length = std::accumulate(std::begin(lengths), std::end(lengths), 0);
-        buffer.reserve(buffer.size() + additional_length);
-
-        // Append
-        for (size_t i = 0; i < ptr_count; i++) {
-            if (lengths[i] > 0) {
-                buffer.insert(buffer.end(), ptrs[i], ptrs[i] + lengths[i]);
-            }
-        }
+    if (write_loop(fd, buffer->data(), buffer->size()) < 0) {
+        return errno;
     }
-
-    /// Output to a given fd, resetting our buffer. Returns true on success, false on error.
-    bool flush_to_fd(int fd) {
-        if (buffer.empty()) {
-            return true;
-        }
-        bool result = write_loop(fd, &buffer.at(0), buffer.size()) >= 0;
-        buffer.clear();
-        return result;
-    }
-
-    /// Return how much data we've accumulated.
-    size_t output_size() const { return buffer.size(); }
-};
+    buffer->clear();
+    return 0;
+}
 
 class time_profiler_t {
     const char *what;
@@ -133,7 +102,7 @@ class time_profiler_t {
 
     ~time_profiler_t() {
         double end = timef();
-        debug(5, "%s: %.0f ms", what, (end - start) * 1000);
+        FLOGF(profile_history, "%s: %.0f ms", what, (end - start) * 1000);
     }
 };
 
@@ -159,382 +128,32 @@ static bool history_file_lock(int fd, int lock_type) {
     return retval != -1;
 }
 
-// History file types.
-enum history_file_type_t { history_type_fish_2_0, history_type_fish_1_x };
+}  // anonymous namespace
 
-/// Try to infer the history file type based on inspecting the data.
-static maybe_t<history_file_type_t> infer_file_type(const void *data, size_t len) {
-    maybe_t<history_file_type_t> result{};
-    if (len > 0) {  // old fish started with a #
-        if (static_cast<const char *>(data)[0] == '#') {
-            result = history_type_fish_1_x;
-        } else {  // assume new fish
-            result = history_type_fish_2_0;
-        }
-    }
-    return result;
-}
-
-/// Our LRU cache is used for restricting the amount of history we have, and limiting how long we
-/// order it.
-class history_lru_item_t {
+class history_lru_cache_t : public lru_cache_t<history_lru_cache_t, history_item_t> {
    public:
-    wcstring text;
-    time_t timestamp;
-    path_list_t required_paths;
-    explicit history_lru_item_t(const history_item_t &item)
-        : text(item.str()),
-          timestamp(item.timestamp()),
-          required_paths(item.get_required_paths()) {}
-};
-
-class history_lru_cache_t : public lru_cache_t<history_lru_cache_t, history_lru_item_t> {
-    typedef lru_cache_t<history_lru_cache_t, history_lru_item_t> super;
-
-   public:
-    using super::super;
+    explicit history_lru_cache_t(size_t max)
+        : lru_cache_t<history_lru_cache_t, history_item_t>(max) {}
 
     /// Function to add a history item.
-    void add_item(const history_item_t &item) {
+    void add_item(history_item_t item) {
         // Skip empty items.
         if (item.empty()) return;
 
         // See if it's in the cache. If it is, update the timestamp. If not, we create a new node
         // and add it. Note that calling get_node promotes the node to the front.
         wcstring key = item.str();
-        history_lru_item_t *node = this->get(key);
-        if (node == NULL) {
-            this->insert(std::move(key), history_lru_item_t(item));
+        history_item_t *node = this->get(key);
+        if (node == nullptr) {
+            this->insert(std::move(key), std::move(item));
         } else {
-            node->timestamp = std::max(node->timestamp, item.timestamp());
+            node->creation_timestamp = std::max(node->timestamp(), item.timestamp());
             // What to do about paths here? Let's just ignore them.
         }
     }
 };
 
-}  // anonymous namespace
-
-// history_file_contents_t holds the read-only contents of a file.
-class history_file_contents_t {
-    // The memory mapped pointer.
-    void *start_;
-
-    // The mapped length.
-    size_t length_;
-
-    // The type of the mapped file.
-    history_file_type_t type_;
-
-    // Private constructor; use the static create() function.
-    history_file_contents_t(void *mmap_start, size_t mmap_length, history_file_type_t type)
-        : start_(mmap_start), length_(mmap_length), type_(type) {
-        assert(mmap_start != MAP_FAILED && "Invalid mmap address");
-    }
-
-    history_file_contents_t(history_file_contents_t &&) = delete;
-    void operator=(history_file_contents_t &&) = delete;
-
-    // Check if we should mmap the fd.
-    // Don't try mmap() on non-local filesystems.
-    static bool should_mmap(int fd) {
-        if (history_t::never_mmap) return false;
-
-        // mmap only if we are known not-remote (return is 0).
-        int ret = fd_check_is_remote(fd);
-        return ret == 0;
-    }
-
-    // Read up to len bytes from fd into address, zeroing the rest.
-    // Return true on success, false on failure.
-    static bool read_from_fd(int fd, void *address, size_t len) {
-        size_t remaining = len;
-        char *ptr = static_cast<char *>(address);
-        while (remaining > 0) {
-            ssize_t amt = read(fd, ptr, remaining);
-            if (amt < 0) {
-                if (errno != EINTR) {
-                    return false;
-                }
-            } else if (amt == 0) {
-                break;
-            } else {
-                remaining -= amt;
-                ptr += amt;
-            }
-        }
-        std::memset(ptr, 0, remaining);
-        return true;
-    }
-
-   public:
-    // Access the address at a given offset.
-    const char *address_at(size_t offset) const {
-        assert(offset <= length_ && "Invalid offset");
-        auto base = static_cast<const char *>(start_);
-        return base + offset;
-    }
-
-    // Return a pointer to the beginning.
-    const char *begin() const { return address_at(0); }
-
-    // Return a pointer to one-past-the-end.
-    const char *end() const { return address_at(length_); }
-
-    // Get the size of the contents.
-    size_t length() const { return length_; }
-
-    // Get the file type.
-    history_file_type_t type() const { return type_; }
-
-    ~history_file_contents_t() { munmap(start_, length_); }
-
-    // Construct a history file contents from a file descriptor. The file descriptor is not closed.
-    static std::unique_ptr<history_file_contents_t> create(int fd) {
-        // Check that the file is seekable, and its size.
-        off_t len = lseek(fd, 0, SEEK_END);
-        if (len <= 0 || static_cast<unsigned long>(len) >= SIZE_MAX) return nullptr;
-        if (lseek(fd, 0, SEEK_SET) != 0) return nullptr;
-
-        // Read the file, possibly ussing mmap.
-        void *mmap_start = nullptr;
-        if (should_mmap(fd)) {
-            // We feel confident to map the file directly. Note this is still risky: if another
-            // process truncates the file we risk SIGBUS.
-            mmap_start = mmap(0, size_t(len), PROT_READ, MAP_PRIVATE, fd, 0);
-            if (mmap_start == MAP_FAILED) return nullptr;
-        } else {
-            // We don't want to map the file. mmap some private memory and then read into it. We use
-            // mmap instead of malloc so that the destructor can always munmap().
-            mmap_start =
-#ifdef MAP_ANON
-                mmap(0, size_t(len), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-#else
-                mmap(0, size_t(len), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-#endif
-            if (mmap_start == MAP_FAILED) return nullptr;
-            if (!read_from_fd(fd, mmap_start, len)) return nullptr;
-        }
-
-        // Check the file type.
-        auto mtype = infer_file_type(mmap_start, len);
-        if (!mtype) return nullptr;
-
-        return std::unique_ptr<history_file_contents_t>(
-            new history_file_contents_t(mmap_start, len, *mtype));
-    }
-};
-
-/// The set of all histories.
-static owning_lock<std::map<wcstring, std::unique_ptr<history_t>>> s_histories;
-
-static wcstring history_filename(const wcstring &name, const wcstring &suffix);
-
-/// Replaces newlines with a literal backslash followed by an n, and replaces backslashes with two
-/// backslashes.
-static void escape_yaml(std::string *str);
-
-/// Inverse of escape_yaml.
-static void unescape_yaml(std::string *str);
-
-/// Read one line, stripping off any newline, and updating cursor. Note that our input string is NOT
-/// null terminated; it's just a memory mapped file.
-static size_t read_line(const char *base, size_t cursor, size_t len, std::string &result) {
-    // Locate the newline.
-    assert(cursor <= len);
-    const char *start = base + cursor;
-    const char *a_newline = (char *)std::memchr(start, '\n', len - cursor);
-    if (a_newline != NULL) {  // we found a newline
-        result.assign(start, a_newline - start);
-        // Return the amount to advance the cursor; skip over the newline.
-        return a_newline - start + 1;
-    }
-
-    // We ran off the end.
-    result.clear();
-    return len - cursor;
-}
-
-/// Trims leading spaces in the given string, returning how many there were.
-static size_t trim_leading_spaces(std::string &str) {
-    size_t i = 0, max = str.size();
-    while (i < max && str[i] == ' ') i++;
-    str.erase(0, i);
-    return i;
-}
-
-static bool extract_prefix_and_unescape_yaml(std::string *key, std::string *value,
-                                             const std::string &line) {
-    size_t where = line.find(':');
-    if (where != std::string::npos) {
-        key->assign(line, 0, where);
-
-        // Skip a space after the : if necessary.
-        size_t val_start = where + 1;
-        if (val_start < line.size() && line.at(val_start) == ' ') val_start++;
-        value->assign(line, val_start, line.size() - val_start);
-
-        unescape_yaml(key);
-        unescape_yaml(value);
-    }
-    return where != std::string::npos;
-}
-
-/// Remove backslashes from all newlines. This makes a string from the history file better formated
-/// for on screen display.
-static wcstring history_unescape_newlines_fish_1_x(const wcstring &in_str) {
-    wcstring out;
-    for (const wchar_t *in = in_str.c_str(); *in; in++) {
-        if (*in == L'\\') {
-            if (*(in + 1) != L'\n') {
-                out.push_back(*in);
-            }
-        } else {
-            out.push_back(*in);
-        }
-    }
-    return out;
-}
-
-/// Decode an item via the fish 1.x format. Adapted from fish 1.x's item_get().
-static history_item_t decode_item_fish_1_x(const char *begin, size_t length) {
-    const char *end = begin + length;
-    const char *pos = begin;
-    wcstring out;
-    bool was_backslash = false;
-    bool first_char = true;
-    bool timestamp_mode = false;
-    time_t timestamp = 0;
-
-    while (1) {
-        wchar_t c;
-        size_t res;
-        mbstate_t state = {};
-
-        if (MB_CUR_MAX == 1) {  // single-byte locale
-            c = (unsigned char)*pos;
-            res = 1;
-        } else {
-            res = std::mbrtowc(&c, pos, end - pos, &state);
-        }
-
-        if (res == (size_t)-1) {
-            pos++;
-            continue;
-        } else if (res == (size_t)-2) {
-            break;
-        } else if (res == (size_t)0) {
-            pos++;
-            continue;
-        }
-        pos += res;
-
-        if (c == L'\n') {
-            if (timestamp_mode) {
-                const wchar_t *time_string = out.c_str();
-                while (*time_string && !iswdigit(*time_string)) time_string++;
-
-                if (*time_string) {
-                    time_t tm = (time_t)fish_wcstol(time_string);
-                    if (!errno && tm >= 0) {
-                        timestamp = tm;
-                    }
-                }
-
-                out.clear();
-                timestamp_mode = false;
-                continue;
-            }
-            if (!was_backslash) break;
-        }
-
-        if (first_char) {
-            first_char = false;
-            if (c == L'#') timestamp_mode = true;
-        }
-
-        out.push_back(c);
-        was_backslash = (c == L'\\') && !was_backslash;
-    }
-
-    out = history_unescape_newlines_fish_1_x(out);
-    return history_item_t(out, timestamp);
-}
-
-/// Decode an item via the fish 2.0 format.
-static history_item_t decode_item_fish_2_0(const char *base, size_t len) {
-    wcstring cmd;
-    time_t when = 0;
-    path_list_t paths;
-
-    size_t indent = 0, cursor = 0;
-    std::string key, value, line;
-
-    // Read the "- cmd:" line.
-    size_t advance = read_line(base, cursor, len, line);
-    trim_leading_spaces(line);
-    if (!extract_prefix_and_unescape_yaml(&key, &value, line) || key != "- cmd") {
-        goto done;  //!OCLINT(goto is the cleanest way to handle bad input)
-    }
-
-    cursor += advance;
-    cmd = str2wcstring(value);
-
-    // Read the remaining lines.
-    for (;;) {
-        size_t advance = read_line(base, cursor, len, line);
-
-        size_t this_indent = trim_leading_spaces(line);
-        if (indent == 0) indent = this_indent;
-
-        if (this_indent == 0 || indent != this_indent) break;
-
-        if (!extract_prefix_and_unescape_yaml(&key, &value, line)) break;
-
-        // We are definitely going to consume this line.
-        cursor += advance;
-
-        if (key == "when") {
-            // Parse an int from the timestamp. Should this fail, strtol returns 0; that's
-            // acceptable.
-            char *end = NULL;
-            long tmp = strtol(value.c_str(), &end, 0);
-            when = tmp;
-        } else if (key == "paths") {
-            // Read lines starting with " - " until we can't read any more.
-            for (;;) {
-                size_t advance = read_line(base, cursor, len, line);
-                if (trim_leading_spaces(line) <= indent) break;
-
-                if (std::strncmp(line.c_str(), "- ", 2)) break;
-
-                // We're going to consume this line.
-                cursor += advance;
-
-                // Skip the leading dash-space and then store this path it.
-                line.erase(0, 2);
-                unescape_yaml(&line);
-                paths.push_back(str2wcstring(line));
-            }
-        }
-    }
-
-done:
-    history_item_t result(cmd, when);
-    result.set_required_paths(paths);
-    return result;
-}
-
-static history_item_t decode_item(const history_file_contents_t &contents, size_t offset) {
-    const char *base = contents.address_at(offset);
-    size_t len = contents.length() - offset;
-    switch (contents.type()) {
-        case history_type_fish_2_0:
-            return decode_item_fish_2_0(base, len);
-        case history_type_fish_1_x:
-            return decode_item_fish_1_x(base, len);
-    }
-    return history_item_t(L"");
-}
+static wcstring history_filename(const wcstring &session_id, const wcstring &suffix);
 
 /// We can merge two items if they are the same command. We use the more recent timestamp, more
 /// recent identifier, and the longer list of required paths.
@@ -553,284 +172,187 @@ bool history_item_t::merge(const history_item_t &item) {
     return result;
 }
 
-history_item_t::history_item_t(const wcstring &str, time_t when, history_identifier_t ident)
-    : creation_timestamp(when), identifier(ident) {
-    contents = trim(str);
-    contents_lower.reserve(contents.size());
-    for (const auto &c : contents) {
-        contents_lower.push_back(towlower(c));
-    }
-}
+history_item_t::history_item_t(wcstring str, time_t when, history_identifier_t ident)
+    : contents(trim(std::move(str))), creation_timestamp(when), identifier(ident) {}
 
 bool history_item_t::matches_search(const wcstring &term, enum history_search_type_t type,
                                     bool case_sensitive) const {
     // Note that 'term' has already been lowercased when constructing the
     // search object if we're doing a case insensitive search.
+    wcstring contents_lower;
+    if (!case_sensitive) {
+        contents_lower = wcstolower(contents);
+    }
     const wcstring &content_to_match = case_sensitive ? contents : contents_lower;
 
     switch (type) {
-        case HISTORY_SEARCH_TYPE_EXACT: {
+        case history_search_type_t::exact: {
             return term == content_to_match;
         }
-        case HISTORY_SEARCH_TYPE_CONTAINS: {
+        case history_search_type_t::contains: {
             return content_to_match.find(term) != wcstring::npos;
         }
-        case HISTORY_SEARCH_TYPE_PREFIX: {
+        case history_search_type_t::prefix: {
             return string_prefixes_string(term, content_to_match);
         }
-        case HISTORY_SEARCH_TYPE_CONTAINS_GLOB: {
+        case history_search_type_t::contains_glob: {
             wcstring wcpattern1 = parse_util_unescape_wildcards(term);
             if (wcpattern1.front() != ANY_STRING) wcpattern1.insert(0, 1, ANY_STRING);
             if (wcpattern1.back() != ANY_STRING) wcpattern1.push_back(ANY_STRING);
             return wildcard_match(content_to_match, wcpattern1);
         }
-        case HISTORY_SEARCH_TYPE_PREFIX_GLOB: {
+        case history_search_type_t::prefix_glob: {
             wcstring wcpattern2 = parse_util_unescape_wildcards(term);
             if (wcpattern2.back() != ANY_STRING) wcpattern2.push_back(ANY_STRING);
             return wildcard_match(content_to_match, wcpattern2);
+        }
+        case history_search_type_t::match_everything: {
+            return true;
         }
     }
     DIE("unexpected history_search_type_t value");
 }
 
-/// Append our YAML history format to the provided vector at the given offset, updating the offset.
-static void append_yaml_to_buffer(const wcstring &wcmd, time_t timestamp,
-                                  const path_list_t &required_paths,
-                                  history_output_buffer_t *buffer) {
-    std::string cmd = wcs2string(wcmd);
-    escape_yaml(&cmd);
-    buffer->append("- cmd: ", cmd.c_str(), "\n");
-    buffer->append("  when: ", std::to_string(timestamp).c_str(), "\n");
+struct history_impl_t {
+    // Privately add an item. If pending, the item will not be returned by history searches until a
+    // call to resolve_pending.
+    void add(const history_item_t &item, bool pending = false, bool do_save = true);
 
-    if (!required_paths.empty()) {
-        buffer->append("  paths:\n");
+    // Internal function.
+    void clear_file_state();
 
-        for (auto const &wpath : required_paths) {
-            std::string path = wcs2string(wpath);
-            escape_yaml(&path);
-            buffer->append("    - ", path.c_str(), "\n");
-        }
-    }
-}
+    // The name of this list. Used for picking a suitable filename and for switching modes.
+    const wcstring name;
 
-/// Parse a timestamp line that looks like this: spaces, "when:", spaces, timestamp, newline
-/// The string is NOT null terminated; however we do know it contains a newline, so stop when we
-/// reach it.
-static bool parse_timestamp(const char *str, time_t *out_when) {
-    const char *cursor = str;
-    // Advance past spaces.
-    while (*cursor == ' ') cursor++;
+    // New items. Note that these are NOT discarded on save. We need to keep these around so we can
+    // distinguish between items in our history and items in the history of other shells that were
+    // started after we were started.
+    history_item_list_t new_items;
 
-    // Look for "when:".
-    size_t when_len = 5;
-    if (std::strncmp(cursor, "when:", when_len) != 0) return false;
-    cursor += when_len;
+    // The index of the first new item that we have not yet written.
+    size_t first_unwritten_new_item_index{0};
 
-    // Advance past spaces.
-    while (*cursor == ' ') cursor++;
+    // Whether we have a pending item. If so, the most recently added item is ignored by
+    // item_at_index.
+    bool has_pending_item{false};
 
-    // Try to parse a timestamp.
-    long timestamp = 0;
-    if (isdigit(*cursor) && (timestamp = strtol(cursor, NULL, 0)) > 0) {
-        *out_when = (time_t)timestamp;
-        return true;
-    }
-    return false;
-}
+    // Whether we should disable saving to the file for a time.
+    uint32_t disable_automatic_save_counter{0};
 
-/// Returns a pointer to the start of the next line, or NULL. The next line must itself end with a
-/// newline. Note that the string is not null terminated.
-static const char *next_line(const char *start, size_t length) {
-    // Handle the hopeless case.
-    if (length < 1) return NULL;
+    // Deleted item contents.
+    std::unordered_set<wcstring> deleted_items{};
 
-    // Get a pointer to the end, that we must not pass.
-    const char *const end = start + length;
+    // The buffer containing the history file contents.
+    std::unique_ptr<history_file_contents_t> file_contents{};
 
-    // Skip past the next newline.
-    const char *nextline = (const char *)std::memchr(start, '\n', length);
-    if (!nextline || nextline >= end) {
-        return NULL;
-    }
-    // Skip past the newline character itself.
-    if (++nextline >= end) {
-        return NULL;
-    }
+    // The file ID of the history file.
+    file_id_t history_file_id = kInvalidFileID;
 
-    // Make sure this new line is itself "newline terminated". If it's not, return NULL.
-    const char *next_newline = (const char *)std::memchr(nextline, '\n', end - nextline);
-    if (!next_newline) {
-        return NULL;
-    }
+    // The boundary timestamp distinguishes old items from new items. Items whose timestamps are <=
+    // the boundary are considered "old". Items whose timestemps are > the boundary are new, and are
+    // ignored by this instance (unless they came from this instance). The timestamp may be adjusted
+    // by incorporate_external_changes().
+    time_t boundary_timestamp{time(nullptr)};
 
-    return nextline;
-}
+    // How many items we add until the next vacuum. Initially a random value.
+    int countdown_to_vacuum{-1};
 
-/// Support for iteratively locating the offsets of history items.
-/// Pass the file contents and a pointer to a cursor size_t, initially 0.
-/// If custoff_timestamp is nonzero, skip items created at or after that timestamp.
-/// Returns (size_t)-1 when done.
-static size_t offset_of_next_item_fish_2_0(const history_file_contents_t &contents,
-                                           size_t *inout_cursor, time_t cutoff_timestamp) {
-    size_t cursor = *inout_cursor;
-    size_t result = size_t(-1);
-    const size_t length = contents.length();
-    const char *const begin = contents.begin();
-    const char *const end = contents.end();
-    while (cursor < length) {
-        const char *line_start = contents.address_at(cursor);
+    // Whether we've loaded old items.
+    bool loaded_old{false};
 
-        // Advance the cursor to the next line.
-        const char *a_newline = (const char *)std::memchr(line_start, '\n', length - cursor);
-        if (a_newline == NULL) break;
+    // List of old items, as offsets into out mmap data.
+    std::deque<size_t> old_item_offsets{};
 
-        // Advance the cursor past this line. +1 is for the newline.
-        cursor = a_newline - begin + 1;
+    // Figure out the offsets of our file contents.
+    void populate_from_file_contents();
 
-        // Skip lines with a leading space, since these are in the interior of one of our items.
-        if (line_start[0] == ' ') continue;
+    // Loads old items if necessary.
+    void load_old_if_needed();
 
-        // Skip very short lines to make one of the checks below easier.
-        if (a_newline - line_start < 3) continue;
+    // Deletes duplicates in new_items.
+    void compact_new_items();
 
-        // Try to be a little YAML compatible. Skip lines with leading %, ---, or ...
-        if (!std::memcmp(line_start, "%", 1) || !std::memcmp(line_start, "---", 3) ||
-            !std::memcmp(line_start, "...", 3))
-            continue;
+    // Attempts to rewrite the existing file to a target temporary file
+    // Returns false on error, true on success
+    bool rewrite_to_temporary_file(int existing_fd, int dst_fd) const;
 
-        // Hackish: fish 1.x rewriting a fish 2.0 history file can produce lines with lots of
-        // leading "- cmd: - cmd: - cmd:". Trim all but one leading "- cmd:".
-        const char *double_cmd = "- cmd: - cmd: ";
-        const size_t double_cmd_len = std::strlen(double_cmd);
-        while ((size_t)(a_newline - line_start) > double_cmd_len &&
-               !std::memcmp(line_start, double_cmd, double_cmd_len)) {
-            // Skip over just one of the - cmd. In the end there will be just one left.
-            line_start += std::strlen("- cmd: ");
-        }
+    // Saves history by rewriting the file.
+    bool save_internal_via_rewrite();
 
-        // Hackish: fish 1.x rewriting a fish 2.0 history file can produce commands like "when:
-        // 123456". Ignore those.
-        const char *cmd_when = "- cmd:    when:";
-        const size_t cmd_when_len = std::strlen(cmd_when);
-        if ((size_t)(a_newline - line_start) >= cmd_when_len &&
-            !std::memcmp(line_start, cmd_when, cmd_when_len)) {
-            continue;
-        }
+    // Saves history by appending to the file.
+    bool save_internal_via_appending();
 
-        // At this point, we know line_start is at the beginning of an item. But maybe we want to
-        // skip this item because of timestamps. A 0 cutoff means we don't care; if we do care, then
-        // try parsing out a timestamp.
-        if (cutoff_timestamp != 0) {
-            // Hackish fast way to skip items created after our timestamp. This is the mechanism by
-            // which we avoid "seeing" commands from other sessions that started after we started.
-            // We try hard to ensure that our items are sorted by their timestamps, so in theory we
-            // could just break, but I don't think that works well if (for example) the clock
-            // changes. So we'll read all subsequent items.
-            // Walk over lines that we think are interior. These lines are not null terminated, but
-            // are guaranteed to contain a newline.
-            bool has_timestamp = false;
-            time_t timestamp = 0;
-            const char *interior_line;
+    // Saves history.
+    void save(bool vacuum = false);
 
-            for (interior_line = next_line(line_start, end - line_start);
-                 interior_line != NULL && !has_timestamp;
-                 interior_line = next_line(interior_line, end - interior_line)) {
-                // If the first character is not a space, it's not an interior line, so we're done.
-                if (interior_line[0] != ' ') break;
+    // Saves history unless doing so is disabled.
+    void save_unless_disabled();
 
-                // Hackish optimization: since we just stepped over some interior line, update the
-                // cursor so we don't have to look at these lines next time.
-                cursor = interior_line - begin;
+    explicit history_impl_t(wcstring name) : name(std::move(name)) {}
+    history_impl_t(history_impl_t &&) = default;
+    ~history_impl_t() = default;
 
-                // Try parsing a timestamp from this line. If we succeed, the loop will break.
-                has_timestamp = parse_timestamp(interior_line, &timestamp);
-            }
+    /// Returns whether this is using the default name.
+    bool is_default() const;
 
-            // Skip this item if the timestamp is past our cutoff.
-            if (has_timestamp && timestamp > cutoff_timestamp) {
-                continue;
-            }
-        }
+    // Determines whether the history is empty. Unfortunately this cannot be const, since it may
+    // require populating the history.
+    bool is_empty();
 
-        // We made it through the gauntlet.
-        result = line_start - begin;
-        break;  //!OCLINT(avoid branching statement as last in loop)
-    }
+    // Add a new history item to the end. If pending is set, the item will not be returned by
+    // item_at_index until a call to resolve_pending(). Pending items are tracked with an offset
+    // into the array of new items, so adding a non-pending item has the effect of resolving all
+    // pending items.
+    void add(const wcstring &str, history_identifier_t ident = 0, bool pending = false,
+             bool save = true);
 
-    *inout_cursor = cursor;
-    return result;
-}
+    // Remove a history item.
+    void remove(const wcstring &str);
 
-/// Same as offset_of_next_item_fish_2_0, but for fish 1.x (pre fishfish).
-/// Adapted from history_populate_from_mmap in history.c
-static size_t offset_of_next_item_fish_1_x(const char *begin, size_t mmap_length,
-                                           size_t *inout_cursor) {
-    if (mmap_length == 0 || *inout_cursor >= mmap_length) return (size_t)-1;
+    // Add a new pending history item to the end, and then begin file detection on the items to
+    // determine which arguments are paths
+    void add_pending_with_file_detection(const wcstring &str, const wcstring &working_dir_slash);
 
-    const char *end = begin + mmap_length;
-    const char *pos;
-    bool ignore_newline = false;
-    bool do_push = true;
-    bool all_done = false;
-    size_t result = *inout_cursor;
+    // Resolves any pending history items, so that they may be returned in history searches.
+    void resolve_pending();
 
-    for (pos = begin + *inout_cursor; pos < end && !all_done; pos++) {
-        if (do_push) {
-            ignore_newline = (*pos == '#');
-            do_push = false;
-        }
+    // Enable / disable automatic saving. Main thread only!
+    void disable_automatic_saving();
+    void enable_automatic_saving();
 
-        if (*pos == '\\') {
-            pos++;
-        } else if (*pos == '\n') {
-            if (!ignore_newline) {
-                // pos will be left pointing just after this newline, because of the ++ in the loop.
-                all_done = true;
-            }
-            ignore_newline = false;
-        }
-    }
+    // Irreversibly clears history.
+    void clear();
 
-    *inout_cursor = (pos - begin);
-    return result;
-}
+    // Populates from older location ()in config path, rather than data path).
+    void populate_from_config_path();
 
-/// Returns the offset of the next item based on the given history type, or -1.
-static size_t offset_of_next_item(const history_file_contents_t &contents, size_t *inout_cursor,
-                                  time_t cutoff_timestamp) {
-    switch (contents.type()) {
-        case history_type_fish_2_0:
-            return offset_of_next_item_fish_2_0(contents, inout_cursor, cutoff_timestamp);
-            ;
-        case history_type_fish_1_x:
-            return offset_of_next_item_fish_1_x(contents.begin(), contents.length(), inout_cursor);
-    }
-    return size_t(-1);
-}
+    // Populates from a bash history file.
+    void populate_from_bash(FILE *stream);
 
-history_t &history_t::history_with_name(const wcstring &name) {
-    // Return a history for the given name, creating it if necessary
-    // Note that histories are currently never deleted, so we can return a reference to them without
-    // using something like shared_ptr
-    auto hs = s_histories.acquire();
-    std::unique_ptr<history_t> &hist = (*hs)[name];
-    if (!hist) {
-        hist = make_unique<history_t>(name);
-    }
-    return *hist;
-}
+    // Incorporates the history of other shells into this history.
+    void incorporate_external_changes();
 
-history_t::history_t(wcstring pname)
-    : name(std::move(pname)), history_file_id(kInvalidFileID), boundary_timestamp(time(NULL)) {}
+    // Gets all the history into a list. This is intended for the $history environment variable.
+    // This may be long!
+    void get_history(wcstring_list_t &result);
 
-history_t::~history_t() = default;
+    // Let indexes be a list of one-based indexes into the history, matching the interpretation of
+    // $history. That is, $history[1] is the most recently executed command. Values less than one
+    // are skipped. Return a mapping from index to history item text.
+    std::unordered_map<long, wcstring> items_at_indexes(const std::vector<long> &idxs);
 
-bool history_t::chaos_mode = false;
-bool history_t::never_mmap = false;
+    // Sets the valid file paths for the history item with the given identifier.
+    void set_valid_file_paths(const wcstring_list_t &valid_file_paths, history_identifier_t ident);
 
-void history_t::add(const history_item_t &item, bool pending) {
-    scoped_lock locker(lock);
+    // Return the specified history at the specified index. 0 is the index of the current
+    // commandline. (So the most recent item is at index 1.)
+    history_item_t item_at_index(size_t idx);
 
+    // Return the number of history entries.
+    size_t size();
+};
+
+void history_impl_t::add(const history_item_t &item, bool pending, bool do_save) {
     // Try merging with the last item.
     if (!new_items.empty() && new_items.back().merge(item)) {
         // We merged, so we don't have to add anything. Maybe this item was pending, but it just got
@@ -840,14 +362,11 @@ void history_t::add(const history_item_t &item, bool pending) {
         // We have to add a new item.
         new_items.push_back(item);
         this->has_pending_item = pending;
-        save_internal_unless_disabled();
+        if (do_save) save_unless_disabled();
     }
 }
 
-void history_t::save_internal_unless_disabled() {
-    // This must be called while locked.
-    ASSERT_IS_LOCKED(lock);
-
+void history_impl_t::save_unless_disabled() {
     // Respect disable_automatic_save_counter.
     if (disable_automatic_save_counter > 0) {
         return;
@@ -859,7 +378,7 @@ void history_t::save_internal_unless_disabled() {
     // the counter.
     const int kVacuumFrequency = 25;
     if (countdown_to_vacuum < 0) {
-        unsigned int seed = (unsigned int)time(NULL);
+        unsigned int seed = static_cast<unsigned int>(time(nullptr));
         // Generate a number in the range [0, kVacuumFrequency).
         countdown_to_vacuum = rand_r(&seed) / (RAND_MAX / kVacuumFrequency + 1);
     }
@@ -872,17 +391,18 @@ void history_t::save_internal_unless_disabled() {
     }
 
     // This might be a good candidate for moving to a background thread.
-    time_profiler_t profiler(vacuum ? "save_internal vacuum"       //!OCLINT(unused var)
-                                    : "save_internal no vacuum");  //!OCLINT(side-effect)
-    this->save_internal(vacuum);
+    time_profiler_t profiler(vacuum ? "save vacuum"       //!OCLINT(unused var)
+                                    : "save no vacuum");  //!OCLINT(side-effect)
+    this->save(vacuum);
 
     // Update our countdown.
     assert(countdown_to_vacuum > 0);
     countdown_to_vacuum--;
 }
 
-void history_t::add(const wcstring &str, history_identifier_t ident, bool pending) {
-    time_t when = time(NULL);
+void history_impl_t::add(const wcstring &str, history_identifier_t ident, bool pending,
+                         bool do_save) {
+    time_t when = time(nullptr);
     // Big hack: do not allow timestamps equal to our boundary date. This is because we include
     // items whose timestamps are equal to our boundary when reading old history, so we can catch
     // "just closed" items. But this means that we may interpret our own items, that we just wrote,
@@ -891,12 +411,12 @@ void history_t::add(const wcstring &str, history_identifier_t ident, bool pendin
         when++;
     }
 
-    this->add(history_item_t(str, when, ident), pending);
+    this->add(history_item_t(str, when, ident), pending, do_save);
 }
 
 // Remove matching history entries from our list of new items. This only supports literal,
 // case-sensitive, matches.
-void history_t::remove(const wcstring &str_to_remove) {
+void history_impl_t::remove(const wcstring &str_to_remove) {
     // Add to our list of deleted items.
     deleted_items.insert(str_to_remove);
 
@@ -907,7 +427,7 @@ void history_t::remove(const wcstring &str_to_remove) {
             new_items.erase(new_items.begin() + idx);
             // If this index is before our first_unwritten_new_item_index, then subtract one from
             // that index so it stays pointing at the same item. If it is equal to or larger, then
-            // we have not yet writen this item, so we don't have to adjust the index.
+            // we have not yet written this item, so we don't have to adjust the index.
             if (idx < first_unwritten_new_item_index) {
                 first_unwritten_new_item_index--;
             }
@@ -916,14 +436,12 @@ void history_t::remove(const wcstring &str_to_remove) {
     assert(first_unwritten_new_item_index <= new_items.size());
 }
 
-void history_t::set_valid_file_paths(const wcstring_list_t &valid_file_paths,
-                                     history_identifier_t ident) {
+void history_impl_t::set_valid_file_paths(const wcstring_list_t &valid_file_paths,
+                                          history_identifier_t ident) {
     // 0 identifier is used to mean "not necessary".
     if (ident == 0) {
         return;
     }
-
-    scoped_lock locker(lock);
 
     // Look for an item with the given identifier. It is likely to be at the end of new_items.
     for (history_item_list_t::reverse_iterator iter = new_items.rbegin(); iter != new_items.rend();
@@ -935,9 +453,7 @@ void history_t::set_valid_file_paths(const wcstring_list_t &valid_file_paths,
     }
 }
 
-void history_t::get_history(wcstring_list_t &result) {
-    scoped_lock locker(lock);
-
+void history_impl_t::get_history(wcstring_list_t &result) {
     // If we have a pending item, we skip the first encountered (i.e. last) new item.
     bool next_is_pending = this->has_pending_item;
     std::unordered_set<wcstring> seen;
@@ -957,13 +473,12 @@ void history_t::get_history(wcstring_list_t &result) {
     load_old_if_needed();
     for (auto iter = old_item_offsets.crbegin(); iter != old_item_offsets.crend(); ++iter) {
         size_t offset = *iter;
-        const history_item_t item = decode_item(*file_contents, offset);
+        const history_item_t item = file_contents->decode_item(offset);
         if (seen.insert(item.str()).second) result.push_back(item.str());
     }
 }
 
-size_t history_t::size() {
-    scoped_lock locker(lock);
+size_t history_impl_t::size() {
     size_t new_item_count = new_items.size();
     if (this->has_pending_item && new_item_count > 0) new_item_count -= 1;
     load_old_if_needed();
@@ -971,9 +486,7 @@ size_t history_t::size() {
     return new_item_count + old_item_count;
 }
 
-history_item_t history_t::item_at_index_assume_locked(size_t idx) {
-    ASSERT_IS_LOCKED(lock);
-
+history_item_t history_impl_t::item_at_index(size_t idx) {
     // 0 is considered an invalid index.
     assert(idx > 0);
     idx--;
@@ -997,20 +510,14 @@ history_item_t history_t::item_at_index_assume_locked(size_t idx) {
     if (idx < old_item_count) {
         // idx == 0 corresponds to last item in old_item_offsets.
         size_t offset = old_item_offsets.at(old_item_count - idx - 1);
-        return decode_item(*file_contents, offset);
+        return file_contents->decode_item(offset);
     }
 
     // Index past the valid range, so return an empty history item.
-    return history_item_t(wcstring(), 0);
+    return history_item_t{};
 }
 
-history_item_t history_t::item_at_index(size_t idx) {
-    scoped_lock locker(lock);
-    return item_at_index_assume_locked(idx);
-}
-
-std::unordered_map<long, wcstring> history_t::items_at_indexes(const std::vector<long> &idxs) {
-    scoped_lock locker(lock);
+std::unordered_map<long, wcstring> history_impl_t::items_at_indexes(const std::vector<long> &idxs) {
     std::unordered_map<long, wcstring> result;
     for (long idx : idxs) {
         if (idx <= 0) {
@@ -1022,29 +529,27 @@ std::unordered_map<long, wcstring> history_t::items_at_indexes(const std::vector
         auto iter_inserted = result.emplace(idx, wcstring{});
         if (iter_inserted.second) {
             // New key.
-            auto item = item_at_index_assume_locked(size_t(idx));
+            auto item = item_at_index(size_t(idx));
             iter_inserted.first->second = std::move(item.contents);
         }
     }
     return result;
 }
 
-void history_t::populate_from_file_contents() {
+void history_impl_t::populate_from_file_contents() {
     old_item_offsets.clear();
     if (file_contents) {
         size_t cursor = 0;
-        for (;;) {
-            size_t offset = offset_of_next_item(*file_contents, &cursor, boundary_timestamp);
-            // If we get back -1, we're done.
-            if (offset == size_t(-1)) break;
-
+        while (auto offset = file_contents->offset_of_next_item(&cursor, boundary_timestamp)) {
             // Remember this item.
-            old_item_offsets.push_back(offset);
+            old_item_offsets.push_back(*offset);
         }
     }
+
+    FLOGF(history, "Loaded %lu old items", old_item_offsets.size());
 }
 
-void history_t::load_old_if_needed() {
+void history_impl_t::load_old_if_needed() {
     if (loaded_old) return;
     loaded_old = true;
 
@@ -1063,10 +568,10 @@ void history_t::load_old_if_needed() {
             // is unlikely because we only treat an item as valid if it has a terminating newline.
             //
             // Simulate a failing lock in chaos_mode.
-            if (!chaos_mode) history_file_lock(fd, LOCK_SH);
+            if (!history_t::chaos_mode) history_file_lock(fd, LOCK_SH);
             file_contents = history_file_contents_t::create(fd);
             this->history_file_id = file_contents ? file_id_for_fd(fd) : kInvalidFileID;
-            if (!chaos_mode) history_file_lock(fd, LOCK_UN);
+            if (!history_t::chaos_mode) history_file_lock(fd, LOCK_UN);
             close(fd);
 
             time_profiler_t profiler("populate_from_file_contents");  //!OCLINT(side-effect)
@@ -1077,14 +582,13 @@ void history_t::load_old_if_needed() {
 
 bool history_search_t::go_backwards() {
     // Backwards means increasing our index.
-    const size_t max_index = (size_t)-1;
+    const size_t max_index = static_cast<size_t>(-1);
 
     if (current_index_ == max_index) return false;
-    const bool main_thread = is_main_thread();
 
     size_t index = current_index_;
     while (++index < max_index) {
-        if (main_thread ? reader_test_and_clear_interrupted() : reader_thread_job_is_stale()) {
+        if (reader_test_should_cancel()) {
             return false;
         }
 
@@ -1113,61 +617,12 @@ bool history_search_t::go_backwards() {
     return false;
 }
 
-history_item_t history_search_t::current_item() const {
+const history_item_t &history_search_t::current_item() const {
     assert(current_item_ && "No current item");
     return *current_item_;
 }
 
-wcstring history_search_t::current_string() const {
-    history_item_t item = this->current_item();
-    return item.str();
-}
-
-static void replace_all(std::string *str, const char *needle, const char *replacement) {
-    size_t needle_len = std::strlen(needle), replacement_len = std::strlen(replacement);
-    size_t offset = 0;
-    while ((offset = str->find(needle, offset)) != std::string::npos) {
-        str->replace(offset, needle_len, replacement);
-        offset += replacement_len;
-    }
-}
-
-static void escape_yaml(std::string *str) {
-    replace_all(str, "\\", "\\\\");  // replace one backslash with two
-    replace_all(str, "\n", "\\n");   // replace newline with backslash + literal n
-}
-
-/// This function is called frequently, so it ought to be fast.
-static void unescape_yaml(std::string *str) {
-    size_t cursor = 0, size = str->size();
-    while (cursor < size) {
-        // Operate on a const version of str, to avoid needless COWs that at() does.
-        const std::string &const_str = *str;
-
-        // Look for a backslash.
-        size_t backslash = const_str.find('\\', cursor);
-        if (backslash == std::string::npos || backslash + 1 >= size) {
-            // Either not found, or found as the last character.
-            break;
-        } else {
-            // Backslash found. Maybe we'll do something about it. Be sure to invoke the const
-            // version of at().
-            char escaped_char = const_str.at(backslash + 1);
-            if (escaped_char == '\\') {
-                // Two backslashes in a row. Delete the second one.
-                str->erase(backslash + 1, 1);
-                size--;
-            } else if (escaped_char == 'n') {
-                // Backslash + n. Replace with a newline.
-                str->replace(backslash, 2, "\n");
-                size--;
-            }
-            // The character at index backslash has now been made whole; start at the next
-            // character.
-            cursor = backslash + 1;
-        }
-    }
-}
+const wcstring &history_search_t::current_string() const { return this->current_item().str(); }
 
 static wcstring history_filename(const wcstring &session_id, const wcstring &suffix) {
     if (session_id.empty()) return L"";
@@ -1182,15 +637,14 @@ static wcstring history_filename(const wcstring &session_id, const wcstring &suf
     return result;
 }
 
-void history_t::clear_file_state() {
-    ASSERT_IS_LOCKED(lock);
+void history_impl_t::clear_file_state() {
     // Erase everything we know about our file.
     file_contents.reset();
     loaded_old = false;
     old_item_offsets.clear();
 }
 
-void history_t::compact_new_items() {
+void history_impl_t::compact_new_items() {
     // Keep only the most recent items with the given contents. This algorithm could be made more
     // efficient, but likely would consume more memory too.
     std::unordered_set<wcstring> seen;
@@ -1214,10 +668,7 @@ void history_t::compact_new_items() {
 // Given the fd of an existing history file, or -1 if none, write
 // a new history file to temp_fd. Returns true on success, false
 // on error
-bool history_t::rewrite_to_temporary_file(int existing_fd, int dst_fd) const {
-    // This must be called while locked.
-    ASSERT_IS_LOCKED(lock);
-
+bool history_impl_t::rewrite_to_temporary_file(int existing_fd, int dst_fd) const {
     // We are reading FROM existing_fd and writing TO dst_fd
     // dst_fd must be valid; existing_fd does not need to be
     assert(dst_fd >= 0);
@@ -1229,20 +680,15 @@ bool history_t::rewrite_to_temporary_file(int existing_fd, int dst_fd) const {
     // old file contents).
     if (auto local_file = history_file_contents_t::create(existing_fd)) {
         size_t cursor = 0;
-        for (;;) {
-            size_t offset = offset_of_next_item(*local_file, &cursor, 0);
-            // If we get back -1, we're done.
-            if (offset == (size_t)-1) break;
-
+        while (auto offset = local_file->offset_of_next_item(&cursor, 0)) {
             // Try decoding an old item.
-            const history_item_t old_item = decode_item(*local_file, offset);
+            history_item_t old_item = local_file->decode_item(*offset);
 
             if (old_item.empty() || deleted_items.count(old_item.str()) > 0) {
-                // FLOGF(error, L"Item is deleted : %s\n", old_item.str().c_str());
                 continue;
             }
             // Add this old item.
-            lru.add_item(old_item);
+            lru.add_item(std::move(old_item));
         }
     }
 
@@ -1255,32 +701,27 @@ bool history_t::rewrite_to_temporary_file(int existing_fd, int dst_fd) const {
     // Stable-sort our items by timestamp
     // This is because we may have read "old" items with a later timestamp than our "new" items
     // This is the essential step that roughly orders items by history
-    lru.stable_sort([](const history_lru_item_t &item1, const history_lru_item_t &item2) {
-        return item1.timestamp < item2.timestamp;
+    lru.stable_sort([](const history_item_t &item1, const history_item_t &item2) {
+        return item1.timestamp() < item2.timestamp();
     });
 
     // Write them out.
-    bool ok = true;
-    history_output_buffer_t buffer(HISTORY_OUTPUT_BUFFER_SIZE);
-    for (const auto &key_item : lru) {
-        const history_lru_item_t &item = key_item.second;
-        append_yaml_to_buffer(item.text, item.timestamp, item.required_paths, &buffer);
-        if (buffer.output_size() >= HISTORY_OUTPUT_BUFFER_SIZE) {
-            ok = buffer.flush_to_fd(dst_fd);
-            if (!ok) {
-                debug(2, L"Error %d when writing to temporary history file", errno);
-                break;
-            }
-        }
+    int err = 0;
+    std::string buffer;
+    buffer.reserve(HISTORY_OUTPUT_BUFFER_SIZE + 128);
+    for (const auto key_item : lru) {
+        append_history_item_to_buffer(key_item.second, &buffer);
+        err = flush_to_fd(&buffer, dst_fd, HISTORY_OUTPUT_BUFFER_SIZE);
+        if (err) break;
+    }
+    if (!err) {
+        err = flush_to_fd(&buffer, dst_fd, 0);
+    }
+    if (err) {
+        debug(2, L"Error %d when writing to temporary history file", err);
     }
 
-    if (ok) {
-        ok = buffer.flush_to_fd(dst_fd);
-        if (!ok) {
-            debug(2, L"Error %d when writing to temporary history file", errno);
-        }
-    }
-    return ok;
+    return err == 0;
 }
 
 // Returns the fd of an opened temporary file, or -1 on failure
@@ -1299,9 +740,9 @@ static int create_temporary_file(const wcstring &name_template, wcstring *out_pa
     return out_fd;
 }
 
-bool history_t::save_internal_via_rewrite() {
-    // This must be called while locked.
-    ASSERT_IS_LOCKED(lock);
+bool history_impl_t::save_internal_via_rewrite() {
+    FLOGF(history, "Saving %lu items via rewrite",
+          new_items.size() - first_unwritten_new_item_index);
     bool ok = false;
 
     // We want to rewrite the file, while holding the lock for as briefly as possible
@@ -1409,10 +850,9 @@ bool history_t::save_internal_via_rewrite() {
 
 // Function called to save our unwritten history file by appending to the existing history file
 // Returns true on success, false on failure.
-bool history_t::save_internal_via_appending() {
-    // This must be called while locked.
-    ASSERT_IS_LOCKED(lock);
-
+bool history_impl_t::save_internal_via_appending() {
+    FLOGF(history, "Saving %lu items via appending",
+          new_items.size() - first_unwritten_new_item_index);
     // No deleting allowed.
     assert(deleted_items.empty());
 
@@ -1445,7 +885,7 @@ bool history_t::save_internal_via_appending() {
         // by writing with O_APPEND.
         //
         // Simulate a failing lock in chaos_mode
-        if (!chaos_mode) history_file_lock(fd, LOCK_EX);
+        if (!history_t::chaos_mode) history_file_lock(fd, LOCK_EX);
         const file_id_t file_id = file_id_for_fd(fd);
         if (file_id_for_path(history_path) != file_id) {
             // The file has changed, we're going to retry
@@ -1483,23 +923,20 @@ bool history_t::save_internal_via_appending() {
         // write even a pending item - pending items are ignored by history within the command
         // itself, but should still be written to the file.
         // TODO: consider filling the buffer ahead of time, so we can just lock, splat, and unlock?
-        bool errored = false;
+        int err = 0;
         // Use a small buffer size for appending, we usually only have 1 item
-        history_output_buffer_t buffer(64);
+        std::string buffer;
         while (first_unwritten_new_item_index < new_items.size()) {
             const history_item_t &item = new_items.at(first_unwritten_new_item_index);
-            append_yaml_to_buffer(item.str(), item.timestamp(), item.get_required_paths(), &buffer);
-            if (buffer.output_size() >= HISTORY_OUTPUT_BUFFER_SIZE) {
-                errored = !buffer.flush_to_fd(history_fd);
-                if (errored) break;
-            }
-
+            append_history_item_to_buffer(item, &buffer);
+            err = flush_to_fd(&buffer, history_fd, HISTORY_OUTPUT_BUFFER_SIZE);
+            if (err) break;
             // We wrote this item, hooray.
             first_unwritten_new_item_index++;
         }
 
-        if (!errored && buffer.flush_to_fd(history_fd)) {
-            ok = true;
+        if (!err) {
+            err = flush_to_fd(&buffer, history_fd, 0);
         }
 
         // Since we just modified the file, update our mmap_file_id to match its current state
@@ -1510,6 +947,8 @@ bool history_t::save_internal_via_appending() {
         this->history_file_id = file_id_for_fd(history_fd);
 
         close(history_fd);
+
+        ok = (err == 0);
     }
 
     // If someone has replaced the file, forget our file state.
@@ -1521,9 +960,7 @@ bool history_t::save_internal_via_appending() {
 }
 
 /// Save the specified mode to file; optionally also vacuums.
-void history_t::save_internal(bool vacuum) {
-    ASSERT_IS_LOCKED(lock);
-
+void history_impl_t::save(bool vacuum) {
     // Nothing to do if there's no new items.
     if (first_unwritten_new_item_index >= new_items.size() && deleted_items.empty()) return;
 
@@ -1543,6 +980,9 @@ void history_t::save_internal(bool vacuum) {
     if (!vacuum && deleted_items.empty()) {
         // Try doing a fast append.
         ok = save_internal_via_appending();
+        if (!ok) {
+            FLOGF(history, "Appending failed");
+        }
     }
     if (!ok) {
         // We did not or could not append; rewrite the file ("vacuum" it).
@@ -1550,17 +990,13 @@ void history_t::save_internal(bool vacuum) {
     }
 }
 
-void history_t::save() {
-    scoped_lock locker(lock);
-    this->save_internal(false);
-}
-
 // Formats a single history record, including a trailing newline.
 //
 // Returns nothing. The only possible failure involves formatting the timestamp. If that happens we
 // simply omit the timestamp from the output.
 static void format_history_record(const history_item_t &item, const wchar_t *show_time_format,
-                                  bool null_terminate, wcstring &result) {
+                                  bool null_terminate, wcstring *result) {
+    result->clear();
     if (show_time_format) {
         const time_t seconds = item.timestamp();
         struct tm timestamp;
@@ -1569,107 +1005,27 @@ static void format_history_record(const history_item_t &item, const wchar_t *sho
             wchar_t timestamp_string[max_tstamp_length + 1];
             if (std::wcsftime(timestamp_string, max_tstamp_length, show_time_format, &timestamp) !=
                 0) {
-                result.append(timestamp_string);
+                result->append(timestamp_string);
             }
         }
     }
 
-    result.append(item.str());
-    if (null_terminate) {
-        result.push_back(L'\0');
-    } else {
-        result.push_back(L'\n');
-    }
+    result->append(item.str());
+    result->push_back(null_terminate ? L'\0' : L'\n');
 }
 
-/// This handles the slightly unusual case of someone searching history for
-/// specific terms/patterns.
-bool history_t::search_with_args(history_search_type_t search_type, wcstring_list_t search_args,
-                                 const wchar_t *show_time_format, size_t max_items,
-                                 bool case_sensitive, bool null_terminate, bool reverse,
-                                 io_streams_t &streams) {
-    wcstring_list_t results;
-    size_t hist_size = this->size();
-    if (max_items > hist_size) max_items = hist_size;
-
-    for (const wcstring &search_string : search_args) {
-        if (search_string.empty()) {
-            streams.err.append_format(L"Searching for the empty string isn't allowed");
-            return false;
-        }
-        history_search_t searcher = history_search_t(
-            *this, search_string, search_type, case_sensitive ? 0 : history_search_ignore_case);
-        while (searcher.go_backwards()) {
-            wcstring result;
-            auto cur_item = searcher.current_item();
-            format_history_record(cur_item, show_time_format, null_terminate, result);
-            if (reverse) {
-                results.push_back(result);
-            } else {
-                streams.out.append(result);
-            }
-            if (--max_items == 0) break;
-        }
-    }
-
-    if (reverse) {
-        for (auto it = results.rbegin(); it != results.rend(); it++) {
-            streams.out.append(*it);
-        }
-    }
-
-    return true;
-}
-
-bool history_t::search(history_search_type_t search_type, wcstring_list_t search_args,
-                       const wchar_t *show_time_format, size_t max_items, bool case_sensitive,
-                       bool null_terminate, bool reverse, io_streams_t &streams) {
-    if (!search_args.empty()) {
-        // User wants the results filtered. This is not the common case so we do it separate
-        // from the code below for unfiltered output which is much cheaper.
-        return search_with_args(search_type, search_args, show_time_format, max_items,
-                                case_sensitive, null_terminate, reverse, streams);
-    }
-
-    // scoped_lock locker(lock);
-    size_t hist_size = this->size();
-    if (max_items > hist_size) max_items = hist_size;
-
-    if (reverse) {
-        for (size_t i = max_items; i != 0; --i) {
-            auto cur_item = this->item_at_index(i);
-            wcstring result;
-            format_history_record(cur_item, show_time_format, null_terminate, result);
-            streams.out.append(result);
-        }
-    } else {
-        // Start at one because zero is the current command.
-        for (size_t i = 1; i < max_items + 1; ++i) {
-            auto cur_item = this->item_at_index(i);
-            wcstring result;
-            format_history_record(cur_item, show_time_format, null_terminate, result);
-            streams.out.append(result);
-        }
-    }
-
-    return true;
-}
-
-void history_t::disable_automatic_saving() {
-    scoped_lock locker(lock);
+void history_impl_t::disable_automatic_saving() {
     disable_automatic_save_counter++;
     assert(disable_automatic_save_counter != 0);  // overflow!
 }
 
-void history_t::enable_automatic_saving() {
-    scoped_lock locker(lock);
+void history_impl_t::enable_automatic_saving() {
     assert(disable_automatic_save_counter > 0);  // underflow
     disable_automatic_save_counter--;
-    save_internal_unless_disabled();
+    save_unless_disabled();
 }
 
-void history_t::clear() {
-    scoped_lock locker(lock);
+void history_impl_t::clear() {
     new_items.clear();
     deleted_items.clear();
     first_unwritten_new_item_index = 0;
@@ -1679,11 +1035,9 @@ void history_t::clear() {
     this->clear_file_state();
 }
 
-bool history_t::is_default() const { return name == DFLT_FISH_HISTORY_SESSION_ID; }
+bool history_impl_t::is_default() const { return name == DFLT_FISH_HISTORY_SESSION_ID; }
 
-bool history_t::is_empty() {
-    scoped_lock locker(lock);
-
+bool history_impl_t::is_empty() {
     // If we have new items, we're not empty.
     if (!new_items.empty()) return false;
 
@@ -1714,7 +1068,7 @@ bool history_t::is_empty() {
 /// Populates from older location (in config path, rather than data path) This is accomplished by
 /// clearing ourselves, and copying the contents of the old history file to the new history file.
 /// The new contents will automatically be re-mapped later.
-void history_t::populate_from_config_path() {
+void history_impl_t::populate_from_config_path() {
     wcstring new_file = history_filename(name, wcstring());
     if (new_file.empty()) {
         return;
@@ -1754,7 +1108,7 @@ static bool should_import_bash_history_line(const wcstring &line) {
     if (line.empty()) return false;
 
     parse_node_tree_t parse_tree;
-    if (!parse_tree_from_string(line, parse_flag_none, &parse_tree, NULL)) return false;
+    if (!parse_tree_from_string(line, parse_flag_none, &parse_tree, nullptr)) return false;
 
     // In doing this test do not allow incomplete strings. Hence the "false" argument.
     parse_error_list_t errors;
@@ -1775,10 +1129,6 @@ static bool should_import_bash_history_line(const wcstring &line) {
     if (line.find(L"((") != std::string::npos) return false;
     if (line.find(L"))") != std::string::npos) return false;
 
-    // Temporarily skip lines with && and ||
-    if (line.find(L"&&") != std::string::npos) return false;
-    if (line.find(L"||") != std::string::npos) return false;
-
     // Skip lines that end with a backslash. We do not handle multiline commands from bash history.
     if (line.back() == L'\\') return false;
 
@@ -1789,7 +1139,7 @@ static bool should_import_bash_history_line(const wcstring &line) {
 /// comments. Ignore a few commands that are bash-specific. It makes no attempt to handle multiline
 /// commands. We can't actually parse bash syntax and the bash history file does not unambiguously
 /// encode multiline commands.
-void history_t::populate_from_bash(FILE *stream) {
+void history_impl_t::populate_from_bash(FILE *stream) {
     // Process the entire history file until EOF is observed.
     bool eof = false;
     while (!eof) {
@@ -1812,18 +1162,20 @@ void history_t::populate_from_bash(FILE *stream) {
 
         wcstring wide_line = str2wcstring(line);
         // Add this line if it doesn't contain anything we know we can't handle.
-        if (should_import_bash_history_line(wide_line)) this->add(wide_line);
+        if (should_import_bash_history_line(wide_line)) {
+            this->add(wide_line, 0, false /* pending */, false /* do_save */);
+        }
     }
+    this->save_unless_disabled();
 }
 
-void history_t::incorporate_external_changes() {
+void history_impl_t::incorporate_external_changes() {
     // To incorporate new items, we simply update our timestamp to now, so that items from previous
     // instances get added. We then clear the file state so that we remap the file. Note that this
     // is somehwhat expensive because we will be going back over old items. An optimization would be
     // to preserve old_item_offsets so that they don't have to be recomputed. (However, then items
     // *deleted* in other instances would not show up here).
-    time_t new_timestamp = time(NULL);
-    scoped_lock locker(lock);
+    time_t new_timestamp = time(nullptr);
 
     // If for some reason the clock went backwards, we don't want to start dropping items; therefore
     // we only do work if time has progressed. This also makes multiple calls cheap.
@@ -1834,16 +1186,9 @@ void history_t::incorporate_external_changes() {
         // We also need to erase new_items, since we go through those first, and that means we
         // will not properly interleave them with items from other instances.
         // We'll pick them up from the file (#2312)
-        this->save_internal(false);
+        this->save(false);
         this->new_items.clear();
         this->first_unwritten_new_item_index = 0;
-    }
-}
-
-void history_save_all() {
-    auto histories = s_histories.acquire();
-    for (auto &p : *histories) {
-        p.second->save();
     }
 }
 
@@ -1857,7 +1202,7 @@ wcstring history_session_id(const environment_t &vars) {
         if (session_id.empty()) {
             result.clear();
         } else if (session_id == L"default") {
-            ;  // using the default value
+            // using the default value
         } else if (valid_var_name(session_id)) {
             result = session_id;
         } else {
@@ -1894,20 +1239,42 @@ bool all_paths_are_valid(const path_list_t &paths, const wcstring &working_direc
 
 static bool string_could_be_path(const wcstring &potential_path) {
     // Assume that things with leading dashes aren't paths.
-    if (potential_path.empty() || potential_path.at(0) == L'-') {
-        return false;
-    }
-    return true;
+    return !(potential_path.empty() || potential_path.at(0) == L'-');
 }
+
+/// Very simple, just mark that we have no more pending items.
+void history_impl_t::resolve_pending() { this->has_pending_item = false; }
+
+bool history_t::chaos_mode = false;
+bool history_t::never_mmap = false;
+
+history_t::history_t(wcstring name)
+    : impl_(make_unique<owning_lock<history_impl_t>>(history_impl_t(std::move(name)))) {}
+
+history_t::~history_t() = default;
+
+acquired_lock<history_impl_t> history_t::impl() { return impl_->acquire(); }
+
+acquired_lock<const history_impl_t> history_t::impl() const { return impl_->acquire(); }
+
+bool history_t::is_default() const { return impl()->is_default(); }
+
+bool history_t::is_empty() { return impl()->is_empty(); }
+
+void history_t::add(const history_item_t &item, bool pending) { impl()->add(item, pending); }
+
+void history_t::add(const wcstring &str, history_identifier_t ident, bool pending) {
+    impl()->add(str, ident, pending);
+}
+
+void history_t::remove(const wcstring &str) { impl()->remove(str); }
 
 void history_t::add_pending_with_file_detection(const wcstring &str,
                                                 const wcstring &working_dir_slash) {
-    ASSERT_IS_MAIN_THREAD();
-
     // Find all arguments that look like they could be file paths.
-    bool impending_exit = false;
+    bool needs_sync_write = false;
     parse_node_tree_t tree;
-    parse_tree_from_string(str, parse_flag_none, &tree, NULL);
+    parse_tree_from_string(str, parse_flag_none, &tree, nullptr);
 
     path_list_t potential_paths;
     for (const parse_node_t &node : tree) {
@@ -1925,52 +1292,153 @@ void history_t::add_pending_with_file_detection(const wcstring &str,
             // Hack hack hack - if the command is likely to trigger an exit, then don't do
             // background file detection, because we won't be able to write it to our history file
             // before we exit.
+            // Also skip it for 'echo'. This is because echo doesn't take file paths, but also
+            // because the history file test wants to find the commands in the history file
+            // immediately after running them, so it can't tolerate the asynchronous file detection.
             if (get_decoration({&tree, &node}) == parse_statement_decoration_exec) {
-                impending_exit = true;
+                needs_sync_write = true;
             }
 
             if (maybe_t<wcstring> command = command_for_plain_statement({&tree, &node}, str)) {
                 unescape_string_in_place(&*command, UNESCAPE_DEFAULT);
-                if (*command == L"exit" || *command == L"reboot") {
-                    impending_exit = true;
+                if (*command == L"exit" || *command == L"reboot" || *command == L"restart" ||
+                    *command == L"echo") {
+                    needs_sync_write = true;
                 }
             }
         }
     }
 
     // If we got a path, we'll perform file detection for autosuggestion hinting.
+    bool wants_file_detection = !potential_paths.empty() && !needs_sync_write;
+    auto imp = this->impl();
+
     history_identifier_t identifier = 0;
-    if (!potential_paths.empty() && !impending_exit) {
+    if (wants_file_detection) {
         // Grab the next identifier.
         static relaxed_atomic_t<history_identifier_t> s_last_identifier{0};
         identifier = ++s_last_identifier;
+        imp->disable_automatic_saving();
 
-        // Prevent saving until we're done, so we have time to get the paths.
-        this->disable_automatic_saving();
-
-        // Check for which paths are valid on a background thread,
-        // then on the main thread update our history item
-        iothread_perform([=]() { return valid_paths(potential_paths, working_dir_slash); },
-                         [=](path_list_t validated_paths) {
-                             this->set_valid_file_paths(validated_paths, identifier);
-                             this->enable_automatic_saving();
-                         });
+        // Add the item. Then check for which paths are valid on a background thread,
+        // and unblock the item.
+        // Don't hold the lock while we perform this file detection.
+        imp->add(str, identifier, true /* pending */);
+        iothread_perform([=]() {
+            auto validated_paths = valid_paths(potential_paths, working_dir_slash);
+            auto imp = this->impl();
+            imp->set_valid_file_paths(validated_paths, identifier);
+            imp->enable_automatic_saving();
+        });
+    } else {
+        // Add the item.
+        // If we think we're about to exit, save immediately, regardless of any disabling. This may
+        // cause us to lose file hinting for some commands, but it beats losing history items.
+        imp->add(str, identifier, true /* pending */);
+        if (needs_sync_write) {
+            imp->save();
+        }
     }
+}
+void history_t::resolve_pending() { impl()->resolve_pending(); }
 
-    // Actually add the item to the history.
-    this->add(str, identifier, true /* pending */);
+void history_t::save() { impl()->save(); }
 
-    // If we think we're about to exit, save immediately, regardless of any disabling. This may
-    // cause us to lose file hinting for some commands, but it beats losing history items.
-    if (impending_exit) {
-        this->save();
+/// Perform a search of \p hist for \p search_string. Invoke a function \p func for each match. If
+/// \p func returns true, continue the search; else stop it.
+static void do_1_history_search(history_t &hist, history_search_type_t search_type,
+                                const wcstring &search_string, bool case_sensitive,
+                                const std::function<bool(const history_item_t &item)> &func) {
+    history_search_t searcher = history_search_t(hist, search_string, search_type,
+                                                 case_sensitive ? 0 : history_search_ignore_case);
+    while (searcher.go_backwards()) {
+        if (!func(searcher.current_item())) {
+            break;
+        }
     }
 }
 
-/// Very simple, just mark that we have no more pending items.
-void history_t::resolve_pending() {
-    scoped_lock locker(lock);
-    this->has_pending_item = false;
+// Searches history.
+bool history_t::search(history_search_type_t search_type, const wcstring_list_t &search_args,
+                       const wchar_t *show_time_format, size_t max_items, bool case_sensitive,
+                       bool null_terminate, bool reverse, io_streams_t &streams) {
+    wcstring_list_t collected;
+    wcstring formatted_record;
+    size_t remaining = max_items;
+
+    // The function we use to act on each item.
+    std::function<bool(const history_item_t &item)> func = [&](const history_item_t &item) -> bool {
+        if (remaining == 0) return false;
+        remaining -= 1;
+        format_history_record(item, show_time_format, null_terminate, &formatted_record);
+        if (reverse) {
+            // We need to collect this for later.
+            collected.push_back(std::move(formatted_record));
+        } else {
+            // We can output this immediately.
+            streams.out.append(formatted_record);
+        }
+        return true;
+    };
+
+    if (search_args.empty()) {
+        // The user had no search terms; just append everything.
+        do_1_history_search(*this, history_search_type_t::match_everything, {}, false, func);
+    } else {
+        for (const wcstring &search_string : search_args) {
+            if (search_string.empty()) {
+                streams.err.append_format(L"Searching for the empty string isn't allowed");
+                return false;
+            }
+            do_1_history_search(*this, search_type, search_string, case_sensitive, func);
+        }
+    }
+
+    // Output any items we collected (which only happens in reverse).
+    for (auto iter = collected.rbegin(); iter != collected.rend(); ++iter) {
+        streams.out.append(*iter);
+    }
+    return true;
+}
+
+void history_t::clear() { impl()->clear(); }
+
+void history_t::populate_from_config_path() { impl()->populate_from_config_path(); }
+
+void history_t::populate_from_bash(FILE *f) { impl()->populate_from_bash(f); }
+
+void history_t::incorporate_external_changes() { impl()->incorporate_external_changes(); }
+
+void history_t::get_history(wcstring_list_t &result) { impl()->get_history(result); }
+
+std::unordered_map<long, wcstring> history_t::items_at_indexes(const std::vector<long> &idxs) {
+    return impl()->items_at_indexes(idxs);
+}
+
+history_item_t history_t::item_at_index(size_t idx) { return impl()->item_at_index(idx); }
+
+size_t history_t::size() { return impl()->size(); }
+
+/// The set of all histories.
+static owning_lock<std::map<wcstring, std::unique_ptr<history_t>>> s_histories;
+
+void history_save_all() {
+    auto histories = s_histories.acquire();
+    for (auto &p : *histories) {
+        p.second->save();
+    }
+}
+
+history_t &history_t::history_with_name(const wcstring &name) {
+    // Return a history for the given name, creating it if necessary
+    // Note that histories are currently never deleted, so we can return a reference to them without
+    // using something like shared_ptr
+    auto hs = s_histories.acquire();
+    std::unique_ptr<history_t> &hist = (*hs)[name];
+    if (!hist) {
+        hist = make_unique<history_t>(name);
+    }
+    return *hist;
 }
 
 static std::atomic<bool> private_mode{false};

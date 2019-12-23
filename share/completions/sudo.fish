@@ -20,7 +20,7 @@ function __fish_sudo_print_remaining_args
     # we want.
     if test -n "$argv"
         and not string match -qr '^-' $argv[1]
-        echo $argv
+        string join0 -- $argv
         return 0
     else
         return 1
@@ -32,15 +32,16 @@ function __fish_sudo_no_subcommand
 end
 
 function __fish_complete_sudo_subcommand
-    set -l args (__fish_sudo_print_remaining_args)
-    complete -C"$args"
+    set -l args (__fish_sudo_print_remaining_args | string split0)
+    set -lx -a PATH /usr/local/sbin /sbin /usr/sbin
+    __fish_complete_subcommand --commandline $args
 end
 
 # All these options should be valid for GNU and OSX sudo
 complete -c sudo -n "__fish_no_arguments" -s h -d "Display help and exit"
 complete -c sudo -n "__fish_no_arguments" -s V -d "Display version information and exit"
 complete -c sudo -n "__fish_sudo_no_subcommand" -s A -d "Ask for password via the askpass or \$SSH_ASKPASS program"
-complete -c sudo -n "__fish_sudo_no_subcommand" -s C -d "Close all file descriptors greater or equal to the given number" -a "(seq 0 255)"
+complete -c sudo -n "__fish_sudo_no_subcommand" -s C -d "Close all file descriptors greater or equal to the given number" -xa "0 1 2 255"
 complete -c sudo -n "__fish_sudo_no_subcommand" -s E -d "Preserve environment"
 complete -c sudo -n "__fish_sudo_no_subcommand" -s H -d "Set home"
 complete -c sudo -n "__fish_sudo_no_subcommand" -s K -d "Remove the credential timestamp entirely"
@@ -59,4 +60,4 @@ complete -c sudo -n "__fish_sudo_no_subcommand" -s u -a "(__fish_complete_users)
 complete -c sudo -n "__fish_sudo_no_subcommand" -s v -n "__fish_no_arguments" -d "Validate the credentials, extending timeout"
 
 # Complete the command we are executed under sudo
-complete -c sudo -x -a "(__fish_complete_sudo_subcommand)"
+complete -c sudo -x -n 'not __fish_seen_argument -s e' -a "(__fish_complete_sudo_subcommand)"

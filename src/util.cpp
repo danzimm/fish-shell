@@ -1,16 +1,18 @@
 // Generic utilities library.
 #include "config.h"  // IWYU pragma: keep
 
+#include "util.h"
+
 #include <errno.h>
 #include <stddef.h>
 #include <sys/time.h>
 #include <wctype.h>
+
 #include <cwchar>
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
-#include "util.h"
-#include "wutil.h"  // IWYU pragma: keep
+#include "wutil.h"     // IWYU pragma: keep
 
 // Compare the strings to see if they begin with an integer that can be compared and return the
 // result of that comparison.
@@ -101,6 +103,6 @@ int wcsfilecmp(const wchar_t *a, const wchar_t *b) {
 /// Return microseconds since the epoch.
 long long get_time() {
     struct timeval time_struct;
-    gettimeofday(&time_struct, 0);
+    gettimeofday(&time_struct, nullptr);
     return 1000000ll * time_struct.tv_sec + time_struct.tv_usec;
 }

@@ -85,6 +85,10 @@ void reader_react_to_color_change();
 /// Repaint immediately if needed.
 void reader_repaint_if_needed();
 
+/// Enqueue an event to the back of the reader's input queue.
+class char_event_t;
+void reader_queue_ch(const char_event_t &ch);
+
 /// Run the specified command with the correct terminal modes, and while taking care to perform job
 /// notification, set the title, etc.
 void reader_run_command(const wcstring &buff);
@@ -111,8 +115,10 @@ size_t reader_get_cursor_pos();
 /// selection, true otherwise.
 bool reader_get_selection(size_t *start, size_t *len);
 
-/// Return the value of the interrupted flag, which is set by the sigint handler.
-bool reader_test_interrupted();
+/// Return whether we have been interrupted and should cancel the current operation.
+/// This may be because we received a sigint, or because we are in a background thread
+/// and the job is now stale.
+bool reader_test_should_cancel();
 
 /// Return the value of the interrupted flag, which is set by the sigint handler, and clear it if it
 /// was set.
@@ -126,11 +132,6 @@ void reader_reset_interrupted();
 /// Return the value of the interrupted flag, which is set by the sigint handler, and clear it if it
 /// was set. If the current reader is interruptible, call \c reader_exit().
 int reader_reading_interrupted();
-
-/// Returns true if the current reader generation count does not equal the generation count the
-/// current thread was started with. Note 1: currently only valid for autocompletion threads! Other
-/// threads don't set the threadlocal generation count when they start up.
-bool reader_thread_job_is_stale();
 
 /// Read one line of input. Before calling this function, reader_push() must have been called in
 /// order to set up a valid reader environment. If nchars > 0, return after reading that many
@@ -183,7 +184,7 @@ void reader_set_allow_autosuggesting(bool flag);
 void reader_set_expand_abbreviations(bool flag);
 
 /// Sets whether the reader should exit on ^C.
-void reader_set_exit_on_interrupt(bool flag);
+void reader_set_exit_on_interrupt(bool i);
 
 void reader_set_silent_status(bool f);
 
@@ -212,8 +213,9 @@ wcstring combine_command_and_autosuggestion(const wcstring &cmdline,
                                             const wcstring &autosuggestion);
 
 /// Expand abbreviations at the given cursor position. Exposed for testing purposes only.
-bool reader_expand_abbreviation_in_command(const wcstring &cmdline, size_t cursor_pos,
-                                           const environment_t &vars, wcstring *output);
+/// \return none if no abbreviations were expanded, otherwise the new command line.
+maybe_t<wcstring> reader_expand_abbreviation_in_command(const wcstring &cmdline, size_t cursor_pos,
+                                                        const environment_t &vars);
 
 /// Apply a completion string. Exposed for testing only.
 wcstring completion_apply_to_command_line(const wcstring &val_str, complete_flags_t flags,

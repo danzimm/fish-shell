@@ -5,20 +5,23 @@
 ///
 #include "config.h"  // IWYU pragma: keep
 
+#include "complete.h"
+
 #include <pthread.h>
 #include <pwd.h>
 #include <stddef.h>
 #include <wctype.h>
-#include <cwchar>
 
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cwchar>
 #include <functional>
 #include <iterator>
 #include <list>
 #include <memory>
 #include <numeric>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -28,14 +31,15 @@
 #include "autoload.h"
 #include "builtin.h"
 #include "common.h"
-#include "complete.h"
 #include "env.h"
 #include "exec.h"
 #include "expand.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "function.h"
+#include "history.h"
 #include "iothread.h"
 #include "parse_constants.h"
+#include "parser_keywords.h"
 #include "parse_util.h"
 #include "parser.h"
 #include "path.h"
@@ -117,13 +121,11 @@ typedef struct complete_entry_opt {
 
 } complete_entry_opt_t;
 
-using arg_list_t = std::vector<tnode_t<grammar::argument>>;
-
 /// Last value used in the order field of completion_entry_t.
 static std::atomic<unsigned int> k_complete_order{0};
 
 /// Struct describing a command completion.
-typedef std::list<complete_entry_opt_t> option_list_t;
+using option_list_t = std::list<complete_entry_opt_t>;
 class completion_entry_t {
    public:
     /// List of all options.
@@ -155,7 +157,7 @@ template <>
 struct hash<completion_entry_t> {
     size_t operator()(const completion_entry_t &c) const {
         std::hash<wcstring> hasher;
-        return hasher((wcstring)c.cmd);
+        return hasher(wcstring(c.cmd));
     }
 };
 template <>
@@ -165,7 +167,7 @@ struct equal_to<completion_entry_t> {
     }
 };
 }  // namespace std
-typedef std::unordered_set<completion_entry_t> completion_entry_set_t;
+using completion_entry_set_t = std::unordered_set<completion_entry_t>;
 static owning_lock<completion_entry_set_t> s_completion_set;
 
 /// Completion "wrapper" support. The map goes from wrapping-command to wrapped-command-list.
@@ -196,7 +198,7 @@ static complete_flags_t resolve_auto_space(const wcstring &comp, complete_flags_
     if (flags & COMPLETE_AUTO_SPACE) {
         new_flags &= ~COMPLETE_AUTO_SPACE;
         size_t len = comp.size();
-        if (len > 0 && (std::wcschr(L"/=@:", comp.at(len - 1)) != 0))
+        if (len > 0 && (std::wcschr(L"/=@:", comp.at(len - 1)) != nullptr))
             new_flags |= COMPLETE_NO_SPACE;
     }
     return new_flags;
@@ -210,10 +212,10 @@ completion_t::completion_t(wcstring comp, wcstring desc, string_fuzzy_match_t ma
       match(std::move(mat)),
       flags(resolve_auto_space(completion, flags_val)) {}
 
-completion_t::completion_t(const completion_t &him) = default;
-completion_t::completion_t(completion_t &&him) = default;
-completion_t &completion_t::operator=(const completion_t &him) = default;
-completion_t &completion_t::operator=(completion_t &&him) = default;
+completion_t::completion_t(const completion_t &) = default;
+completion_t::completion_t(completion_t &&) = default;
+completion_t &completion_t::operator=(const completion_t &) = default;
+completion_t &completion_t::operator=(completion_t &&) = default;
 completion_t::~completion_t() = default;
 
 bool completion_t::is_naturally_less_than(const completion_t &a, const completion_t &b) {
@@ -243,9 +245,15 @@ static bool compare_completions_by_duplicate_arguments(const completion_t &a,
 }
 
 static bool compare_completions_by_tilde(const completion_t &a, const completion_t &b) {
-    return (a.completion.empty() < b.completion.empty()) ||
-           (a.completion.back() == L'~') < (b.completion.back() == L'~');
+    if (a.completion.empty()) {
+        return false;
+    }
+    if (b.completion.empty()) {
+        return true;
+    }
+    return ((a.completion.back() == L'~') < (b.completion.back() == L'~'));
 }
+
 /// Unique the list of completions, without perturbing their order.
 static void unique_completions_retaining_order(std::vector<completion_t> *comps) {
     std::unordered_set<wcstring> seen;
@@ -262,8 +270,8 @@ void completions_sort_and_prioritize(std::vector<completion_t> *comps,
                                      completion_request_flags_t flags) {
     // Find the best match type.
     fuzzy_match_type_t best_type = fuzzy_match_none;
-    for (size_t i = 0; i < comps->size(); i++) {
-        best_type = std::min(best_type, comps->at(i).match.type);
+    for (const auto &comp : *comps) {
+        best_type = std::min(best_type, comp.match.type);
     }
     // If the best type is an exact match, reduce it to prefix match. Otherwise a tab completion
     // will only show one match if it matches a file exactly. (see issue #959).
@@ -344,11 +352,10 @@ class completer_t {
     void complete_param_expand(const wcstring &str, bool do_file,
                                bool handle_as_special_cd = false);
 
-    void complete_cmd(const wcstring &str, bool use_function, bool use_builtin, bool use_command,
-                      bool use_implicit_cd);
+    void complete_cmd(const wcstring &str);
 
     /// Attempt to complete an abbreviation for the given string.
-    void complete_abbr(const wcstring &str);
+    void complete_abbr(const wcstring &cmd);
 
     void complete_from_args(const wcstring &str, const wcstring &args, const wcstring &desc,
                             complete_flags_t flags);
@@ -376,7 +383,10 @@ class completer_t {
 
     bool empty() const { return completions.empty(); }
 
-    void mark_completions_duplicating_arguments(const wcstring &prefix, const arg_list_t &args);
+    void escape_opening_brackets(const wcstring &argument);
+
+    void mark_completions_duplicating_arguments(const wcstring &prefix,
+                                                const std::vector<tok_t> &args);
 
    public:
     completer_t(const environment_t &vars, const std::shared_ptr<parser_t> &parser, wcstring c,
@@ -394,8 +404,7 @@ static owning_lock<autoload_t> completion_autoloader{autoload_t(L"fish_complete_
 /// Create a new completion entry.
 void append_completion(std::vector<completion_t> *completions, wcstring comp, wcstring desc,
                        complete_flags_t flags, string_fuzzy_match_t match) {
-    complete_flags_t resolved_flags = resolve_auto_space(comp, flags);
-    completion_t completion{std::move(comp), std::move(desc), match, resolved_flags};
+    completion_t completion{std::move(comp), std::move(desc), match, flags};
     completions->push_back(std::move(completion));
 }
 
@@ -578,7 +587,7 @@ void completer_t::complete_cmd_desc(const wcstring &str) {
     // least two characters if we don't know the location of the whatis-database.
     if (cmd.length() < 2) return;
 
-    if (wildcard_has(cmd, 0)) {
+    if (wildcard_has(cmd, false)) {
         return;
     }
 
@@ -648,6 +657,15 @@ static wcstring complete_function_desc(const wcstring &fn) {
     bool has_description = function_get_desc(fn, result);
     if (!has_description) {
         function_get_definition(fn, result);
+        // Consider complete -a '(complete -C "prefix")':
+        // If some functions whose name starts with prefix and whose
+        // definition includes a line that starts with prefix, this line
+        // would be suggested as completion.
+        // Replace newlines by spaces to avoid these excess lines.
+        // The completion description will be shown in one line regardless.
+        for (wchar_t &c : result) {
+            if (c == L'\n') c = L' ';
+        }
     }
     return result;
 }
@@ -656,54 +674,44 @@ static wcstring complete_function_desc(const wcstring &fn) {
 /// using an absolute path, functions, builtins and directories for implicit cd commands.
 ///
 /// \param str_cmd the command string to find completions for
-void completer_t::complete_cmd(const wcstring &str_cmd, bool use_function, bool use_builtin,
-                               bool use_command, bool use_implicit_cd) {
-    if (str_cmd.empty()) return;
-
+void completer_t::complete_cmd(const wcstring &str_cmd) {
     std::vector<completion_t> possible_comp;
 
-    if (use_command) {
-        // Append all possible executables
-        expand_result_t result =
-            expand_string(str_cmd, &this->completions,
-                          this->expand_flags() | expand_flag::special_for_command |
-                              expand_flag::for_completions | expand_flag::executables_only,
-                          vars, parser, NULL);
-        if (result != expand_result_t::error && this->wants_descriptions()) {
-            this->complete_cmd_desc(str_cmd);
-        }
+    // Append all possible executables
+    expand_result_t result =
+        expand_string(str_cmd, &this->completions,
+                      this->expand_flags() | expand_flag::special_for_command |
+                          expand_flag::for_completions | expand_flag::executables_only,
+                      vars, parser, nullptr);
+    if (result != expand_result_t::error && this->wants_descriptions()) {
+        this->complete_cmd_desc(str_cmd);
     }
 
-    if (use_implicit_cd) {
-        // We don't really care if this succeeds or fails. If it succeeds this->completions will be
-        // updated with choices for the user.
-        expand_result_t ignore =
-            // Append all matching directories
-            expand_string(
-                str_cmd, &this->completions,
-                this->expand_flags() | expand_flag::for_completions | expand_flag::directories_only,
-                vars, parser, NULL);
-        UNUSED(ignore);
-    }
+    // We don't really care if this succeeds or fails. If it succeeds this->completions will be
+    // updated with choices for the user.
+    expand_result_t ignore =
+        // Append all matching directories
+        expand_string(
+            str_cmd, &this->completions,
+            this->expand_flags() | expand_flag::for_completions | expand_flag::directories_only,
+            vars, parser, nullptr);
+    UNUSED(ignore);
 
-    if (str_cmd.find(L'/') == wcstring::npos && str_cmd.at(0) != L'~') {
-        if (use_function) {
-            wcstring_list_t names = function_get_names(str_cmd.at(0) == L'_');
-            for (wcstring &name : names) {
-                // Append all known matching functions
-                append_completion(&possible_comp, std::move(name));
-            }
-
-            this->complete_strings(str_cmd, complete_function_desc, possible_comp, 0);
+    if (str_cmd.empty() || (str_cmd.find(L'/') == wcstring::npos && str_cmd.at(0) != L'~')) {
+        bool include_hidden = !str_cmd.empty() && str_cmd.at(0) == L'_';
+        wcstring_list_t names = function_get_names(include_hidden);
+        for (wcstring &name : names) {
+            // Append all known matching functions
+            append_completion(&possible_comp, std::move(name));
         }
+
+        this->complete_strings(str_cmd, complete_function_desc, possible_comp, 0);
 
         possible_comp.clear();
 
-        if (use_builtin) {
-            // Append all matching builtins
-            builtin_get_names(&possible_comp);
-            this->complete_strings(str_cmd, builtin_get_desc, possible_comp, 0);
-        }
+        // Append all matching builtins
+        builtin_get_names(&possible_comp);
+        this->complete_strings(str_cmd, builtin_get_desc, possible_comp, 0);
     }
 }
 
@@ -736,16 +744,16 @@ void completer_t::complete_abbr(const wcstring &cmd) {
 /// @param  desc
 ///    Description of the completion
 /// @param  flags
-///    The list into which the results will be inserted
+///    The flags
 ///
 void completer_t::complete_from_args(const wcstring &str, const wcstring &args,
                                      const wcstring &desc, complete_flags_t flags) {
     bool is_autosuggest = (this->type() == COMPLETE_AUTOSUGGEST);
 
-    // If type is COMPLETE_AUTOSUGGEST, it means we're on a background thread, so don't call
-    // proc_push_interactive.
-    if (!is_autosuggest) {
-        proc_push_interactive(0);
+    bool saved_interactive = false;
+    if (parser) {
+        saved_interactive = parser->libdata().is_interactive;
+        parser->libdata().is_interactive = false;
     }
 
     expand_flags_t eflags{};
@@ -757,8 +765,8 @@ void completer_t::complete_from_args(const wcstring &str, const wcstring &args,
     std::vector<completion_t> possible_comp =
         parser_t::expand_argument_list(args, eflags, vars, parser);
 
-    if (!is_autosuggest) {
-        proc_pop_interactive();
+    if (parser) {
+        parser->libdata().is_interactive = saved_interactive;
     }
 
     this->complete_strings(escape_string(str, ESCAPE_ALL), const_desc(desc), possible_comp, flags);
@@ -786,75 +794,60 @@ static bool param_match(const complete_entry_opt_t *e, const wchar_t *optstr) {
 static const wchar_t *param_match2(const complete_entry_opt_t *e, const wchar_t *optstr) {
     // We may get a complete_entry_opt_t with no options if it's just arguments.
     if (e->option.empty()) {
-        return NULL;
+        return nullptr;
     }
 
     // Verify leading dashes.
     size_t cursor = leading_dash_count(optstr);
     if (cursor != e->expected_dash_count()) {
-        return NULL;
+        return nullptr;
     }
 
     // Verify options match.
     if (!string_prefixes_string(e->option, &optstr[cursor])) {
-        return NULL;
+        return nullptr;
     }
     cursor += e->option.length();
 
     // Short options are like -DNDEBUG. Long options are like --color=auto. So check for an equal
     // sign for long options.
-    if (e->type != option_type_short) {
-        if (optstr[cursor] != L'=') {
-            return NULL;
-        }
-        cursor += 1;
+    assert(e->type != option_type_short);
+    if (optstr[cursor] != L'=') {
+        return nullptr;
     }
+    cursor += 1;
     return &optstr[cursor];
 }
 
-/// Tests whether a short option is a viable completion. arg_str will be like '-xzv', nextopt will
-/// be a character like 'f' options will be the list of all options, used to validate the argument.
-static bool short_ok(const wcstring &arg, const complete_entry_opt_t *entry,
-                     const option_list_t &options) {
-    // Ensure it's a short option.
-    if (entry->type != option_type_short || entry->option.empty()) {
-        return false;
+/// Parses a token of short options plus one optional parameter like
+/// '-xzPARAM', where x and z are short options.
+///
+/// Returns the position of the last option character (e.g. the position of z which is 2).
+/// Everything after that is assumed to be part of the parameter.
+/// Returns wcstring::npos if there is no valid short option.
+size_t short_option_pos(const wcstring &arg, const option_list_t &options) {
+    if (arg.size() <= 1 || leading_dash_count(arg.c_str()) != 1) {
+        return wcstring::npos;
     }
-    const wchar_t nextopt = entry->option.at(0);
-
-    // Empty strings are always 'OK'.
-    if (arg.empty()) {
-        return true;
-    }
-
-    // The argument must start with exactly one dash.
-    if (leading_dash_count(arg.c_str()) != 1) {
-        return false;
-    }
-
-    // Short option must not be already present.
-    if (arg.find(nextopt) != wcstring::npos) {
-        return false;
-    }
-
-    // Verify that all characters in our combined short option list are present as short options in
-    // the options list. If we get a short option that can't be combined (NO_COMMON), then we stop.
-    bool result = true;
-    for (size_t i = 1; i < arg.size(); i++) {
-        wchar_t arg_char = arg.at(i);
-        const complete_entry_opt_t *match = NULL;
-        for (option_list_t::const_iterator iter = options.begin(); iter != options.end(); ++iter) {
-            if (iter->type == option_type_short && iter->option.at(0) == arg_char) {
-                match = &*iter;
+    for (size_t pos = 1; pos < arg.size(); pos++) {
+        wchar_t arg_char = arg.at(pos);
+        const complete_entry_opt_t *match = nullptr;
+        for (const complete_entry_opt_t &o : options) {
+            if (o.type == option_type_short && o.option.at(0) == arg_char) {
+                match = &o;
                 break;
             }
         }
-        if (match == NULL || (match->result_mode.requires_param)) {
-            result = false;
-            break;
+        if (match == nullptr) {
+            // The first character after the dash is not a valid option.
+            if (pos == 1) return wcstring::npos;
+            return pos - 1;
+        }
+        if (match->result_mode.requires_param) {
+            return pos;
         }
     }
-    return result;
+    return arg.size() - 1;
 }
 
 /// Load command-specific completions for the specified command.
@@ -867,8 +860,9 @@ static void complete_load(const wcstring &name) {
     // It's important to NOT hold the lock around completion loading.
     // We need to take the lock to decide what to load, drop it to perform the load, then reacquire
     // it.
-    const environment_t &vars = parser_t::principal_parser().vars();
-    maybe_t<wcstring> path_to_load = completion_autoloader.acquire()->resolve_command(name, vars);
+    // Note we only look at the global fish_function_path and fish_completion_path.
+    maybe_t<wcstring> path_to_load =
+        completion_autoloader.acquire()->resolve_command(name, env_stack_t::globals());
     if (path_to_load) {
         autoload_t::perform_autoload(*path_to_load, parser);
         completion_autoloader.acquire()->mark_autoload_finished(name);
@@ -909,14 +903,13 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
     // FLOGF(error, L"\nThinking about looking up completions for %ls\n", cmd.c_str());
     bool head_exists = builtin_exists(cmd);
     // Only reload environment variables if builtin_exists returned false, as an optimization
-    if (head_exists == false) {
-        head_exists = function_exists_no_autoload(cmd, vars);
+    if (!head_exists) {
+        head_exists = function_exists_no_autoload(cmd);
         // While it may seem like first testing `path_get_path` before resorting to an env lookup
         // may be faster, path_get_path can potentially do a lot of FS/IO access, so env.get() +
         // function_exists() should still be faster.
-        head_exists =
-            head_exists || path_get_path(cmd_orig, nullptr,
-                                         vars);  // use cmd_orig here as it is potentially pathed
+        // Use cmd_orig here as it is potentially pathed.
+        head_exists = head_exists || path_get_path(cmd_orig, nullptr, vars);
     }
 
     if (!head_exists) {
@@ -945,14 +938,24 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
     // Now release the lock and test each option that we captured above. We have to do this outside
     // the lock because callouts (like the condition) may add or remove completions. See issue 2.
     for (const option_list_t &options : all_options) {
-        use_common = 1;
+        size_t short_opt_pos = short_option_pos(str, options);
+        bool last_option_requires_param = false;
+        use_common = true;
         if (use_switches) {
             if (str[0] == L'-') {
                 // Check if we are entering a combined option and argument (like --color=auto or
                 // -I/usr/include).
                 for (const complete_entry_opt_t &o : options) {
-                    const wchar_t *arg = param_match2(&o, str.c_str());
-                    if (arg != NULL && this->condition_test(o.condition)) {
+                    const wchar_t *arg;
+                    if (o.type == option_type_short) {
+                        if (short_opt_pos == wcstring::npos) continue;
+                        if (o.option.at(0) != str.at(short_opt_pos)) continue;
+                        last_option_requires_param = o.result_mode.requires_param;
+                        arg = str.c_str() + short_opt_pos + 1;
+                    } else {
+                        arg = param_match2(&o, str.c_str());
+                    }
+                    if (arg != nullptr && this->condition_test(o.condition)) {
                         if (o.result_mode.requires_param) use_common = false;
                         if (o.result_mode.no_files) use_files = false;
                         if (o.result_mode.force_files) has_force = true;
@@ -978,17 +981,27 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
                 }
 
                 // No old style option matched, or we are not using old style options. We check if
-                // any short (or gnu style options do.
+                // any short (or gnu style) options do.
                 if (!old_style_match) {
+                    size_t prev_short_opt_pos = short_option_pos(popt, options);
                     for (const complete_entry_opt_t &o : options) {
                         // Gnu-style options with _optional_ arguments must be specified as a single
                         // token, so that it can be differed from a regular argument.
                         // Here we are testing the previous argument for a GNU-style match,
                         // to see how we should complete the current argument
-                        if (o.type == option_type_double_long && !o.result_mode.requires_param)
-                            continue;
+                        if (!o.result_mode.requires_param) continue;
 
-                        if (param_match(&o, popt.c_str()) && this->condition_test(o.condition)) {
+                        bool match = false;
+                        if (o.type == option_type_short) {
+                            match = prev_short_opt_pos != wcstring::npos &&
+                                    // Only if the option was the last char in the token,
+                                    // i.e. there is no parameter yet.
+                                    prev_short_opt_pos + 1 == popt.size() &&
+                                    o.option.at(0) == popt.at(prev_short_opt_pos);
+                        } else if (o.type == option_type_double_long) {
+                            match = param_match(&o, popt.c_str());
+                        }
+                        if (match && this->condition_test(o.condition)) {
                             if (o.result_mode.requires_param) use_common = false;
                             if (o.result_mode.no_files) use_files = false;
                             if (o.result_mode.force_files) has_force = true;
@@ -1017,7 +1030,21 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
             }
 
             // Check if the short style option matches.
-            if (short_ok(str, &o, options)) {
+            if (o.type == option_type_short) {
+                wchar_t optchar = o.option.at(0);
+                if (short_opt_pos == wcstring::npos) {
+                    // str has no short option at all (but perhaps it is the
+                    // prefix of a single long option).
+                    // Only complete short options if there is no character after the dash.
+                    if (str != L"-") continue;
+                } else {
+                    // Only complete when the last short option has no parameter yet..
+                    if (short_opt_pos + 1 != str.size()) continue;
+                    // .. and it does not require one ..
+                    if (last_option_requires_param) continue;
+                    // .. and the option is not already there.
+                    if (str.find(optchar) != wcstring::npos) continue;
+                }
                 // It's a match.
                 wcstring desc = o.localized_desc();
                 // Append a short-style option
@@ -1076,6 +1103,7 @@ bool completer_t::complete_param(const wcstring &cmd_orig, const wcstring &popt,
 /// Perform generic (not command-specific) expansions on the specified string.
 void completer_t::complete_param_expand(const wcstring &str, bool do_file,
                                         bool handle_as_special_cd) {
+    if (reader_test_should_cancel()) return;
     expand_flags_t flags =
         this->expand_flags() | expand_flag::skip_cmdsubst | expand_flag::for_completions;
 
@@ -1109,7 +1137,7 @@ void completer_t::complete_param_expand(const wcstring &str, bool do_file,
         // See #4954.
         const wcstring sep_string = wcstring(str, sep_index + 1);
         std::vector<completion_t> local_completions;
-        if (expand_string(sep_string, &local_completions, flags, vars, parser, NULL) ==
+        if (expand_string(sep_string, &local_completions, flags, vars, parser, nullptr) ==
             expand_result_t::error) {
             debug(3, L"Error while expanding string '%ls'", sep_string.c_str());
         }
@@ -1129,7 +1157,7 @@ void completer_t::complete_param_expand(const wcstring &str, bool do_file,
         // consider relaxing this if there was a preceding double-dash argument.
         if (string_prefixes_string(L"-", str)) flags.clear(expand_flag::fuzzy_match);
 
-        if (expand_string(str, &this->completions, flags, vars, parser, NULL) ==
+        if (expand_string(str, &this->completions, flags, vars, parser, nullptr) ==
             expand_result_t::error) {
             debug(3, L"Error while expanding string '%ls'", str.c_str());
         }
@@ -1164,13 +1192,18 @@ bool completer_t::complete_variable(const wcstring &str, size_t start_offset) {
 
         wcstring desc;
         if (this->wants_descriptions()) {
-            // Can't use this->vars here, it could be any variable.
-            auto var = vars.get(env_name);
-            if (!var) continue;
-
             if (this->type() != COMPLETE_AUTOSUGGEST) {
-                wcstring value = expand_escape_variable(*var);
-                desc = format_string(COMPLETE_VAR_DESC_VAL, value.c_str());
+                // $history can be huge, don't put it in the completion description; see #6288.
+                if (env_name == L"history") {
+                    desc = history_variable_description;
+                } else {
+                    // Can't use this->vars here, it could be any variable.
+                    auto var = vars.get(env_name);
+                    if (!var) continue;
+
+                    wcstring value = expand_escape_variable(*var);
+                    desc = format_string(COMPLETE_VAR_DESC_VAL, value.c_str());
+                }
             }
         }
 
@@ -1271,9 +1304,7 @@ bool completer_t::try_complete_user(const wcstring &str) {
     setpwent();
     // cppcheck-suppress getpwentCalled
     while (struct passwd *pw = getpwent()) {
-        bool interrupted =
-            is_main_thread() ? reader_test_and_clear_interrupted() : reader_thread_job_is_stale();
-        if (interrupted) {
+        if (reader_test_should_cancel()) {
             break;
         }
         const wcstring pw_name_str = str2wcstring(pw->pw_name);
@@ -1301,18 +1332,19 @@ bool completer_t::try_complete_user(const wcstring &str) {
 #endif
 }
 
-// The callback type for walk_wrap_chain
+// The callback type for walk_wrap_chain.
 using wrap_chain_visitor_t = std::function<void(const wcstring &, const wcstring &, size_t depth)>;
 
-// Helper to complete a parameter for a command and its transitive wrap chain.
-// Given a command line \p command_line and the range of the command itself within the command line
-// as \p command_range, invoke the \p receiver with the command and the command line. Then, for each
-// target wrapped by the given command, update the command line with that target and invoke this
-// recursively.
-static void walk_wrap_chain(const wcstring &command_line, source_range_t command_range,
-                            const wrap_chain_visitor_t &visitor, size_t depth = 0) {
+// A set tracking which (command, wrap) pairs we have seen.
+using wrap_chain_visited_set_t = std::set<std::pair<wcstring, wcstring>>;
+
+// Recursive implementation of walk_wrap_chain().
+static void walk_wrap_chain_recursive(const wcstring &command_line, source_range_t command_range,
+                                      const wrap_chain_visitor_t &visitor,
+                                      wrap_chain_visited_set_t *visited, size_t depth) {
     // Limit our recursion depth. This prevents cycles in the wrap chain graph from overflowing.
     if (depth > 24) return;
+    if (reader_test_should_cancel()) return;
 
     // Extract command from the command line and invoke the receiver with it.
     wcstring command(command_line, command_range.start, command_range.length);
@@ -1332,17 +1364,76 @@ static void walk_wrap_chain(const wcstring &command_line, source_range_t command
         if (!wrapped_command.empty()) {
             size_t where = faux_commandline.find(wrapped_command, command_range.start);
             if (where != wcstring::npos) {
-                // Recurse with our new command and command line.
-                source_range_t faux_source_range{uint32_t(where), uint32_t(wrapped_command.size())};
-                walk_wrap_chain(faux_commandline, faux_source_range, visitor, depth + 1);
+                // Do not recurse if we have already seen this.
+                if (visited->insert({command, wrapped_command}).second) {
+                    // Recurse with our new command and command line.
+                    source_range_t faux_source_range{uint32_t(where),
+                                                     uint32_t(wrapped_command.size())};
+                    walk_wrap_chain_recursive(faux_commandline, faux_source_range, visitor, visited,
+                                              depth + 1);
+                }
             }
         }
     }
 }
 
+// Helper to complete a parameter for a command and its transitive wrap chain.
+// Given a command line \p command_line and the range of the command itself within the command line
+// as \p command_range, invoke the \p receiver with the command and the command line. Then, for each
+// target wrapped by the given command, update the command line with that target and invoke this
+// recursively.
+static void walk_wrap_chain(const wcstring &command_line, source_range_t command_range,
+                            const wrap_chain_visitor_t &visitor) {
+    wrap_chain_visited_set_t visited;
+    walk_wrap_chain_recursive(command_line, command_range, visitor, &visited, 0);
+}
+
+/// If the argument contains a '[' typed by the user, completion by appending to the argument might
+/// produce an invalid token (#5831).
+///
+/// Check if there is any unescaped, unquoted '['; if yes, make the completions replace the entire
+/// argument instead of appending, so '[' will be escaped.
+void completer_t::escape_opening_brackets(const wcstring &argument) {
+    bool have_unquoted_unescaped_bracket = false;
+    wchar_t quote = L'\0';
+    bool escaped = false;
+    for (wchar_t c : argument) {
+        have_unquoted_unescaped_bracket |= (c == L'[') && !quote && !escaped;
+        if (escaped) {
+            escaped = false;
+        } else if (c == L'\\') {
+            escaped = true;
+        } else if (c == L'\'' || c == L'"') {
+            if (quote == c) {
+                // Closing a quote.
+                quote = L'\0';
+            } else if (quote == L'\0') {
+                // Opening a quote.
+                quote = c;
+            }
+        }
+    }
+    if (!have_unquoted_unescaped_bracket) return;
+    // Since completion_apply_to_command_line will escape the completion, we need to provide an
+    // unescaped version.
+    wcstring unescaped_argument;
+    if (!unescape_string(argument, &unescaped_argument, UNESCAPE_INCOMPLETE)) return;
+    for (completion_t &comp : completions) {
+        if (comp.flags & COMPLETE_REPLACES_TOKEN) continue;
+        comp.flags |= COMPLETE_REPLACES_TOKEN;
+        if (comp.flags & COMPLETE_DONT_ESCAPE) {
+            // If the completion won't be escaped, we need to do it here.
+            // Currently, this will probably never happen since COMPLETE_DONT_ESCAPE
+            // is only set for user or variable names which cannot contain '['.
+            unescaped_argument = escape_string(unescaped_argument, ESCAPE_ALL);
+        }
+        comp.completion = unescaped_argument + comp.completion;
+    }
+}
+
 /// Set the DUPLICATES_ARG flag in any completion that duplicates an argument.
 void completer_t::mark_completions_duplicating_arguments(const wcstring &prefix,
-                                                         const arg_list_t &args) {
+                                                         const std::vector<tok_t> &args) {
     // Get all the arguments, unescaped, into an array that we're going to bsearch.
     wcstring_list_t arg_strs;
     for (const auto &arg : args) {
@@ -1366,227 +1457,174 @@ void completer_t::mark_completions_duplicating_arguments(const wcstring &prefix,
     }
 }
 
-/// Return the index of an argument from \p args containing the position \p pos, or none if none.
-static maybe_t<size_t> find_argument_containing_position(const arg_list_t &args, size_t pos) {
-    size_t idx = 0;
-    for (const auto &arg : args) {
-        if (arg.location_in_or_at_end_of_source_range(pos)) {
-            return idx;
-        }
-        idx++;
-    }
-    return none();
-}
-
 void completer_t::perform() {
-    wcstring current_command;
-    const size_t pos = cmd.size();
-    // debug( 1, L"Complete '%ls'", cmd.c_str() );
-
-    const wchar_t *tok_begin = nullptr;
-    parse_util_token_extent(cmd.c_str(), cmd.size(), &tok_begin, nullptr, nullptr, nullptr);
-    assert(tok_begin != nullptr);
-
-    // If we are completing a variable name or a tilde expansion user name, we do that and return.
-    // No need for any other completions.
-    // Unconditionally complete variables and processes.
-    const wcstring current_token = tok_begin;
-    if (try_complete_variable(current_token) || try_complete_user(current_token)) {
-        return;
-    }
-
-    parse_node_tree_t tree;
-    parse_tree_from_string(cmd,
-                           parse_flag_continue_after_error | parse_flag_accept_incomplete_tokens |
-                               parse_flag_include_comments,
-                           &tree, NULL);
+    const size_t cursor_pos = cmd.size();
 
     // Find the plain statement to operate on. The cursor may be past it (#1261), so backtrack
     // until we know we're no longer in a space. But the space may actually be part of the
     // argument (#2477).
-    size_t position_in_statement = pos;
+    size_t position_in_statement = cursor_pos;
     while (position_in_statement > 0 && cmd.at(position_in_statement - 1) == L' ') {
         position_in_statement--;
     }
-    auto plain_statement = tnode_t<grammar::plain_statement>::find_node_matching_source_location(
-        &tree, position_in_statement, nullptr);
-    if (!plain_statement) {
-        // Not part of a plain statement. This could be e.g. a for loop header, case expression,
-        // etc. Do generic file completions (issue #1309). If we had to backtrack, it means
-        // there was whitespace; don't do an autosuggestion in that case. Also don't do it if we
-        // are just after a pipe, semicolon, or & (issue #1631), or in a comment.
-        //
-        // Overall this logic is a total mess. A better approach would be to return the
-        // "possible next token" from the parse tree directly (this data is available as the
-        // first of the sequence of nodes without source locations at the very end of the parse
-        // tree).
-        bool do_file = true;
-        if (flags & completion_request_t::autosuggestion) {
-            if (position_in_statement < pos) {
-                do_file = false;
-            } else if (pos > 0) {
-                // If the previous character is in one of these types, we don't do file
-                // suggestions.
-                const parse_token_type_t bad_types[] = {parse_token_type_pipe, parse_token_type_end,
-                                                        parse_token_type_background,
-                                                        parse_special_type_comment};
-                for (parse_token_type_t type : bad_types) {
-                    if (tree.find_node_matching_source_location(type, pos - 1, NULL)) {
-                        do_file = false;
-                        break;
-                    }
-                }
-            }
+
+    // Get all the arguments.
+    std::vector<tok_t> tokens;
+    parse_util_process_extent(cmd.c_str(), position_in_statement, nullptr, nullptr, &tokens);
+
+    // Hack: fix autosuggestion by removing prefixing "and"s #6249.
+    if (flags & completion_request_t::autosuggestion) {
+        while (!tokens.empty() && parser_keywords_is_subcommand(tokens.front().get_source(cmd)))
+            tokens.erase(tokens.begin());
+    }
+    // Empty process (cursor is after one of ;, &, |, \n, &&, || modulo whitespace).
+    if (tokens.empty()) {
+        // Don't autosuggest anything based on the empty string (generalizes #1631).
+        if (flags & completion_request_t::autosuggestion) return;
+
+        complete_cmd(L"");
+        complete_abbr(L"");
+        return;
+    }
+
+    const tok_t &cmd_tok = tokens.front();
+    const tok_t &cur_tok = tokens.back();
+    // Since fish does not currently support redirect in command position, we return here.
+    if (cmd_tok.type != token_type_t::string) return;
+    if (cur_tok.type == token_type_t::error) return;
+    for (const auto &tok : tokens) {  // If there was an error, it was in the last token.
+        assert(tok.type == token_type_t::string || tok.type == token_type_t::redirect);
+    }
+    // If we are completing a variable name or a tilde expansion user name, we do that and return.
+    // No need for any other completions.
+    const wcstring current_token = cur_tok.get_source(cmd);
+    if (try_complete_variable(current_token) || try_complete_user(current_token)) {
+        return;
+    }
+
+    if (cmd_tok.location_in_or_at_end_of_source_range(cursor_pos)) {
+        maybe_t<size_t> equal_sign_pos = variable_assignment_equals_pos(current_token);
+        if (equal_sign_pos) {
+            complete_param_expand(current_token.substr(*equal_sign_pos + 1), true /* do_file */);
+            return;
         }
-        complete_param_expand(current_token, do_file);
-    } else {
-        assert(plain_statement && plain_statement.has_source());
+        // Complete command filename.
+        complete_cmd(current_token);
+        complete_abbr(current_token);
+        return;
+    }
+    // See whether we are in an argument, in a redirection or in the whitespace in between.
+    bool in_redirection = cur_tok.type == token_type_t::redirect;
 
-        bool use_command = true;
-        bool use_function = true;
-        bool use_builtin = true;
-        bool use_implicit_cd = true;
-        bool use_abbr = true;
-
-        // Get the command node.
-        tnode_t<grammar::tok_string> cmd_node = plain_statement.child<0>();
-        assert(cmd_node && cmd_node.has_source() && "Expected command node to be valid");
-
-        // Get the actual command string.
-        current_command = cmd_node.get_source(cmd);
-
-        // Check the decoration.
-        switch (get_decoration(plain_statement)) {
-            case parse_statement_decoration_none: {
-                use_command = true;
-                use_function = true;
-                use_builtin = true;
-                use_implicit_cd = true;
-                use_abbr = true;
-                break;
-            }
-            case parse_statement_decoration_command:
-            case parse_statement_decoration_exec: {
-                use_command = true;
-                use_function = false;
-                use_builtin = false;
-                use_implicit_cd = false;
-                use_abbr = false;
-                break;
-            }
-            case parse_statement_decoration_builtin: {
-                use_command = false;
-                use_function = false;
-                use_builtin = true;
-                use_implicit_cd = false;
-                use_abbr = false;
-                break;
-            }
-        }
-
-        if (cmd_node.location_in_or_at_end_of_source_range(pos)) {
-            // Complete command filename.
-            complete_cmd(current_token, use_function, use_builtin, use_command, use_implicit_cd);
-            if (use_abbr) complete_abbr(current_token);
+    bool had_ddash = false;
+    wcstring current_argument, previous_argument;
+    if (cur_tok.type == token_type_t::string &&
+        cur_tok.location_in_or_at_end_of_source_range(position_in_statement)) {
+        // If the cursor is in whitespace, then the "current" argument is empty and the
+        // previous argument is the matching one. But if the cursor was in or at the end
+        // of the argument, then the current argument is the matching one, and the
+        // previous argument is the one before it.
+        bool cursor_in_whitespace = !cur_tok.location_in_or_at_end_of_source_range(cursor_pos);
+        if (cursor_in_whitespace) {
+            current_argument.clear();
+            previous_argument = current_token;
         } else {
-            // Get all the arguments.
-            arg_list_t all_arguments = plain_statement.descendants<grammar::argument>();
-
-            // See whether we are in an argument. We may also be in a redirection, or nothing at
-            // all.
-            maybe_t<size_t> matching_arg_index =
-                find_argument_containing_position(all_arguments, position_in_statement);
-
-            bool had_ddash = false;
-            wcstring current_argument, previous_argument;
-            if (matching_arg_index) {
-                const wcstring matching_arg = all_arguments.at(*matching_arg_index).get_source(cmd);
-
-                // If the cursor is in whitespace, then the "current" argument is empty and the
-                // previous argument is the matching one. But if the cursor was in or at the end
-                // of the argument, then the current argument is the matching one, and the
-                // previous argument is the one before it.
-                bool cursor_in_whitespace =
-                    !plain_statement.location_in_or_at_end_of_source_range(pos);
-                if (cursor_in_whitespace) {
-                    current_argument.clear();
-                    previous_argument = matching_arg;
-                } else {
-                    current_argument = matching_arg;
-                    if (*matching_arg_index > 0) {
-                        previous_argument =
-                            all_arguments.at(*matching_arg_index - 1).get_source(cmd);
-                    }
-                }
-
-                // Check to see if we have a preceding double-dash.
-                for (size_t i = 0; i < *matching_arg_index; i++) {
-                    if (all_arguments.at(i).get_source(cmd) == L"--") {
-                        had_ddash = true;
-                        break;
-                    }
-                }
+            current_argument = current_token;
+            if (tokens.size() >= 2) {
+                tok_t prev_tok = tokens.at(tokens.size() - 2);
+                if (prev_tok.type == token_type_t::string)
+                    previous_argument = prev_tok.get_source(cmd);
+                in_redirection = prev_tok.type == token_type_t::redirect;
             }
+        }
 
-            // If we are not in an argument, we may be in a redirection.
-            bool in_redirection = false;
-            if (!matching_arg_index) {
-                if (tnode_t<grammar::redirection>::find_node_matching_source_location(
-                        &tree, position_in_statement, plain_statement)) {
-                    in_redirection = true;
-                }
+        // Check to see if we have a preceding double-dash.
+        for (size_t i = 0; i < tokens.size() - 1; i++) {
+            if (tokens.at(i).get_source(cmd) == L"--") {
+                had_ddash = true;
+                break;
             }
-
-            bool do_file = false, handle_as_special_cd = false;
-            if (in_redirection) {
-                do_file = true;
-            } else {
-                // Try completing as an argument.
-                wcstring current_command_unescape, previous_argument_unescape,
-                    current_argument_unescape;
-                if (unescape_string(current_command, &current_command_unescape, UNESCAPE_DEFAULT) &&
-                    unescape_string(previous_argument, &previous_argument_unescape,
-                                    UNESCAPE_DEFAULT) &&
-                    unescape_string(current_argument, &current_argument_unescape,
-                                    UNESCAPE_INCOMPLETE)) {
-                    // Have to walk over the command and its entire wrap chain. If any command
-                    // disables do_file, then they all do.
-                    do_file = true;
-                    auto receiver = [&](const wcstring &cmd, const wcstring &cmdline,
-                                        size_t depth) {
-                        // Perhaps set a transient commandline so that custom completions
-                        // buitin_commandline will refer to the wrapped command. But not if
-                        // we're doing autosuggestions.
-                        std::unique_ptr<builtin_commandline_scoped_transient_t> bcst;
-                        if (depth > 0 && !(flags & completion_request_t::autosuggestion)) {
-                            bcst = make_unique<builtin_commandline_scoped_transient_t>(cmdline);
-                        }
-                        // Now invoke any custom completions for this command.
-                        if (!complete_param(cmd, previous_argument_unescape,
-                                            current_argument_unescape, !had_ddash)) {
-                            do_file = false;
-                        }
-                    };
-                    walk_wrap_chain(cmd, *cmd_node.source_range(), receiver);
-                }
-
-                // Hack. If we're cd, handle it specially (issue #1059, others).
-                handle_as_special_cd = (current_command_unescape == L"cd");
-
-                // And if we're autosuggesting, and the token is empty, don't do file suggestions.
-                if ((flags & completion_request_t::autosuggestion) &&
-                    current_argument_unescape.empty()) {
-                    do_file = false;
-                }
-            }
-
-            // This function wants the unescaped string.
-            complete_param_expand(current_token, do_file, handle_as_special_cd);
-
-            // Lastly mark any completions that appear to already be present in arguments.
-            mark_completions_duplicating_arguments(current_token, all_arguments);
         }
     }
+
+    bool do_file = false, handle_as_special_cd = false;
+    if (in_redirection) {
+        do_file = true;
+    } else {
+        // Try completing as an argument.
+        wcstring current_command = cmd_tok.get_source(cmd), current_command_unescape,
+                 previous_argument_unescape, current_argument_unescape;
+        if (unescape_string(current_command, &current_command_unescape, UNESCAPE_DEFAULT) &&
+            unescape_string(previous_argument, &previous_argument_unescape, UNESCAPE_DEFAULT) &&
+            unescape_string(current_argument, &current_argument_unescape, UNESCAPE_INCOMPLETE)) {
+            // Have to walk over the command and its entire wrap chain. If any command
+            // disables do_file, then they all do.
+            do_file = true;
+            auto receiver = [&](const wcstring &cmd, const wcstring &cmdline, size_t depth) {
+                // Perhaps set a transient commandline so that custom completions
+                // buitin_commandline will refer to the wrapped command. But not if
+                // we're doing autosuggestions.
+                bool wants_transient = depth > 0 && !(flags & completion_request_t::autosuggestion);
+                if (wants_transient) {
+                    parser->libdata().transient_commandlines.push_back(cmdline);
+                }
+                bool is_variable_assignment = bool(variable_assignment_equals_pos(cmd));
+                if (is_variable_assignment && parser) {
+                    // To avoid issues like #2705 we complete commands starting with variable
+                    // assignments by recursively calling complete for the command suffix
+                    // without the first variable assignment token.
+                    wcstring unaliased_cmd;
+                    if (parser->libdata().transient_commandlines.empty()) {
+                        unaliased_cmd = cmdline;
+                    } else {
+                        unaliased_cmd = parser->libdata().transient_commandlines.back();
+                    }
+                    tokenizer_t tok(unaliased_cmd.c_str(), TOK_ACCEPT_UNFINISHED);
+                    maybe_t<tok_t> cmd_tok = tok.next();
+                    assert(cmd_tok);
+                    unaliased_cmd =
+                        unaliased_cmd.replace(0, cmd_tok->offset + cmd_tok->length, L"");
+                    parser->libdata().transient_commandlines.push_back(unaliased_cmd);
+                    cleanup_t remove_transient(
+                        [&] { parser->libdata().transient_commandlines.pop_back(); });
+                    std::vector<completion_t> comp;
+                    complete(unaliased_cmd, &comp, completion_request_t::fuzzy_match,
+                             parser->vars(), parser->shared());
+                    this->completions.insert(completions.end(), comp.begin(), comp.end());
+                    do_file = false;
+                } else if (!complete_param(
+                               cmd, previous_argument_unescape, current_argument_unescape,
+                               !had_ddash)) {  // Invoke any custom completions for this command.
+                    do_file = false;
+                }
+                if (wants_transient) {
+                    parser->libdata().transient_commandlines.pop_back();
+                }
+            };
+            assert(cmd_tok.offset < std::numeric_limits<uint32_t>::max());
+            assert(cmd_tok.length < std::numeric_limits<uint32_t>::max());
+            source_range_t range = {static_cast<uint32_t>(cmd_tok.offset),
+                                    static_cast<uint32_t>(cmd_tok.length)};
+            walk_wrap_chain(cmd, range, receiver);
+        }
+
+        // Hack. If we're cd, handle it specially (issue #1059, others).
+        handle_as_special_cd = (current_command_unescape == L"cd");
+
+        // And if we're autosuggesting, and the token is empty, don't do file suggestions.
+        if ((flags & completion_request_t::autosuggestion) && current_argument_unescape.empty()) {
+            do_file = false;
+        }
+    }
+
+    // This function wants the unescaped string.
+    complete_param_expand(current_argument, do_file, handle_as_special_cd);
+
+    // Escape '[' in the argument before completing it.
+    escape_opening_brackets(current_argument);
+
+    // Lastly mark any completions that appear to already be present in arguments.
+    mark_completions_duplicating_arguments(current_token, tokens);
 }
 
 void complete(const wcstring &cmd_with_subcmds, std::vector<completion_t> *out_comps,
@@ -1596,22 +1634,29 @@ void complete(const wcstring &cmd_with_subcmds, std::vector<completion_t> *out_c
     const wchar_t *cmdsubst_begin, *cmdsubst_end;
     parse_util_cmdsubst_extent(cmd_with_subcmds.c_str(), cmd_with_subcmds.size(), &cmdsubst_begin,
                                &cmdsubst_end);
-    assert(cmdsubst_begin != NULL && cmdsubst_end != NULL && cmdsubst_end >= cmdsubst_begin);
+    assert(cmdsubst_begin != nullptr && cmdsubst_end != nullptr && cmdsubst_end >= cmdsubst_begin);
     wcstring cmd = wcstring(cmdsubst_begin, cmdsubst_end - cmdsubst_begin);
     completer_t completer(vars, parser, std::move(cmd), flags);
     completer.perform();
     *out_comps = completer.acquire_completions();
 }
 
-/// Print the GNU longopt style switch \c opt, and the argument \c argument to the specified
-/// stringbuffer, but only if arguemnt is non-null and longer than 0 characters.
-static void append_switch(wcstring &out, const wcstring &opt, const wcstring &argument) {
-    if (argument.empty()) return;
-
-    wcstring esc = escape_string(argument, ESCAPE_ALL);
-    append_format(out, L" --%ls %ls", opt.c_str(), esc.c_str());
+/// Print the short switch \c opt, and the argument \c arg to the specified
+/// wcstring, but only if \c argument isn't an empty string.
+static void append_switch(wcstring &out, wchar_t opt, const wcstring arg) {
+    if (arg.empty()) return;
+    append_format(out, L" -%lc %ls", opt, escape_string(arg, ESCAPE_ALL).c_str());
+}
+static void append_switch(wcstring &out, const wcstring opt, const wcstring arg) {
+    if (arg.empty()) return;
+    append_format(out, L" --%ls %ls", opt.c_str(), escape_string(arg, ESCAPE_ALL).c_str());
+}
+static void append_switch(wcstring &out, wchar_t opt) { append_format(out, L" -%lc", opt); }
+static void append_switch(wcstring &out, const wcstring opt) {
+    append_format(out, L" --%ls", opt.c_str());
 }
 
+/// Use by the bare `complete`, loaded completions are printed out as commands
 wcstring complete_print() {
     wcstring out;
     auto completion_set = s_completion_set.acquire();
@@ -1626,42 +1671,40 @@ wcstring complete_print() {
     for (const completion_entry_t &e : all_completions) {
         const option_list_t &options = e.get_options();
         for (const complete_entry_opt_t &o : options) {
-            const wchar_t *modestr = L"";
-            if (o.result_mode.no_files && o.result_mode.requires_param) {
-                modestr = L" --exclusive";
-            } else if (o.result_mode.no_files) {
-                modestr = L" --no-files";
-            } else if (o.result_mode.force_files) {
-                modestr = L" --force-files";
-            } else if (o.result_mode.requires_param) {
-                modestr = L" --require-parameter";
-            }
-            append_format(out, L"complete%ls", modestr);
+            out.append(L"complete");
 
-            append_switch(out, e.cmd_is_path ? L"path" : L"command",
-                          escape_string(e.cmd, ESCAPE_ALL));
+            if (o.flags & COMPLETE_DONT_SORT) append_switch(out, L'k');
+
+            if (o.result_mode.no_files && o.result_mode.requires_param) {
+                append_switch(out, L"exclusive");
+            } else if (o.result_mode.no_files) {
+                append_switch(out, L"no-files");
+            } else if (o.result_mode.force_files) {
+                append_switch(out, L"force-files");
+            } else if (o.result_mode.requires_param) {
+                append_switch(out, L"requires-param");
+            }
+
+            append_switch(out, e.cmd_is_path ? L'p' : L'c', e.cmd);
 
             switch (o.type) {
                 case option_type_args_only: {
                     break;
                 }
                 case option_type_short: {
-                    assert(!o.option.empty());  //!OCLINT(multiple unary operator)
-                    append_format(out, L" --short-option '%lc'", o.option.at(0));
+                    append_switch(out, L's', wcstring(1, o.option.at(0)));
                     break;
                 }
                 case option_type_single_long:
                 case option_type_double_long: {
-                    append_switch(
-                        out, o.type == option_type_single_long ? L"old-option" : L"long-option",
-                        o.option);
+                    append_switch(out, o.type == option_type_single_long ? L'o' : L'l', o.option);
                     break;
                 }
             }
 
-            append_switch(out, L"description", C_(o.desc));
-            append_switch(out, L"arguments", o.comp);
-            append_switch(out, L"condition", o.condition);
+            append_switch(out, L'd', C_(o.desc));
+            append_switch(out, L'a', o.comp);
+            append_switch(out, L'n', o.condition);
             out.append(L"\n");
         }
     }
@@ -1671,8 +1714,10 @@ wcstring complete_print() {
     for (const auto &entry : *locked_wrappers) {
         const wcstring &src = entry.first;
         for (const wcstring &target : entry.second) {
-            append_format(out, L"complete --command %ls --wraps %ls\n", src.c_str(),
-                          target.c_str());
+            out.append(L"complete");
+            append_switch(out, L'c', src);
+            append_switch(out, L"wraps", target);
+            out.append(L"\n");
         }
     }
     return out;

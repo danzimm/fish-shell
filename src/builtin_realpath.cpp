@@ -1,19 +1,20 @@
 // Implementation of the realpath builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <stdio.h>
-#include <stdlib.h>
+#include "builtin_realpath.h"
+
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 
 #include "builtin.h"
-#include "builtin_realpath.h"
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
 #include "wutil.h"  // IWYU pragma: keep
 
-/// An implementation of the external realpath command. Desn't support any options.
+/// An implementation of the external realpath command. Doesn't support any options.
 /// In general scripts shouldn't invoke this directly. They should just use `realpath` which
 /// will fallback to this builtin if an external command cannot be found.
 int builtin_realpath(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
@@ -26,13 +27,13 @@ int builtin_realpath(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
     if (optind + 1 != argc) {  // TODO: allow arbitrary args. `realpath *` should print many paths
         streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, cmd, 1, argc - optind);
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_INVALID_ARGS;
     }
 

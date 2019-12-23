@@ -6,14 +6,15 @@ set - display and change shell variables.
 Synopsis
 --------
 
-set [SCOPE_OPTIONS]
-set [OPTIONS] VARIABLE_NAME VALUES...
-set [OPTIONS] VARIABLE_NAME[INDICES]... VALUES...
-set ( -q | --query ) [SCOPE_OPTIONS] VARIABLE_NAMES...
-set ( -e | --erase ) [SCOPE_OPTIONS] VARIABLE_NAME
-set ( -e | --erase ) [SCOPE_OPTIONS] VARIABLE_NAME[INDICES]...
-set ( -S | --show ) [SCOPE_OPTIONS] [VARIABLE_NAME]...
+::
 
+    set [SCOPE_OPTIONS]
+    set [OPTIONS] VARIABLE_NAME VALUES...
+    set [OPTIONS] VARIABLE_NAME[INDICES]... VALUES...
+    set ( -q | --query ) [SCOPE_OPTIONS] VARIABLE_NAMES...
+    set ( -e | --erase ) [SCOPE_OPTIONS] VARIABLE_NAME
+    set ( -e | --erase ) [SCOPE_OPTIONS] VARIABLE_NAME[INDICES]...
+    set ( -S | --show ) [VARIABLE_NAME]...
 
 Description
 -----------
@@ -63,20 +64,20 @@ If the variable name is one or more list elements, such as ``PATH[1 3 7]``, only
 
 The scoping rules when creating or updating a variable are:
 
--# Variables may be explicitly set to universal, global or local. Variables with the same name in different scopes will not be changed.
+- Variables may be explicitly set to universal, global or local. Variables with the same name in different scopes will not be changed.
 
--# If a variable is not explicitly set to be either universal, global or local, but has been previously defined, the previous variable scope is used.
+- If a variable is not explicitly set to be either universal, global or local, but has been previously defined, the previous variable scope is used.
 
--# If a variable is not explicitly set to be either universal, global or local and has never before been defined, the variable will be local to the currently executing function. Note that this is different from using the ``-l`` or ``--local`` flag. If one of those flags is used, the variable will be local to the most inner currently executing block, while without these the variable will be local to the function. If no function is executing, the variable will be global.
+- If a variable is not explicitly set to be either universal, global or local and has never before been defined, the variable will be local to the currently executing function. Note that this is different from using the ``-l`` or ``--local`` flag. If one of those flags is used, the variable will be local to the most inner currently executing block, while without these the variable will be local to the function. If no function is executing, the variable will be global.
 
 
 The exporting rules when creating or updating a variable are identical to the scoping rules for variables:
 
--# Variables may be explicitly set to either exported or not exported. When an exported variable goes out of scope, it is unexported.
+- Variables may be explicitly set to either exported or not exported. When an exported variable goes out of scope, it is unexported.
 
--# If a variable is not explicitly set to be exported or not exported, but has been previously defined, the previous exporting rule for the variable is kept.
+- If a variable is not explicitly set to be exported or not exported, but has been previously defined, the previous exporting rule for the variable is kept.
 
--# If a variable is not explicitly set to be either exported or unexported and has never before been defined, the variable will not be exported.
+- If a variable is not explicitly set to be either exported or unexported and has never before been defined, the variable will not be exported.
 
 
 In query mode, the scope to be examined can be specified.
@@ -96,28 +97,33 @@ Examples
 
     # Prints all global, exported variables.
     set -xg
-    
+
     # Sets the value of the variable $foo to be 'hi'.
     set foo hi
-    
+
     # Appends the value "there" to the variable $foo.
     set -a foo there
-    
+
     # Does the same thing as the previous two commands the way it would be done pre-fish 3.0.
     set foo hi
     set foo $foo there
-    
+
     # Removes the variable $smurf
     set -e smurf
-    
+
     # Changes the fourth element of the $PATH list to ~/bin
     set PATH[4] ~/bin
-    
+
     # Outputs the path to Python if ``type -p`` returns true.
     if set python_path (type -p python)
         echo "Python is at $python_path"
     end
 
+    # Like other shells, fish 3.1 supports this syntax for passing a variable to just one command:
+    # Run fish with a temporary home directory.
+    HOME=(mktemp -d) fish
+    # Which is essentially the same as:
+    begin; set -lx HOME (mktemp -d); fish; end
 
 Notes
 -----

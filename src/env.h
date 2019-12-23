@@ -16,6 +16,8 @@
 extern size_t read_byte_limit;
 extern bool curses_initialized;
 
+struct event_t;
+
 /// Character for separating two array elements. We use 30, i.e. the ascii record separator since
 /// that seems logical.
 #define ARRAY_SEP (wchar_t)0x1e
@@ -77,7 +79,7 @@ struct statuses_t {
 };
 
 /// Initialize environment variable data.
-void env_init(const struct config_paths_t *paths = NULL);
+void env_init(const struct config_paths_t *paths = nullptr);
 
 /// Various things we need to initialize at run-time that don't really fit any of the other init
 /// routines.
@@ -197,7 +199,7 @@ class environment_t {
     virtual ~environment_t();
 
     /// Returns the PWD with a terminating slash.
-    wcstring get_pwd_slash() const;
+    virtual wcstring get_pwd_slash() const;
 };
 
 /// The null environment contains nothing.
@@ -224,6 +226,9 @@ class env_stack_t final : public environment_t {
 
     explicit env_stack_t(std::unique_ptr<env_stack_impl_t> impl);
 
+    /// \return whether we are the principal stack.
+    bool is_principal() const { return this == principal_ref().get(); }
+
    public:
     ~env_stack_t() override;
     env_stack_t(env_stack_t &&);
@@ -235,13 +240,18 @@ class env_stack_t final : public environment_t {
     wcstring_list_t get_names(int flags) const override;
 
     /// Sets the variable with the specified name to the given values.
-    int set(const wcstring &key, env_mode_flags_t mode, wcstring_list_t vals);
+    /// If \p out_events is supplied, populate it with any events generated through setting the
+    /// variable.
+    int set(const wcstring &key, env_mode_flags_t mode, wcstring_list_t vals,
+            std::vector<event_t> *out_events = nullptr);
 
     /// Sets the variable with the specified name to a single value.
-    int set_one(const wcstring &key, env_mode_flags_t mode, wcstring val);
+    int set_one(const wcstring &key, env_mode_flags_t mode, wcstring val,
+                std::vector<event_t> *out_events = nullptr);
 
     /// Sets the variable with the specified name to no values.
-    int set_empty(const wcstring &key, env_mode_flags_t mode);
+    int set_empty(const wcstring &key, env_mode_flags_t mode,
+                  std::vector<event_t> *out_events = nullptr);
 
     /// Update the PWD variable based on the result of getcwd.
     void set_pwd_from_getcwd();
@@ -252,9 +262,11 @@ class env_stack_t final : public environment_t {
     /// \param mode should be ENV_USER if this is a remove request from the user, 0 otherwise. If
     /// this is a user request, read-only variables can not be removed. The mode may also specify
     /// the scope of the variable that should be erased.
+    /// \param out_events if non-null, populate it with any events generated from removing this
+    /// variable.
     ///
     /// \return zero if the variable existed, and non-zero if the variable did not exist
-    int remove(const wcstring &key, int mode);
+    int remove(const wcstring &key, int mode, std::vector<event_t> *out_events = nullptr);
 
     /// Push the variable stack. Used for implementing local variables for functions and for-loops.
     void push(bool new_scope);
@@ -287,8 +299,8 @@ class env_stack_t final : public environment_t {
     /// Sets up argv as the given list of strings.
     void set_argv(wcstring_list_t argv);
 
-    /// Mark that exported variables have changed.
-    void mark_changed_exported();
+    /// Slightly optimized implementation.
+    wcstring get_pwd_slash() const override;
 
     // Compatibility hack; access the "environment stack" from back when there was just one.
     static const std::shared_ptr<env_stack_t> &principal_ref();
@@ -299,7 +311,6 @@ class env_stack_t final : public environment_t {
     static env_stack_t &globals();
 };
 
-extern int g_fork_count;
 extern bool g_use_posix_spawn;
 
 extern bool term_has_xn;  // does the terminal have the "eat_newline_glitch"
@@ -313,9 +324,6 @@ bool term_supports_setting_title();
 
 /// Gets a path appropriate for runtime storage
 wcstring env_get_runtime_path();
-
-/// Replace empty path elements with "." - see #3914.
-void fix_colon_delimited_var(const wcstring &var_name, env_stack_t &vars);
 
 /// A wrapper around setenv() and unsetenv() which use a lock.
 /// In general setenv() and getenv() are highly incompatible with threads. This makes it only

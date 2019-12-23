@@ -8,6 +8,10 @@ Use the :ref:`set <cmd-set>` command::
     set -x key value
     set -e key
 
+Since fish 3.1 you can set an environment variable for just one command using the ``key=value some command`` syntax, like in other shells.  The two lines below behave identically - unlike other shells, fish will output ``value`` both times::
+
+    key=value echo $key
+    begin; set -lx key value; echo $key; end
 
 How do I run a command every login? What's fish's equivalent to .bashrc?
 ------------------------------------------------------------------------
@@ -31,7 +35,7 @@ You can also use the Web configuration tool, :ref:`fish_config <cmd-fish_config>
 
 How do I run a command from history?
 ------------------------------------
-Type some part of the command, and then hit the :kbd:`↑` (up) or :kbd:`↓` (down) arrow keys to navigate through history matches.
+Type some part of the command, and then hit the :kbd:`↑` (up) or :kbd:`↓` (down) arrow keys to navigate through history matches. Additional default key bindings include :kbd:`Control+P` (up) and :kbd:`Control+N` (down).
 
 
 How do I run a subcommand? The backtick doesn't work!
@@ -95,23 +99,6 @@ If you are just interested in success or failure, you can run the command direct
 
 See the documentation for :ref:`test <cmd-test>` and :ref:`if <cmd-if>` for more information.
 
-~~
-How do I set an environment variable for just one command?
-----------------------------------------------------------
-``SOME_VAR=1 command`` produces an error: ``Unknown command "SOME_VAR=1"``.
-
-Use the ``env`` command.
-
-``env SOME_VAR=1 command``
-
-You can also declare a local variable in a block::
-
-    begin
-        set -lx SOME_VAR 1
-        command
-    end
-
-
 How do I check whether a variable is defined?
 ---------------------------------------------
 
@@ -163,12 +150,10 @@ How do I customize my syntax highlighting colors?
 -------------------------------------------------
 Use the web configuration tool, :ref:`fish_config <cmd-fish_config>`, or alter the `fish_color family of environment variables <index#variables-color>`__.
 
-~~
 How do I update man page completions?
 -------------------------------------
 Use the :ref:`fish_update_completions <cmd-fish_update_completions>` command.
 
-~~
 I accidentally entered a directory path and fish changed directory. What happened?
 ----------------------------------------------------------------------------------
 If fish is unable to locate a command with a given name, and it starts with '``.``', '``/``' or '``~``', fish will test if a directory of that name exists. If it does, it is implicitly assumed that you want to change working directory. For example, the fastest way to switch to your home directory is to simply press ``~`` and enter.
@@ -234,7 +219,7 @@ Fish history recall is very simple yet effective:
 
   - If the line you want is far back in the history, type any part of the line and then press Up one or more times.  This will constrain the recall to lines that include this text, and you will get to the line you want much faster.  This replaces "!vi", "!?bar.c" and the like.
 
-- :kbd:`Alt+↑,Up` recalls individual arguments, starting from the last argument in the last line executed.  A single press replaces "!$", later presses replace "!!:4" and the like.
+- :kbd:`Alt+↑,Up` recalls individual arguments, starting from the last argument in the last line executed.  A single press replaces "!$", later presses replace "!!:4" and the like. An alternate key binding is :kbd:`Alt+.`.
 
   - If the argument you want is far back in history (e.g. 2 lines back - that's a lot of words!), type any part of it and then press :kbd:`Alt+↑,Up`.  This will show only arguments containing that part and you will get what you want much faster.  Try it out, this is very convenient!
 

@@ -7,15 +7,36 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <vector>
 
 #include "common.h"
 #include "env.h"
+#include "global_safety.h"
 #include "maybe.h"
+#include "redirection.h"
 
 using std::shared_ptr;
+
+/// A simple set of FDs.
+struct fd_set_t {
+    std::vector<bool> fds;
+
+    void add(int fd) {
+        assert(fd >= 0 && "Invalid fd");
+        if ((size_t)fd >= fds.size()) {
+            fds.resize(fd + 1);
+        }
+        fds[fd] = true;
+    }
+
+    bool contains(int fd) const {
+        assert(fd >= 0 && "Invalid fd");
+        return (size_t)fd < fds.size() && fds[fd];
+    }
+};
 
 /// separated_buffer_t is composed of a sequence of elements, some of which may be explicitly
 /// separated (e.g. through string spit0) and some of which the separation is inferred. This enum
@@ -171,6 +192,7 @@ class io_close_t : public io_data_t {
     explicit io_close_t(int f) : io_data_t(io_mode_t::close, f) {}
 
     void print() const override;
+    ~io_close_t() override;
 };
 
 class io_fd_t : public io_data_t {
@@ -178,30 +200,27 @@ class io_fd_t : public io_data_t {
     /// fd to redirect specified fd to. For example, in 2>&1, old_fd is 1, and io_data_t::fd is 2.
     const int old_fd;
 
-    /// Whether this redirection was supplied by a script. For example, 'cmd <&3' would have
-    /// user_supplied set to true. But a redirection that comes about through transmogrification
-    /// would not.
-    const bool user_supplied;
-
     void print() const override;
 
-    io_fd_t(int f, int old, bool us)
-        : io_data_t(io_mode_t::fd, f), old_fd(old), user_supplied(us) {}
+    ~io_fd_t() override;
+
+    io_fd_t(int f, int old) : io_data_t(io_mode_t::fd, f), old_fd(old) {}
 };
 
+/// Represents a redirection to or from an opened file.
 class io_file_t : public io_data_t {
    public:
-    /// Filename, malloc'd. This needs to be used after fork, so don't use wcstring here.
-    const char *const filename_cstr;
-    /// file creation flags to send to open.
-    const int flags;
-
     void print() const override;
 
-    io_file_t(int f, const wcstring &fname, int fl = 0)
-        : io_data_t(io_mode_t::file, f), filename_cstr(wcs2str(fname)), flags(fl) {}
+    io_file_t(int f, autoclose_fd_t file);
 
-    ~io_file_t() override { free((void *)filename_cstr); }
+    ~io_file_t() override;
+
+    int file_fd() const { return file_fd_.fd(); }
+
+   private:
+    // The fd for the file which we are writing to or reading from.
+    autoclose_fd_t file_fd_;
 };
 
 /// Represents (one end) of a pipe.
@@ -218,7 +237,7 @@ class io_pipe_t : public io_data_t {
     io_pipe_t(int fd, bool is_input, autoclose_fd_t pipe_fd)
         : io_data_t(io_mode_t::pipe, fd), pipe_fd_(std::move(pipe_fd)), is_input_(is_input) {}
 
-    ~io_pipe_t();
+    ~io_pipe_t() override;
 
     int pipe_fd() const { return pipe_fd_.fd(); }
 };
@@ -245,7 +264,7 @@ class io_bufferfill_t : public io_data_t {
           write_fd_(std::move(write_fd)),
           buffer_(std::move(buffer)) {}
 
-    ~io_bufferfill_t();
+    ~io_bufferfill_t() override;
 
     std::shared_ptr<io_buffer_t> buffer() const { return buffer_; }
 
@@ -255,9 +274,9 @@ class io_bufferfill_t : public io_data_t {
     /// Create an io_bufferfill_t which, when written from, fills a buffer with the contents.
     /// \returns nullptr on failure, e.g. too many open fds.
     ///
-    /// \param conflicts A set of IO redirections. The function ensures that any pipe it makes does
+    /// \param conflicts A set of fds. The function ensures that any pipe it makes does
     /// not conflict with an fd redirection in this list.
-    static shared_ptr<io_bufferfill_t> create(const io_chain_t &conflicts, size_t buffer_limit = 0);
+    static shared_ptr<io_bufferfill_t> create(const fd_set_t &conflicts, size_t buffer_limit = 0);
 
     /// Reset the receiver (possibly closing the write end of the pipe), and complete the fillthread
     /// of the buffer. \return the buffer.
@@ -276,13 +295,11 @@ class io_buffer_t {
     separated_buffer_t<std::string> buffer_;
 
     /// Atomic flag indicating our fillthread should shut down.
-    std::atomic<bool> shutdown_fillthread_{false};
+    relaxed_atomic_bool_t shutdown_fillthread_{false};
 
-    /// The background fillthread itself, if any.
-    maybe_t<pthread_t> fillthread_{};
-
-    /// Read limit of the buffer.
-    const size_t read_limit_;
+    /// The future allowing synchronization with the background fillthread, if the fillthread is
+    /// running. The fillthread fulfills the corresponding promise when it exits.
+    std::future<void> fillthread_waiter_{};
 
     /// Lock for appending.
     std::mutex append_lock_{};
@@ -296,8 +313,11 @@ class io_buffer_t {
     /// End the background fillthread operation.
     void complete_background_fillthread();
 
+    /// Helper to return whether the fillthread is running.
+    bool fillthread_running() const { return fillthread_waiter_.valid(); }
+
    public:
-    explicit io_buffer_t(size_t limit) : buffer_(limit), read_limit_(limit) {
+    explicit io_buffer_t(size_t limit) : buffer_(limit) {
         // Explicitly reset the discard flag because we share this buffer.
         buffer_.reset_discard();
     }
@@ -307,7 +327,7 @@ class io_buffer_t {
     /// Access the underlying buffer.
     /// This requires that the background fillthread be none.
     const separated_buffer_t<std::string> &buffer() const {
-        assert(!fillthread_ && "Cannot access buffer during background fill");
+        assert(!fillthread_running() && "Cannot access buffer during background fill");
         return buffer_;
     }
 
@@ -317,32 +337,37 @@ class io_buffer_t {
         buffer_.append(ptr, ptr + count);
     }
 
-    /// \return the read limit.
-    size_t read_limit() const { return read_limit_; }
-
     /// Appends data from a given output_stream_t.
     /// Marks the receiver as discarded if the stream was discarded.
     void append_from_stream(const output_stream_t &stream);
 };
 
-class io_chain_t : public std::vector<shared_ptr<io_data_t>> {
+using io_data_ref_t = std::shared_ptr<const io_data_t>;
+
+class io_chain_t : public std::vector<io_data_ref_t> {
    public:
-    using std::vector<shared_ptr<io_data_t>>::vector;
+    using std::vector<io_data_ref_t>::vector;
     // user-declared ctor to allow const init. Do not default this, it will break the build.
     io_chain_t() {}
 
-    void remove(const shared_ptr<const io_data_t> &element);
-    void push_back(shared_ptr<io_data_t> element);
-    void push_front(shared_ptr<io_data_t> element);
+    void remove(const io_data_ref_t &element);
+    void push_back(io_data_ref_t element);
     void append(const io_chain_t &chain);
 
-    shared_ptr<const io_data_t> get_io_for_fd(int fd) const;
-    shared_ptr<io_data_t> get_io_for_fd(int fd);
-};
+    /// \return the last io redirection in the chain for the specified file descriptor, or nullptr
+    /// if none.
+    io_data_ref_t io_for_fd(int fd) const;
 
-/// Return the last io redirection in the chain for the specified file descriptor.
-shared_ptr<const io_data_t> io_chain_get(const io_chain_t &src, int fd);
-shared_ptr<io_data_t> io_chain_get(io_chain_t &src, int fd);
+    /// Attempt to resolve a list of redirection specs to IOs, appending to 'this'.
+    /// \return true on success, false on error, in which case an error will have been printed.
+    bool append_from_specs(const redirection_spec_list_t &specs, const wcstring &pwd);
+
+    /// Output debugging information to stderr.
+    void print() const;
+
+    /// \return the set of redirected FDs.
+    fd_set_t fd_set() const;
+};
 
 /// Helper type returned from making autoclose pipes.
 struct autoclose_pipes_t {
@@ -359,13 +384,13 @@ struct autoclose_pipes_t {
 /// Call pipe(), populating autoclose fds, avoiding conflicts.
 /// The pipes are marked CLO_EXEC.
 /// \return pipes on success, none() on error.
-maybe_t<autoclose_pipes_t> make_autoclose_pipes(const io_chain_t &ios);
+maybe_t<autoclose_pipes_t> make_autoclose_pipes(const fd_set_t &fdset);
 
-/// If the given fd is used by the io chain, duplicates it repeatedly until an fd not used in the io
-/// chain is found, or we run out. If we return a new fd or an error, closes the old one.
-/// If \p cloexec is set, any fd created is marked close-on-exec.
-/// \returns -1 on failure (in which case the given fd is still closed).
-int move_fd_to_unused(int fd, const io_chain_t &io_chain, bool cloexec = true);
+/// If the given fd is present in \p fdset, duplicates it repeatedly until an fd not used in the set
+/// is found or we run out. If we return a new fd or an error, closes the old one. If \p cloexec is
+/// set, any fd created is marked close-on-exec. \returns -1 on failure (in which case the given fd
+/// is still closed).
+autoclose_fd_t move_fd_to_unused(autoclose_fd_t fd, const fd_set_t &fdset, bool cloexec = true);
 
 /// Class representing the output that a builtin can generate.
 class output_stream_t {
@@ -403,8 +428,6 @@ class output_stream_t {
 
     void append_formatv(const wchar_t *format, va_list va) { append(vformat_string(format, va)); }
 
-    bool empty() const { return buffer_.size() == 0; }
-
     wcstring contents() const { return buffer_.newline_serialized(); }
 };
 
@@ -434,9 +457,5 @@ struct io_streams_t {
     explicit io_streams_t(size_t read_limit) : out(read_limit), err(read_limit), stdin_fd(-1) {}
 };
 
-#if 0
-// Print debug information about the specified IO redirection chain to stderr.
-void io_print(const io_chain_t &chain);
-#endif
 
 #endif

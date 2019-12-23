@@ -12,10 +12,10 @@
 
 #include <stddef.h>
 #include <sys/stat.h>
-#include <cwchar>
 
 #include <algorithm>
 #include <cstddef>
+#include <cwchar>
 #include <list>
 #include <memory>
 #include <unordered_map>
@@ -32,8 +32,9 @@ struct line_t {
     std::vector<wchar_t> text;
     std::vector<highlight_spec_t> colors;
     bool is_soft_wrapped;
+    size_t indentation;
 
-    line_t() : text(), colors(), is_soft_wrapped(false) {}
+    line_t() : text(), colors(), is_soft_wrapped(false), indentation(0) {}
 
     void clear(void) {
         text.clear();
@@ -154,7 +155,7 @@ class screen_t {
 };
 
 /// This is the main function for the screen putput library. It is used to define the desired
-/// contents of the screen. The screen command will use it's knowlege of the current contents of the
+/// contents of the screen. The screen command will use its knowledge of the current contents of the
 /// screen in order to render the desired output using as few terminal commands as possible.
 ///
 /// \param s the screen on which to write

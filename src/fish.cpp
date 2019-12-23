@@ -30,9 +30,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <cwchar>
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -79,12 +79,12 @@ class fish_cmd_opts_t {
 };
 
 /// If we are doing profiling, the filename to output to.
-static const char *s_profiling_output_filename = NULL;
+static const char *s_profiling_output_filename = nullptr;
 
 /// \return a timeval converted to milliseconds.
 long long tv_to_msec(const struct timeval &tv) {
-    long long msec = (long long)tv.tv_sec * 1000;  // milliseconds per second
-    msec += tv.tv_usec / 1000;                     // microseconds per millisecond
+    long long msec = static_cast<long long>(tv.tv_sec) * 1000;  // milliseconds per second
+    msec += tv.tv_usec / 1000;                                  // microseconds per millisecond
     return msec;
 }
 
@@ -108,6 +108,7 @@ static void print_rusage_self(FILE *fp) {
     fprintf(fp, "  rusage self:\n");
     fprintf(fp, "      user time: %llu ms\n", tv_to_msec(rs.ru_utime));
     fprintf(fp, "       sys time: %llu ms\n", tv_to_msec(rs.ru_stime));
+    fprintf(fp, "     total time: %llu ms\n", tv_to_msec(rs.ru_utime) + tv_to_msec(rs.ru_stime));
     fprintf(fp, "        max rss: %ld kb\n", rss_kb);
     fprintf(fp, "        signals: %ld\n", rs.ru_nsignals);
 #endif
@@ -126,7 +127,7 @@ static bool get_realpath(std::string &path) {
     if ((ptr = realpath(path.c_str(), buff))) {
         path = ptr;
     }
-    return ptr != NULL;
+    return ptr != nullptr;
 }
 
 static struct config_paths_t determine_config_directory_paths(const char *argv0) {
@@ -156,7 +157,7 @@ static struct config_paths_t determine_config_directory_paths(const char *argv0)
             // The next check is that we are in a reloctable directory tree
             const char *installed_suffix = "/bin/fish";
             const char *just_a_fish = "/fish";
-            const char *suffix = NULL;
+            const char *suffix = nullptr;
 
             if (has_suffix(exec_path, installed_suffix, false)) {
                 suffix = installed_suffix;
@@ -227,7 +228,7 @@ static void source_config_in_directory(const wcstring &dir) {
     const wcstring cmd = L"builtin source " + escaped_pathname;
     parser_t &parser = parser_t::principal_parser();
     set_is_within_fish_initialization(true);
-    parser.eval(cmd, io_chain_t(), TOP);
+    parser.eval(cmd, io_chain_t());
     set_is_within_fish_initialization(false);
 }
 
@@ -251,9 +252,10 @@ int run_command_list(std::vector<std::string> *cmds, const io_chain_t &io) {
     int res = 1;
     parser_t &parser = parser_t::principal_parser();
 
-    for (size_t i = 0; i < cmds->size(); i++) {
-        const wcstring cmd_wcs = str2wcstring(cmds->at(i));
-        res = parser.eval(cmd_wcs, io, TOP);
+    for (const auto &cmd : *cmds) {
+        const wcstring cmd_wcs = str2wcstring(cmd);
+        eval_result_t eval_res = parser.eval(cmd_wcs, io);
+        res = (eval_res == eval_result_t::ok ? 0 : 1);
     }
 
     return res;
@@ -262,25 +264,26 @@ int run_command_list(std::vector<std::string> *cmds, const io_chain_t &io) {
 /// Parse the argument list, return the index of the first non-flag arguments.
 static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
     static const char *const short_opts = "+hPilnvc:C:p:d:f:D:";
-    static const struct option long_opts[] = {{"command", required_argument, NULL, 'c'},
-                                              {"init-command", required_argument, NULL, 'C'},
-                                              {"features", required_argument, NULL, 'f'},
-                                              {"debug-level", required_argument, NULL, 'd'},
-                                              {"debug-output", required_argument, NULL, 'o'},
-                                              {"debug-stack-frames", required_argument, NULL, 'D'},
-                                              {"interactive", no_argument, NULL, 'i'},
-                                              {"login", no_argument, NULL, 'l'},
-                                              {"no-execute", no_argument, NULL, 'n'},
-                                              {"print-rusage-self", no_argument, NULL, 1},
-                                              {"print-debug-categories", no_argument, NULL, 2},
-                                              {"profile", required_argument, NULL, 'p'},
-                                              {"private", no_argument, NULL, 'P'},
-                                              {"help", no_argument, NULL, 'h'},
-                                              {"version", no_argument, NULL, 'v'},
-                                              {NULL, 0, NULL, 0}};
+    static const struct option long_opts[] = {
+        {"command", required_argument, nullptr, 'c'},
+        {"init-command", required_argument, nullptr, 'C'},
+        {"features", required_argument, nullptr, 'f'},
+        {"debug", required_argument, nullptr, 'd'},
+        {"debug-output", required_argument, nullptr, 'o'},
+        {"debug-stack-frames", required_argument, nullptr, 'D'},
+        {"interactive", no_argument, nullptr, 'i'},
+        {"login", no_argument, nullptr, 'l'},
+        {"no-execute", no_argument, nullptr, 'n'},
+        {"print-rusage-self", no_argument, nullptr, 1},
+        {"print-debug-categories", no_argument, nullptr, 2},
+        {"profile", required_argument, nullptr, 'p'},
+        {"private", no_argument, nullptr, 'P'},
+        {"help", no_argument, nullptr, 'h'},
+        {"version", no_argument, nullptr, 'v'},
+        {nullptr, 0, nullptr, 0}};
 
     int opt;
-    while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, short_opts, long_opts, nullptr)) != -1) {
         switch (opt) {
             case 'c': {
                 opts->batch_cmds.push_back(optarg);
@@ -298,7 +301,7 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
                 tmp = strtol(optarg, &end, 10);
 
                 if (tmp >= 0 && tmp <= 10 && !*end && !errno) {
-                    debug_level = (int)tmp;
+                    debug_level = static_cast<int>(tmp);
                 } else {
                     activate_flog_categories_by_pattern(str2wcstring(optarg));
                 }
@@ -337,7 +340,7 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
                 // Compute width of longest name.
                 int name_width = 0;
                 for (const auto *cat : cats) {
-                    name_width = std::max(name_width, (int)wcslen(cat->name));
+                    name_width = std::max(name_width, static_cast<int>(wcslen(cat->name)));
                 }
                 // A little extra space.
                 name_width += 2;
@@ -370,7 +373,7 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
                 tmp = strtol(optarg, &end, 10);
 
                 if (tmp > 0 && tmp <= 128 && !*end && !errno) {
-                    set_debug_stack_frames((int)tmp);
+                    set_debug_stack_frames(static_cast<int>(tmp));
                 } else {
                     std::fwprintf(stderr, _(L"Invalid value '%s' for debug-stack-frames flag"),
                                   optarg);
@@ -392,7 +395,7 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
     // We are an interactive session if we have not been given an explicit
     // command or file to execute and stdin is a tty. Note that the -i or
     // --interactive options also force interactive mode.
-    if (opts->batch_cmds.size() == 0 && optind == argc && isatty(STDIN_FILENO)) {
+    if (opts->batch_cmds.empty() && optind == argc && isatty(STDIN_FILENO)) {
         set_interactive_session(true);
     }
 
@@ -412,7 +415,7 @@ int main(int argc, char **argv) {
     // struct stat tmp;
     // stat("----------FISH_HIT_MAIN----------", &tmp);
 
-    const char *dummy_argv[2] = {"fish", NULL};
+    const char *dummy_argv[2] = {"fish", nullptr};
     if (!argv[0]) {
         argv = (char **)dummy_argv;  //!OCLINT(parameter reassignment)
         argc = 1;                    //!OCLINT(parameter reassignment)
@@ -520,13 +523,12 @@ int main(int argc, char **argv) {
 
     int exit_status = res ? STATUS_CMD_UNKNOWN : parser.get_last_status();
 
-    // TODO: The generic process-exit event is useless and unused.
-    // Remove this in future.
-    event_fire(proc_create_event(L"PROCESS_EXIT", event_type_t::exit, getpid(), exit_status));
+    event_fire(parser,
+               proc_create_event(L"PROCESS_EXIT", event_type_t::exit, getpid(), exit_status));
 
     // Trigger any exit handlers.
     wcstring_list_t event_args = {to_string(exit_status)};
-    event_fire_generic(L"fish_exit", &event_args);
+    event_fire_generic(parser, L"fish_exit", &event_args);
 
     restore_term_mode();
     restore_term_foreground_process_group();

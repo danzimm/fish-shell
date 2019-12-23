@@ -50,17 +50,18 @@
 // This file has been imported from source code of printf command in GNU Coreutils version 6.9.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <limits.h>
-#include <locale.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
 #include <sys/types.h>
-#include <wctype.h>
+
+#include <cerrno>
+#include <climits>
+#include <clocale>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 
 #include "builtin.h"
 #include "common.h"
@@ -91,7 +92,7 @@ struct builtin_printf_state_t {
     int print_formatted(const wchar_t *format, int argc, wchar_t **argv);
 
     void nonfatal_error(const wchar_t *fmt, ...);
-    void fatal_error(const wchar_t *format, ...);
+    void fatal_error(const wchar_t *fmt, ...);
 
     long print_esc(const wchar_t *escstart, bool octal_0);
     void print_esc_string(const wchar_t *str);
@@ -209,7 +210,7 @@ void builtin_printf_state_t::nonfatal_error(const wchar_t *fmt, ...) {
     streams.err.append(errstr);
     if (!string_suffixes_string(L"\n", errstr)) streams.err.push_back(L'\n');
 
-    // We set the exit code to error, because one occured,
+    // We set the exit code to error, because one occurred,
     // but we don't do an early exit so we still print what we can.
     this->exit_code = STATUS_CMD_ERROR;
 }
@@ -303,7 +304,7 @@ static T string_to_scalar_type(const wchar_t *s, builtin_printf_state_t *state) 
         wchar_t ch = *++s;
         val = ch;
     } else {
-        wchar_t *end = NULL;
+        wchar_t *end = nullptr;
         errno = 0;
         val = raw_string_to_scalar_type<T>(s, &end);
         state->verify_numeric(s, end, errno);
@@ -709,7 +710,7 @@ int builtin_printf_state_t::print_formatted(const wchar_t *format, int argc, wch
                 wchar_t conversion = *f;
                 if (conversion > 0xFF || !ok[conversion]) {
                     this->fatal_error(_(L"%.*ls: invalid conversion specification"),
-                                      (int)(f + 1 - direc_start), direc_start);
+                                      static_cast<int>(f + 1 - direc_start), direc_start);
                     return 0;
                 }
 
@@ -741,7 +742,7 @@ int builtin_printf(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 

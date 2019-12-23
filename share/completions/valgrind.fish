@@ -42,7 +42,7 @@ complete -c valgrind -l demangle -xd "Demangle C++ names" -a "yes no"
 complete -xc valgrind -l num-callers -d "Callers in stack trace"
 complete -xc valgrind -l error-limit -d "Stop showing errors if too many" -a "yes no"
 complete -xc valgrind -l show-below-main -d "Continue trace below main()" -a "yes no"
-complete -rc valgrind -l suppressions -d "Supress errors from file"
+complete -rc valgrind -l suppressions -d "Suppress errors from file"
 complete -c valgrind -l gen-suppressions -d "Print suppressions for detected errors"
 complete -xc valgrind -l db-attach -d "Start debugger on error" -a "yes no"
 complete -rc valgrind -l db-command -d "Debugger command"
@@ -71,6 +71,13 @@ complete -n "__fish_valgrind_skin cachegrind" -xc valgrind -l I1 -d "Type of L1 
 complete -n "__fish_valgrind_skin cachegrind" -xc valgrind -l D1 -d "Type of L1 data cache"
 complete -n "__fish_valgrind_skin cachegrind" -xc valgrind -l L2 -d "Type of L2 cache"
 
+
+function __fish_print_function_prototypes -d "Prints the names of all function prototypes found in the headers in the current directory"
+    set -l headers *.h *.hh *.hpp *.hxx
+    if set -q headers[1]
+        sed -n "s/^\(.*[^[a-zA-Z_0-9]\|\)\([a-zA-Z_][a-zA-Z_0-9]*\) *(.*);.*\$/\2/p" $headers
+    end
+end
 
 # Massif-specific options
 complete -c valgrind -n "__fish_valgrind_skin massif" -l alloc-fn -d "Specify a function that allocates memory" -x -a "(__fish_print_function_prototypes)"

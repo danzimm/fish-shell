@@ -1,14 +1,15 @@
 // Functions having to do with parser keywords, like testing if a function is a block command.
 #include "config.h"  // IWYU pragma: keep
 
+#include "parser_keywords.h"
+
 #include <string>
 #include <unordered_set>
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
-#include "parser_keywords.h"
 
-typedef std::unordered_set<wcstring> string_set_t;
+using string_set_t = std::unordered_set<wcstring>;
 
 static const wcstring skip_keywords[]{
     L"else",
@@ -16,7 +17,8 @@ static const wcstring skip_keywords[]{
 };
 
 static const wcstring subcommand_keywords[]{L"command", L"builtin", L"while", L"exec",
-                                            L"if",      L"and",     L"or",    L"not"};
+                                            L"if",      L"and",     L"or",    L"not",
+                                            L"time",    L"begin"};
 
 static const string_set_t block_keywords = {L"for",      L"while",  L"if",
                                             L"function", L"switch", L"begin"};

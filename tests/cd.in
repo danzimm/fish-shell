@@ -9,6 +9,8 @@ set real (mktemp -d)
 set link $base/link
 ln -s $real $link
 cd $link
+prevd
+nextd
 test "$PWD" = "$link" || echo "\$PWD != \$link:"\n   "\$PWD: $PWD"\n   "\$link: $link"\n
 test (pwd) = "$link" || echo "(pwd) != \$link:"\n   "\$PWD: "(pwd)\n   "\$link: $link"\n
 test (pwd -P) = "$real" || echo "(pwd -P) != \$real:"\n   "\$PWD: $PWD"\n   "\$real: $real"\n
@@ -76,6 +78,38 @@ set -g CDPATH ./
 cd $base
 test $PWD = $base; and echo No crash with ./ CDPATH
 
+# test for directories beginning with a hyphen
+mkdir $base/-testdir
+cd $base
+cd -- -testdir
+test $PWD = $base/-testdir
+
 # cd back before removing the test directory again.
 cd $oldpwd
 rm -Rf $base
+
+logmsg on-variable PWD
+# Verify that PWD on-variable events are sent
+function __fish_test_changed_pwd --on-variable PWD
+   echo "Changed to $PWD"
+end
+cd /
+functions --erase __fish_test_changed_pwd
+
+logmsg cd concurrency
+# Verify that cds don't stomp on each other.
+function __fish_test_thrash_cd
+   set -l dir (mktemp -d)
+   cd $dir
+   for i in (seq 50)
+       test (/bin/pwd) = $dir
+       and test $PWD = $dir
+       or echo "cd test failed" 1>&2
+       sleep .002
+   end
+end
+__fish_test_thrash_cd |
+__fish_test_thrash_cd |
+__fish_test_thrash_cd |
+__fish_test_thrash_cd |
+__fish_test_thrash_cd

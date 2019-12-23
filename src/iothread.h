@@ -3,6 +3,7 @@
 #define FISH_IOTHREAD_H
 
 #include <pthread.h>
+
 #include <functional>
 #include <type_traits>
 
@@ -12,7 +13,7 @@
 /// pointer, and returns an int, which is passed to the completionCallback.
 /// \param completionCallback The function to execute on the main thread once the background thread
 /// is complete. Accepts an int (the return value of handler) and the context.
-/// \param context A arbitary context pointer to pass to the handler and completion callback.
+/// \param context An arbitrary context pointer to pass to the handler and completion callback.
 /// \return A sequence number, currently not very useful.
 int iothread_perform_base(int (*handler)(void *), void (*completionCallback)(void *, int),
                           void *context);
@@ -22,11 +23,12 @@ int iothread_perform_base(int (*handler)(void *), void (*completionCallback)(voi
 /// \return A file descriptor on which to listen for completion callbacks.
 int iothread_port(void);
 
-/// Services one iothread competion callback.
+/// Services one iothread completion callback.
 void iothread_service_completion(void);
 
 /// Waits for all iothreads to terminate.
-void iothread_drain_all(void);
+/// \return the number of threads that were running.
+int iothread_drain_all(void);
 
 // Internal implementation
 int iothread_perform_impl(std::function<void(void)> &&func, std::function<void(void)> &&completion);
@@ -77,10 +79,11 @@ inline int iothread_perform(std::function<void(void)> &&func) {
 void iothread_perform_on_main(std::function<void(void)> &&func);
 
 /// Creates a pthread, manipulating the signal mask so that the thread receives no signals.
+/// The thread is detached.
 /// The pthread runs \p func.
 /// \returns true on success, false on failure.
-bool make_pthread(pthread_t *result, void *(*func)(void *), void *param);
-bool make_pthread(pthread_t *result, std::function<void(void)> &&func);
+bool make_detached_pthread(void *(*func)(void *), void *param);
+bool make_detached_pthread(std::function<void(void)> &&func);
 
 /// \returns a thread ID for this thread.
 /// Thread IDs are never repeated.

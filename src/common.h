@@ -208,12 +208,12 @@ extern const bool has_working_tty_timestamps;
 // `__attribute__((noreturn))` on the exit_without_destructors() function.
 // TODO: we use C++11 [[noreturn]] now, does that change things?
 #define FATAL_EXIT()                                \
-    {                                               \
+    do {                                            \
         char exit_read_buff;                        \
         show_stackframe(L'E');                      \
         ignore_result(read(0, &exit_read_buff, 1)); \
         exit_without_destructors(1);                \
-    }
+    } while (0)
 
 /// Exit the program at once after emitting an error message and stack trace if possible.
 /// We use our own private implementation of `assert()` for two reasons. First, some implementations
@@ -475,11 +475,13 @@ void format_size_safe(char buff[128], unsigned long long sz);
 
 /// Our crappier versions of debug which is guaranteed to not allocate any memory, or do anything
 /// other than call write(). This is useful after a call to fork() with threads.
-void debug_safe(int level, const char *msg, const char *param1 = NULL, const char *param2 = NULL,
-                const char *param3 = NULL, const char *param4 = NULL, const char *param5 = NULL,
-                const char *param6 = NULL, const char *param7 = NULL, const char *param8 = NULL,
-                const char *param9 = NULL, const char *param10 = NULL, const char *param11 = NULL,
-                const char *param12 = NULL);
+void debug_safe(int level, const char *msg, const char *param1 = nullptr,
+                const char *param2 = nullptr, const char *param3 = nullptr,
+                const char *param4 = nullptr, const char *param5 = nullptr,
+                const char *param6 = nullptr, const char *param7 = nullptr,
+                const char *param8 = nullptr, const char *param9 = nullptr,
+                const char *param10 = nullptr, const char *param11 = nullptr,
+                const char *param12 = nullptr);
 
 /// Writes out a long safely.
 void format_long_safe(char buff[64], long val);
@@ -529,7 +531,7 @@ char **make_null_terminated_array(const std::vector<std::string> &lst);
 // Helper class for managing a null-terminated array of null-terminated strings (of some char type).
 template <typename CharType_t>
 class null_terminated_array_t {
-    CharType_t **array{NULL};
+    CharType_t **array{nullptr};
 
     // No assignment or copying.
     void operator=(null_terminated_array_t rhs) = delete;
@@ -539,8 +541,8 @@ class null_terminated_array_t {
 
     size_t size() const {
         size_t len = 0;
-        if (array != NULL) {
-            while (array[len] != NULL) {
+        if (array != nullptr) {
+            while (array[len] != nullptr) {
                 len++;
             }
         }
@@ -549,7 +551,7 @@ class null_terminated_array_t {
 
     void free(void) {
         ::free((void *)array);
-        array = NULL;
+        array = nullptr;
     }
 
    public:
@@ -612,12 +614,16 @@ typedef std::lock_guard<std::recursive_mutex> scoped_rlock;
 //
 template <typename Data>
 class acquired_lock {
-    std::unique_lock<std::mutex> lock;
-    acquired_lock(std::mutex &lk, Data *v) : lock(lk), value(v) {}
-
     template <typename T>
     friend class owning_lock;
 
+    template <typename T>
+    friend class acquired_lock;
+
+    acquired_lock(std::mutex &lk, Data *v) : lock(lk), value(v) {}
+    acquired_lock(std::unique_lock<std::mutex> &&lk, Data *v) : lock(std::move(lk)), value(v) {}
+
+    std::unique_lock<std::mutex> lock;
     Data *value;
 
    public:
@@ -631,6 +637,14 @@ class acquired_lock {
     const Data *operator->() const { return value; }
     Data &operator*() { return *value; }
     const Data &operator*() const { return *value; }
+
+    /// Implicit conversion to const version.
+    operator acquired_lock<const Data>() {
+        // We're about to give up our lock, don't hold onto the data.
+        const Data *cvalue = value;
+        value = nullptr;
+        return acquired_lock<const Data>(std::move(lock), cvalue);
+    }
 
     /// Create from a global lock.
     /// This is used in weird cases where a global lock protects more than one piece of data.
@@ -736,7 +750,7 @@ void append_path_component(wcstring &path, const wcstring &component);
 wcstring format_string(const wchar_t *format, ...);
 wcstring vformat_string(const wchar_t *format, va_list va_orig);
 void append_format(wcstring &str, const wchar_t *format, ...);
-void append_formatv(wcstring &str, const wchar_t *format, va_list ap);
+void append_formatv(wcstring &target, const wchar_t *format, va_list va_orig);
 
 #ifdef HAVE_STD__MAKE_UNIQUE
 using std::make_unique;
@@ -752,7 +766,7 @@ std::unique_ptr<T> make_unique(Args &&... args) {
 /// character is detemrined by examining \c in. Returns 0 on error.
 ///
 /// \param in the position of the opening quote.
-wchar_t *quote_end(const wchar_t *in);
+wchar_t *quote_end(const wchar_t *pos);
 
 /// A call to this function will reset the error counter. Some functions print out non-critical
 /// error messages. These should check the error_count before, and skip printing the message if
@@ -831,7 +845,7 @@ void common_handle_winch(int signal);
 /// Write the given paragraph of output, redoing linebreaks to fit the current screen.
 wcstring reformat_for_screen(const wcstring &msg);
 
-/// Make sure the specified direcotry exists. If needed, try to create it and any currently not
+/// Make sure the specified directory exists. If needed, try to create it and any currently not
 /// existing parent directories.
 ///
 /// \return 0 if, at the time of function return the directory exists, -1 otherwise.
@@ -939,7 +953,7 @@ static const wchar_t *enum_to_str(T enum_val, const enum_map<T> map[]) {
             return entry->str;
         }
     }
-    return NULL;
+    return nullptr;
 };
 
 void redirect_tty_output();
@@ -1019,7 +1033,7 @@ struct hash<const wcstring> {
 #endif
 
 /// Get the absolute path to the fish executable itself
-std::string get_executable_path(const char *fallback);
+std::string get_executable_path(const char *argv0);
 
 /// A RAII wrapper for resources that don't recur, so we don't have to create a separate RAII
 /// wrapper for each function. Avoids needing to call "return cleanup()" or similar / everywhere.

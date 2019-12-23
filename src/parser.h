@@ -15,6 +15,7 @@
 #include "event.h"
 #include "expand.h"
 #include "parse_constants.h"
+#include "parse_execution.h"
 #include "parse_tree.h"
 #include "proc.h"
 
@@ -30,19 +31,20 @@ inline bool event_block_list_blocks_type(const event_blockage_list_t &ebls) {
 }
 
 /// Types of blocks.
-enum block_type_t {
-    WHILE,                    /// While loop block
-    FOR,                      /// For loop block
-    IF,                       /// If block
-    FUNCTION_CALL,            /// Function invocation block
-    FUNCTION_CALL_NO_SHADOW,  /// Function invocation block with no variable shadowing
-    SWITCH,                   /// Switch block
-    SUBST,                    /// Command substitution scope
-    TOP,                      /// Outermost block
-    BEGIN,                    /// Unconditional block
-    SOURCE,                   /// Block created by the . (source) builtin
-    EVENT,                    /// Block created on event notifier invocation
-    BREAKPOINT,               /// Breakpoint block
+enum class block_type_t {
+    while_block,              /// While loop block
+    for_block,                /// For loop block
+    if_block,                 /// If block
+    function_call,            /// Function invocation block
+    function_call_no_shadow,  /// Function invocation block with no variable shadowing
+    switch_block,             /// Switch block
+    subst,                    /// Command substitution scope
+    top,                      /// Outermost block
+    begin,                    /// Unconditional block
+    source,                   /// Block created by the . (source) builtin
+    event,                    /// Block created on event notifier invocation
+    breakpoint,               /// Breakpoint block
+    variable_assignment,      /// Variable assignment before a command
 };
 
 /// Possible states for a loop.
@@ -88,6 +90,12 @@ class block_t {
     /// Description of the block, for debugging.
     wcstring description() const;
 
+    /// \return if we are a function call (with or without shadowing).
+    bool is_function_call() const {
+        return type() == block_type_t::function_call ||
+               type() == block_type_t::function_call_no_shadow;
+    }
+
     /// Entry points for creating blocks.
     static block_t if_block();
     static block_t event_block(event_t evt);
@@ -98,6 +106,7 @@ class block_t {
     static block_t switch_block();
     static block_t scope_block(block_type_t type);
     static block_t breakpoint_block();
+    static block_t variable_assignment_block();
 
     ~block_t();
 };
@@ -119,8 +128,9 @@ struct profile_item_t {
 
 class parse_execution_context_t;
 class completion_t;
+struct event_t;
 
-/// Miscelleneous data used to avoid recursion and others.
+/// Miscellaneous data used to avoid recursion and others.
 struct library_data_t {
     /// A counter incremented every time a command executes.
     uint64_t exec_count{0};
@@ -130,6 +140,9 @@ struct library_data_t {
 
     /// Number of recursive calls to builtin_complete().
     uint32_t builtin_complete_recursion_level{0};
+
+    /// Whether we called builtin_complete -C without parameter.
+    bool builtin_complete_current_commandline{false};
 
     /// Whether we are currently cleaning processes.
     bool is_cleaning_procs{false};
@@ -151,15 +164,37 @@ struct library_data_t {
     /// event nesting level.
     int is_event{0};
 
+    /// Whether we are currently interactive.
+    bool is_interactive{false};
+
+    /// Whether to suppress fish_trace output. This occurs in the prompt, event handlers, and key
+    /// bindings.
+    bool suppress_fish_trace{false};
+
     /// Whether we should break or continue the current loop.
     enum loop_status_t loop_status { loop_status_t::normals };
 
     /// Whether we should return from the current function.
     bool returning{false};
 
+    /// The read limit to apply to captured subshell output, or 0 for none.
+    size_t read_limit{0};
+
     /// The current filename we are evaluating, either from builtin source or on the command line.
     /// This is an intern'd string.
     const wchar_t *current_filename{};
+
+    /// List of events that have been sent but have not yet been delivered because they are blocked.
+    std::vector<shared_ptr<event_t>> blocked_events{};
+
+    /// A stack of fake values to be returned by builtin_commandline. This is used by the completion
+    /// machinery when wrapping: e.g. if `tig` wraps `git` then git completions need to see git on
+    /// the command line.
+    wcstring_list_t transient_commandlines{};
+
+    /// A file descriptor holding the current working directory, for use in openat().
+    /// This is never null and never invalid.
+    std::shared_ptr<const autoclose_fd_t> cwd_fd{};
 };
 
 class parser_t : public std::enable_shared_from_this<parser_t> {
@@ -170,13 +205,13 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     volatile sig_atomic_t cancellation_requested = false;
     /// The current execution context.
     std::unique_ptr<parse_execution_context_t> execution_context;
-    /// List of called functions, used to help prevent infinite recursion.
-    wcstring_list_t forbidden_function;
     /// The jobs associated with this parser.
     job_list_t job_list;
     /// The list of blocks. This is a deque because we give out raw pointers to callers, who hold
     /// them across manipulating this stack.
-    std::deque<block_t> block_stack;
+    /// This is in "reverse" order: the topmost block is at the front. This enables iteration from
+    /// top down using range-based for loops.
+    std::deque<block_t> block_list;
     /// The 'depth' of the fish call stack.
     int eval_level = -1;
     /// Set of variables for the parser.
@@ -202,12 +237,6 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     /// every block if it is of type FUNCTION_CALL.
     const wchar_t *is_function(size_t idx = 0) const;
 
-    // Given a file path, return something nicer. Currently we just "unexpand" tildes.
-    wcstring user_presentable_path(const wcstring &path) const;
-
-    /// Helper for stack_trace().
-    void stack_trace_internal(size_t block_idx, wcstring *out) const;
-
     /// Create a parser.
     parser_t();
     parser_t(std::shared_ptr<env_stack_t> vars);
@@ -230,20 +259,23 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     ///
     /// \param cmd the string to evaluate
     /// \param io io redirections to perform on all started jobs
-    /// \param block_type The type of block to push on the block stack
+    /// \param block_type The type of block to push on the block stack, which must be either 'top'
+    /// or 'subst'.
     ///
-    /// \return 0 on success, 1 on a parse error.
-    int eval(wcstring cmd, const io_chain_t &io, enum block_type_t block_type);
+    /// \return the eval result,
+    eval_result_t eval(const wcstring &cmd, const io_chain_t &io,
+                       block_type_t block_type = block_type_t::top);
 
     /// Evaluate the parsed source ps.
-    /// \return 0 on success, 1 on a parse error.
-    int eval(parsed_source_ref_t ps, const io_chain_t &io, enum block_type_t block_type);
+    /// Because the source has been parsed, a syntax error is impossible.
+    eval_result_t eval(parsed_source_ref_t ps, const io_chain_t &io,
+                       block_type_t block_type = block_type_t::top);
 
     /// Evaluates a node.
     /// The node type must be grammar::statement or grammar::job_list.
     template <typename T>
-    int eval_node(parsed_source_ref_t ps, tnode_t<T> node, const io_chain_t &io,
-                  block_type_t block_type, std::shared_ptr<job_t> parent_job);
+    eval_result_t eval_node(parsed_source_ref_t ps, tnode_t<T> node, job_lineage_t lineage,
+                            block_type_t block_type = block_type_t::top);
 
     /// Evaluate line as a list of parameters, i.e. tokenize it and perform parameter expansion and
     /// cmdsubst execution on the tokens. Errors are ignored. If a parser is provided, it is used
@@ -262,16 +294,16 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     /// Returns the current line number.
     int get_lineno() const;
 
-    /// Returns the block at the given index. 0 corresponds to the innermost block. Returns NULL
+    /// Returns the block at the given index. 0 corresponds to the innermost block. Returns nullptr
     /// when idx is at or equal to the number of blocks.
     const block_t *block_at_index(size_t idx) const;
     block_t *block_at_index(size_t idx);
 
+    /// Return the list of blocks. The first block is at the top.
+    const std::deque<block_t> &blocks() const { return block_list; }
+
     /// Returns the current (innermost) block.
     block_t *current_block();
-
-    /// Count of blocks.
-    size_t block_count() const { return block_stack.size(); }
 
     /// Get the list of jobs.
     job_list_t &jobs() { return job_list; }
@@ -295,10 +327,10 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     block_t *push_block(block_t &&b);
 
     /// Remove the outermost block, asserting it's the given one.
-    void pop_block(const block_t *b);
+    void pop_block(const block_t *expected);
 
     /// Return a description of the given blocktype.
-    const wchar_t *get_block_desc(int block) const;
+    static const wchar_t *get_block_desc(block_type_t block);
 
     /// Return the function name for the specified stack frame. Default is one (current frame).
     const wchar_t *get_function_name(int level = 1);
@@ -319,28 +351,23 @@ class parser_t : public std::enable_shared_from_this<parser_t> {
     void get_backtrace(const wcstring &src, const parse_error_list_t &errors,
                        wcstring &output) const;
 
-    /// Detect errors in the specified string when parsed as an argument list. Returns true if an
-    /// error occurred.
-    bool detect_errors_in_argument_list(const wcstring &arg_list_src, wcstring *out_err,
-                                        const wchar_t *prefix) const;
-
-    /// Tell the parser that the specified function may not be run if not inside of a conditional
-    /// block. This is to remove some possibilities of infinite recursion.
-    void forbid_function(const wcstring &function);
-
-    /// Undo last call to parser_forbid_function().
-    void allow_function();
-
     /// Output profiling data to the given filename.
     void emit_profiling(const char *path) const;
 
     /// Returns the file currently evaluated by the parser. This can be different than
-    /// reader_current_filename, e.g. if we are evaulating a function defined in a different file
+    /// reader_current_filename, e.g. if we are evaluating a function defined in a different file
     /// than the one curently read.
     const wchar_t *current_filename() const;
 
+    /// Return if we are interactive, which means we are executing a command that the user typed in
+    /// (and not, say, a prompt).
+    bool is_interactive() const { return libdata().is_interactive; }
+
     /// Return a string representing the current stack trace.
     wcstring stack_trace() const;
+
+    /// \return whether the number of functions in the stack exceeds our stack depth limit.
+    bool function_stack_is_overflowing() const;
 
     /// \return a shared pointer reference to this parser.
     std::shared_ptr<parser_t> shared();

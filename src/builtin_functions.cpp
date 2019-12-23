@@ -1,11 +1,13 @@
 // Implementation of the functions builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <stddef.h>
+#include "builtin_functions.h"
+
 #include <unistd.h>
-#include <cwchar>
 
 #include <algorithm>
+#include <cstddef>
+#include <cwchar>
 #include <map>
 #include <memory>
 #include <string>
@@ -13,12 +15,13 @@
 #include <vector>
 
 #include "builtin.h"
-#include "builtin_functions.h"
 #include "common.h"
+#include "complete.h"
 #include "env.h"
 #include "event.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "function.h"
+#include "highlight.h"
 #include "io.h"
 #include "parser_keywords.h"
 #include "proc.h"
@@ -36,29 +39,29 @@ struct functions_cmd_opts_t {
     bool report_metadata = false;
     bool verbose = false;
     bool handlers = false;
-    wchar_t *handlers_type = NULL;
-    wchar_t *description = NULL;
+    wchar_t *handlers_type = nullptr;
+    wchar_t *description = nullptr;
 };
 static const wchar_t *const short_options = L":HDacd:ehnqv";
-static const struct woption long_options[] = {{L"erase", no_argument, NULL, 'e'},
-                                              {L"description", required_argument, NULL, 'd'},
-                                              {L"names", no_argument, NULL, 'n'},
-                                              {L"all", no_argument, NULL, 'a'},
-                                              {L"help", no_argument, NULL, 'h'},
-                                              {L"query", no_argument, NULL, 'q'},
-                                              {L"copy", no_argument, NULL, 'c'},
-                                              {L"details", no_argument, NULL, 'D'},
-                                              {L"verbose", no_argument, NULL, 'v'},
-                                              {L"handlers", no_argument, NULL, 'H'},
-                                              {L"handlers-type", required_argument, NULL, 't'},
-                                              {NULL, 0, NULL, 0}};
+static const struct woption long_options[] = {{L"erase", no_argument, nullptr, 'e'},
+                                              {L"description", required_argument, nullptr, 'd'},
+                                              {L"names", no_argument, nullptr, 'n'},
+                                              {L"all", no_argument, nullptr, 'a'},
+                                              {L"help", no_argument, nullptr, 'h'},
+                                              {L"query", no_argument, nullptr, 'q'},
+                                              {L"copy", no_argument, nullptr, 'c'},
+                                              {L"details", no_argument, nullptr, 'D'},
+                                              {L"verbose", no_argument, nullptr, 'v'},
+                                              {L"handlers", no_argument, nullptr, 'H'},
+                                              {L"handlers-type", required_argument, nullptr, 't'},
+                                              {nullptr, 0, nullptr, 0}};
 
 static int parse_cmd_opts(functions_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncss method)
                           int argc, wchar_t **argv, parser_t &parser, io_streams_t &streams) {
     wchar_t *cmd = argv[0];
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
         switch (opt) {
             case 'v': {
                 opts.verbose = true;
@@ -136,14 +139,20 @@ static wcstring functions_def(const wcstring &name) {
     out.append(L"function ");
 
     // Typically we prefer to specify the function name first, e.g. "function foo --description bar"
-    // But If the function name starts with a -, we'll need to output it after all the options.
+    // But if the function name starts with a -, we'll need to output it after all the options.
     bool defer_function_name = (name.at(0) == L'-');
     if (!defer_function_name) {
-        out.append(escape_string(name, true));
+        out.append(escape_string(name, ESCAPE_ALL));
+    }
+
+    // Output wrap targets.
+    for (const wcstring &wrap : complete_get_wrap_targets(name)) {
+        out.append(L" --wraps=");
+        out.append(escape_string(wrap, ESCAPE_ALL));
     }
 
     if (!desc.empty()) {
-        wcstring esc_desc = escape_string(desc, true);
+        wcstring esc_desc = escape_string(desc, ESCAPE_ALL);
         out.append(L" --description ");
         out.append(esc_desc);
     }
@@ -200,19 +209,15 @@ static wcstring functions_def(const wcstring &name) {
     // Output the function name if we deferred it.
     if (defer_function_name) {
         out.append(L" -- ");
-        out.append(escape_string(name, true));
+        out.append(escape_string(name, ESCAPE_ALL));
     }
 
     // Output any inherited variables as `set -l` lines.
-    std::map<wcstring, env_var_t> inherit_vars = function_get_inherit_vars(name);
-    for (const auto &kv : inherit_vars) {
-        wcstring_list_t lst;
-        kv.second.to_list(lst);
-
+    for (const auto &kv : props->inherit_vars) {
         // We don't know what indentation style the function uses,
         // so we do what fish_indent would.
         append_format(out, L"\n    set -l %ls", kv.first.c_str());
-        for (const auto &arg : lst) {
+        for (const auto &arg : kv.second) {
             wcstring earg = escape_string(arg, ESCAPE_ALL);
             out.push_back(L' ');
             out.append(earg);
@@ -253,8 +258,17 @@ static int report_function_metadata(const wchar_t *funcname, bool verbose, io_st
     }
 
     if (metadata_as_comments) {
-        if (std::wcscmp(path, L"stdin")) {
-            streams.out.append_format(L"# Defined in %ls @ line %d\n", path, line_number);
+        if (std::wcscmp(path, L"stdin") != 0) {
+            wcstring comment;
+            append_format(comment, L"# Defined in %ls @ line %d\n", path, line_number);
+            if (!streams.out_is_redirected && isatty(STDOUT_FILENO)) {
+                std::vector<highlight_spec_t> colors;
+                highlight_shell_no_io(comment, colors, comment.size(), nullptr,
+                                      env_stack_t::globals());
+                streams.out.append(str2wcstring(colorize(comment, colors)));
+            } else {
+                streams.out.append(comment);
+            }
         }
     } else {
         streams.out.append_format(L"%ls\n", path);
@@ -280,14 +294,14 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     if (retval != STATUS_CMD_OK) return retval;
 
     if (opts.print_help) {
-        builtin_print_help(parser, streams, cmd, streams.out);
+        builtin_print_help(parser, streams, cmd);
         return STATUS_CMD_OK;
     }
 
     // Erase, desc, query, copy and list are mutually exclusive.
-    bool describe = opts.description ? true : false;
+    bool describe = opts.description != nullptr;
     if (describe + opts.erase + opts.list + opts.query + opts.copy > 1) {
-        streams.err.append_format(_(L"%ls: Invalid combination of options\n"), cmd);
+        streams.err.append_format(BUILTIN_ERR_COMBO, cmd);
         builtin_print_error_trailer(parser, streams.err, cmd);
         return STATUS_INVALID_ARGS;
     }
@@ -319,8 +333,8 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
     if (opts.report_metadata) {
         if (argc - optind != 1) {
-            streams.err.append_format(_(L"%ls: Expected exactly one function name for --details\n"),
-                                      cmd);
+            streams.err.append_format(BUILTIN_ERR_ARG_COUNT2, cmd, argv[optind - 1], 1,
+                                      argc - optind);
             return STATUS_INVALID_ARGS;
         }
 
@@ -354,14 +368,14 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         bool is_screen = !streams.out_is_redirected && isatty(STDOUT_FILENO);
         if (is_screen) {
             wcstring buff;
-            for (size_t i = 0; i < names.size(); i++) {
-                buff.append(names.at(i));
+            for (const auto &name : names) {
+                buff.append(name);
                 buff.append(L", ");
             }
             streams.out.append(reformat_for_screen(buff));
         } else {
-            for (size_t i = 0; i < names.size(); i++) {
-                streams.out.append(names.at(i).c_str());
+            for (const auto &name : names) {
+                streams.out.append(name.c_str());
                 streams.out.append(L"\n");
             }
         }
@@ -419,7 +433,15 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
                 if (i != optind) streams.out.append(L"\n");
                 const wchar_t *funcname = argv[optind];
                 report_function_metadata(funcname, opts.verbose, streams, parser, true);
-                streams.out.append(functions_def(funcname));
+                wcstring def = functions_def(funcname);
+
+                if (!streams.out_is_redirected && isatty(STDOUT_FILENO)) {
+                    std::vector<highlight_spec_t> colors;
+                    highlight_shell_no_io(def, colors, def.size(), nullptr, env_stack_t::globals());
+                    streams.out.append(str2wcstring(colorize(def, colors)));
+                } else {
+                    streams.out.append(def);
+                }
             }
         }
     }

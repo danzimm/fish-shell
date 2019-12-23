@@ -6,7 +6,9 @@ function - create a function
 Synopsis
 --------
 
-function NAME [OPTIONS]; BODY; end
+::
+
+    function NAME [OPTIONS]; BODY; end
 
 
 Description
@@ -38,6 +40,7 @@ The following options are available:
 - ``-s`` or ``--on-signal SIGSPEC`` tells fish to run this function when the signal SIGSPEC is delivered. SIGSPEC can be a signal number, or the signal name, such as SIGHUP (or just HUP).
 
 - ``-S`` or ``--no-scope-shadowing`` allows the function to access the variables of calling functions. Normally, any variables inside the function that have the same name as variables from the calling function are "shadowed", and their contents is independent of the calling function.
+  It's important to note that this does not capture referenced variables or the scope at the time of function declaration! At this time, fish does not have any concept of closures, and variable lifetimes are never extended. In other words, by using ``--no-scope-shadowing`` the scope of the function each time it is run is shared with the scope it was *called* from rather than the scope it was *defined* in.
 
 - ``-V`` or ``--inherit-variable NAME`` snapshots the value of the variable ``NAME`` and defines a local variable with that same name and value when the function is defined. This is similar to a closure in other languages like Python but a bit different. Note the word "snapshot" in the first sentence. If you change the value of the variable after defining the function, even if you do so in the same scope (typically another function) the new value will not be used by the function you just created using this option. See the ``function notify`` example below for how this might be used.
 
@@ -58,6 +61,8 @@ By using one of the event handler switches, a function can be made to run automa
   Note: This event will be emitted even if the command is invalid. The commandline parameter includes the entire commandline verbatim, and may potentially include newlines.
 
 - ``fish_exit`` is emitted right before fish exits.
+
+- ``fish_cancel``, which is emitted when a commandline is cleared (used for terminal-shell integration).
 
 Example
 -------

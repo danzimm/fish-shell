@@ -1,17 +1,18 @@
 // Implementation of the function builtin.
 #include "config.h"  // IWYU pragma: keep
 
-#include <errno.h>
-#include <stddef.h>
-#include <stdlib.h>
+#include "builtin_function.h"
+
 #include <unistd.h>
 
+#include <cerrno>
+#include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "builtin.h"
-#include "builtin_function.h"
 #include "common.h"
 #include "complete.h"
 #include "event.h"
@@ -35,29 +36,42 @@ struct function_cmd_opts_t {
     wcstring_list_t wrap_targets;
 };
 
-// This command is atypical in using the "+" (REQUIRE_ORDER) option for flag parsing.
+// This command is atypical in using the "-" (RETURN_IN_ORDER) option for flag parsing.
 // This is needed due to the semantics of the -a/--argument-names flag.
-static const wchar_t *const short_options = L"+:a:d:e:hj:p:s:v:w:SV:";
-static const struct woption long_options[] = {{L"description", required_argument, NULL, 'd'},
-                                              {L"on-signal", required_argument, NULL, 's'},
-                                              {L"on-job-exit", required_argument, NULL, 'j'},
-                                              {L"on-process-exit", required_argument, NULL, 'p'},
-                                              {L"on-variable", required_argument, NULL, 'v'},
-                                              {L"on-event", required_argument, NULL, 'e'},
-                                              {L"wraps", required_argument, NULL, 'w'},
-                                              {L"help", no_argument, NULL, 'h'},
-                                              {L"argument-names", required_argument, NULL, 'a'},
-                                              {L"no-scope-shadowing", no_argument, NULL, 'S'},
-                                              {L"inherit-variable", required_argument, NULL, 'V'},
-                                              {NULL, 0, NULL, 0}};
+static const wchar_t *const short_options = L"-:a:d:e:hj:p:s:v:w:SV:";
+static const struct woption long_options[] = {
+    {L"description", required_argument, nullptr, 'd'},
+    {L"on-signal", required_argument, nullptr, 's'},
+    {L"on-job-exit", required_argument, nullptr, 'j'},
+    {L"on-process-exit", required_argument, nullptr, 'p'},
+    {L"on-variable", required_argument, nullptr, 'v'},
+    {L"on-event", required_argument, nullptr, 'e'},
+    {L"wraps", required_argument, nullptr, 'w'},
+    {L"help", no_argument, nullptr, 'h'},
+    {L"argument-names", required_argument, nullptr, 'a'},
+    {L"no-scope-shadowing", no_argument, nullptr, 'S'},
+    {L"inherit-variable", required_argument, nullptr, 'V'},
+    {nullptr, 0, nullptr, 0}};
 
 static int parse_cmd_opts(function_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncss method)
                           int argc, wchar_t **argv, parser_t &parser, io_streams_t &streams) {
     const wchar_t *cmd = L"function";
     int opt;
     wgetopter_t w;
-    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+    bool handling_named_arguments = false;
+    while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, nullptr)) != -1) {
+        if (opt != 'a' && opt != 1) handling_named_arguments = false;
         switch (opt) {
+            case 1: {
+                if (handling_named_arguments) {
+                    opts.named_arguments.push_back(w.woptarg);
+                    break;
+                } else {
+                    streams.err.append_format(_(L"%ls: Unexpected positional argument '%ls'"), cmd,
+                                              w.woptarg);
+                    return STATUS_INVALID_ARGS;
+                }
+            }
             case 'd': {
                 opts.description = w.woptarg;
                 break;
@@ -122,6 +136,7 @@ static int parse_cmd_opts(function_cmd_opts_t &opts, int *optind,  //!OCLINT(hig
                 break;
             }
             case 'a': {
+                handling_named_arguments = true;
                 opts.named_arguments.push_back(w.woptarg);
                 break;
             }
@@ -223,8 +238,12 @@ int builtin_function(parser_t &parser, io_streams_t &streams, const wcstring_lis
     }
 
     if (argc != optind) {
-        if (opts.named_arguments.size()) {
+        if (!opts.named_arguments.empty()) {
             for (int i = optind; i < argc; i++) {
+                if (!valid_var_name(argv[i])) {
+                    streams.err.append_format(BUILTIN_ERR_VARNAME, cmd, argv[i]);
+                    return STATUS_INVALID_ARGS;
+                }
                 opts.named_arguments.push_back(argv[i]);
             }
         } else {
@@ -235,18 +254,26 @@ int builtin_function(parser_t &parser, io_streams_t &streams, const wcstring_lis
     }
 
     // We have what we need to actually define the function.
-    function_data_t d;
-    d.name = function_name;
-    if (!opts.description.empty()) d.description = opts.description;
-    // d.description = opts.description;
-    d.events = std::move(opts.events);
-    d.props.shadow_scope = opts.shadow_scope;
-    d.props.named_arguments = std::move(opts.named_arguments);
-    d.inherit_vars = std::move(opts.inherit_vars);
+    auto props = std::make_shared<function_properties_t>();
+    props->shadow_scope = opts.shadow_scope;
+    props->named_arguments = std::move(opts.named_arguments);
+    props->parsed_source = source;
+    props->body_node = body;
 
-    d.props.parsed_source = source;
-    d.props.body_node = body;
-    function_add(std::move(d), parser);
+    // Populate inherit_vars.
+    for (const wcstring &name : opts.inherit_vars) {
+        if (auto var = parser.vars().get(name)) {
+            props->inherit_vars[name] = var->as_list();
+        }
+    }
+
+    // Add the function itself.
+    function_add(function_name, opts.description, props, parser.libdata().current_filename);
+
+    // Add any event handlers.
+    for (const event_description_t &ed : opts.events) {
+        event_add_handler(std::make_shared<event_handler_t>(ed, function_name));
+    }
 
     // Handle wrap targets by creating the appropriate completions.
     for (const wcstring &wt : opts.wrap_targets) complete_add_wrapper(function_name, wt);

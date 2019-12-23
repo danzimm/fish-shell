@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
 #include <cstring>
 #ifdef __CYGWIN__
 #include <sys/mman.h>
@@ -28,9 +29,9 @@
 #include <sys/time.h>   // IWYU pragma: keep
 #include <sys/types.h>  // IWYU pragma: keep
 #include <unistd.h>
-#include <cwchar>
 
 #include <atomic>
+#include <cwchar>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -146,7 +147,7 @@ static wcstring full_escape(const wcstring &in) {
     for (wchar_t c : in) {
         if (is_universal_safe_to_encode_directly(c)) {
             out.push_back(c);
-        } else if (c <= (wchar_t)ASCII_MAX) {
+        } else if (c <= static_cast<wchar_t>(ASCII_MAX)) {
             // See #1225 for discussion of use of ASCII_MAX here.
             append_format(out, L"\\x%.2x", c);
         } else if (c < 65536) {
@@ -173,8 +174,8 @@ static bool append_utf8(const wcstring &input, std::string *receiver, std::strin
 static bool append_file_entry(env_var_t::env_var_flags_t flags, const wcstring &key_in,
                               const wcstring &val_in, std::string *result, std::string *storage) {
     namespace f3 = fish3_uvars;
-    assert(storage != NULL);
-    assert(result != NULL);
+    assert(storage != nullptr);
+    assert(result != nullptr);
 
     // Record the length on entry, in case we need to back up.
     bool success = true;
@@ -248,7 +249,8 @@ static wcstring encode_serialized(const wcstring_list_t &vals) {
     return join_strings(vals, UVAR_ARRAY_SEP);
 }
 
-env_universal_t::env_universal_t(wcstring path) : narrow_vars_path(wcs2string(path)), explicit_vars_path(std::move(path)) {}
+env_universal_t::env_universal_t(wcstring path)
+    : narrow_vars_path(wcs2string(path)), explicit_vars_path(std::move(path)) {}
 
 maybe_t<env_var_t> env_universal_t::get(const wcstring &name) const {
     var_table_t::const_iterator where = vars.find(name);
@@ -264,36 +266,32 @@ maybe_t<env_var_t::env_var_flags_t> env_universal_t::get_flags(const wcstring &n
     return none();
 }
 
-void env_universal_t::set_internal(const wcstring &key, const env_var_t &var, bool overwrite) {
+void env_universal_t::set_internal(const wcstring &key, const env_var_t &var) {
     ASSERT_IS_LOCKED(lock);
-    if (!overwrite && this->modified.find(key) != this->modified.end()) {
-        // This value has been modified and we're not overwriting it. Skip it.
-        return;
-    }
-
+    bool new_entry = vars.count(key) == 0;
     env_var_t &entry = vars[key];
-    if (entry != var) {
+    if (new_entry || entry != var) {
         entry = var;
-
-        // If we are overwriting, then this is now modified.
-        if (overwrite) {
-            this->modified.insert(key);
-        }
+        this->modified.insert(key);
+        if (entry.exports()) export_generation += 1;
     }
 }
 
 void env_universal_t::set(const wcstring &key, env_var_t var) {
     scoped_lock locker(lock);
-    this->set_internal(key, std::move(var), true /* overwrite */);
+    this->set_internal(key, std::move(var));
 }
 
 bool env_universal_t::remove_internal(const wcstring &key) {
     ASSERT_IS_LOCKED(lock);
-    size_t erased = this->vars.erase(key);
-    if (erased > 0) {
+    auto iter = this->vars.find(key);
+    if (iter != this->vars.end()) {
+        if (iter->second.exports()) export_generation += 1;
+        this->vars.erase(iter);
         this->modified.insert(key);
+        return true;
     }
-    return erased > 0;
+    return false;
 }
 
 bool env_universal_t::remove(const wcstring &key) {
@@ -304,10 +302,9 @@ bool env_universal_t::remove(const wcstring &key) {
 wcstring_list_t env_universal_t::get_names(bool show_exported, bool show_unexported) const {
     wcstring_list_t result;
     scoped_lock locker(lock);
-    var_table_t::const_iterator iter;
-    for (iter = vars.begin(); iter != vars.end(); ++iter) {
-        const wcstring &key = iter->first;
-        const env_var_t &var = iter->second;
+    for (const auto &kv : vars) {
+        const wcstring &key = kv.first;
+        const env_var_t &var = kv.second;
         if ((var.exports() && show_exported) || (!var.exports() && show_unexported)) {
             result.push_back(key);
         }
@@ -316,27 +313,27 @@ wcstring_list_t env_universal_t::get_names(bool show_exported, bool show_unexpor
 }
 
 // Given a variable table, generate callbacks representing the difference between our vars and the
-// new vars.
-void env_universal_t::generate_callbacks(const var_table_t &new_vars,
-                                         callback_data_list_t &callbacks) const {
+// new vars. Update our exports generation.
+void env_universal_t::generate_callbacks_and_update_exports(const var_table_t &new_vars,
+                                                            callback_data_list_t &callbacks) {
     // Construct callbacks for erased values.
-    for (var_table_t::const_iterator iter = this->vars.begin(); iter != this->vars.end(); ++iter) {
-        const wcstring &key = iter->first;
-
+    for (const auto &kv : this->vars) {
+        const wcstring &key = kv.first;
         // Skip modified values.
-        if (this->modified.find(key) != this->modified.end()) {
+        if (this->modified.count(key)) {
             continue;
         }
 
         // If the value is not present in new_vars, it has been erased.
-        if (new_vars.find(key) == new_vars.end()) {
+        if (new_vars.count(key) == 0) {
             callbacks.push_back(callback_data_t(key, none()));
+            if (kv.second.exports()) export_generation += 1;
         }
     }
 
     // Construct callbacks for newly inserted or changed values.
-    for (var_table_t::const_iterator iter = new_vars.begin(); iter != new_vars.end(); ++iter) {
-        const wcstring &key = iter->first;
+    for (const auto &kv : new_vars) {
+        const wcstring &key = kv.first;
 
         // Skip modified values.
         if (this->modified.find(key) != this->modified.end()) {
@@ -344,10 +341,15 @@ void env_universal_t::generate_callbacks(const var_table_t &new_vars,
         }
 
         // See if the value has changed.
-        const env_var_t &new_entry = iter->second;
+        const env_var_t &new_entry = kv.second;
         var_table_t::const_iterator existing = this->vars.find(key);
-        if (existing == this->vars.end() || existing->second.exports() != new_entry.exports() ||
-            existing->second != new_entry) {
+
+        bool old_exports = (existing != this->vars.end() && existing->second.exports());
+        bool export_changed = (old_exports != new_entry.exports());
+        if (export_changed) {
+            export_generation += 1;
+        }
+        if (existing == this->vars.end() || export_changed || existing->second != new_entry) {
             // Value has changed.
             callbacks.push_back(callback_data_t(key, new_entry.as_string()));
         }
@@ -392,8 +394,8 @@ void env_universal_t::load_from_fd(int fd, callback_data_list_t &callbacks) {
             ok_to_save = false;
         }
 
-        // Announce changes.
-        this->generate_callbacks(new_vars, callbacks);
+        // Announce changes and update our exports generation.
+        this->generate_callbacks_and_update_exports(new_vars, callbacks);
 
         // Acquire the new variables.
         this->acquire_variables(new_vars);
@@ -426,6 +428,12 @@ bool env_universal_t::load_from_path(const wcstring &path, callback_data_list_t 
     std::string tmp = wcs2string(path);
     return load_from_path(tmp, callbacks);
 }
+
+uint64_t env_universal_t::get_export_generation() const {
+    scoped_lock locker(lock);
+    return export_generation;
+}
+
 /// Serialize the contents to a string.
 std::string env_universal_t::serialize_with_vars(const var_table_t &vars) {
     std::string storage;
@@ -453,7 +461,7 @@ bool env_universal_t::write_to_fd(int fd, const wcstring &path) {
     if (write_loop(fd, contents.data(), contents.size()) < 0) {
         const char *error = std::strerror(errno);
         FLOGF(error, _(L"Unable to write to universal variables file '%ls': %s"), path.c_str(),
-             error);
+              error);
         success = false;
     }
 
@@ -469,7 +477,7 @@ bool env_universal_t::move_new_vars_file_into_place(const wcstring &src, const w
     if (ret != 0) {
         const char *error = std::strerror(errno);
         FLOGF(error, _(L"Unable to rename file from '%ls' to '%ls': %s"), src.c_str(), dst.c_str(),
-             error);
+              error);
     }
     return ret == 0;
 }
@@ -599,7 +607,7 @@ bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd
 #endif
             const char *error = std::strerror(errno);
             FLOGF(error, _(L"Unable to open universal variable file '%ls': %s"), path.c_str(),
-                 error);
+                  error);
             break;
         }
 
@@ -1034,8 +1042,8 @@ static wcstring get_machine_identifier() {
     unsigned char mac_addr[MAC_ADDRESS_MAX_LEN] = {};
     if (get_mac_address(mac_addr)) {
         result.reserve(2 * MAC_ADDRESS_MAX_LEN);
-        for (size_t i = 0; i < MAC_ADDRESS_MAX_LEN; i++) {
-            append_format(result, L"%02x", mac_addr[i]);
+        for (auto i : mac_addr) {
+            append_format(result, L"%02x", i);
         }
     } else if (!get_hostname_identifier(result)) {
         result.assign(L"nohost");  // fallback to a dummy value
@@ -1062,7 +1070,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
     volatile universal_notifier_shmem_t *region;
 
     void open_shmem() {
-        assert(region == NULL);
+        assert(region == nullptr);
 
         // Use a path based on our uid to avoid collisions.
         char path[NAME_MAX];
@@ -1084,7 +1092,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
             if (fstat(fd, &buf) < 0) {
                 const char *error = std::strerror(errno);
                 FLOGF(error, _(L"Unable to fstat shared memory object with path '%s': %s"), path,
-                     error);
+                      error);
                 errored = true;
             }
             size = buf.st_size;
@@ -1095,19 +1103,19 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         if (set_size && ftruncate(fd, sizeof(universal_notifier_shmem_t)) < 0) {
             const char *error = std::strerror(errno);
             FLOGF(error, _(L"Unable to truncate shared memory object with path '%s': %s"), path,
-                 error);
+                  error);
             errored = true;
         }
 
         // Memory map the region.
         if (!errored) {
-            void *addr = mmap(NULL, sizeof(universal_notifier_shmem_t), PROT_READ | PROT_WRITE,
+            void *addr = mmap(nullptr, sizeof(universal_notifier_shmem_t), PROT_READ | PROT_WRITE,
                               MAP_SHARED, fd, 0);
             if (addr == MAP_FAILED) {
                 const char *error = std::strerror(errno);
                 FLOGF(error, _(L"Unable to memory map shared memory object with path '%s': %s"),
-                     path, error);
-                this->region = NULL;
+                      path, error);
+                this->region = nullptr;
             } else {
                 this->region = static_cast<universal_notifier_shmem_t *>(addr);
             }
@@ -1129,7 +1137,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
     // This isn't "safe" in the sense that multiple simultaneous increments may result in one being
     // lost, but it should always result in the value being changed, which is sufficient.
     void post_notification() {
-        if (region != NULL) {
+        if (region != nullptr) {
             /* Read off the seed */
             uint32_t seed = ntohl(region->universal_variable_seed);  //!OCLINT(constant cond op)
 
@@ -1146,12 +1154,12 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         }
     }
 
-    universal_notifier_shmem_poller_t() : last_change_time(0), last_seed(0), region(NULL) {
+    universal_notifier_shmem_poller_t() : last_change_time(0), last_seed(0), region(nullptr) {
         open_shmem();
     }
 
     ~universal_notifier_shmem_poller_t() {
-        if (region != NULL) {
+        if (region != nullptr) {
             // Behold: C++ in all its glory!
             void *address = const_cast<void *>(static_cast<volatile void *>(region));
             if (munmap(address, sizeof(universal_notifier_shmem_t)) < 0) {
@@ -1162,7 +1170,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
 
     bool poll() {
         bool result = false;
-        if (region != NULL) {
+        if (region != nullptr) {
             uint32_t seed = ntohl(region->universal_variable_seed);  //!OCLINT(constant cond op)
             if (seed != last_seed) {
                 result = true;
@@ -1373,7 +1381,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
                 // Oops, it already passed! Return something tiny.
                 readback_delay = 1000;
             } else {
-                readback_delay = (unsigned long)(this->readback_time_usec - now);
+                readback_delay = static_cast<unsigned long>(this->readback_time_usec - now);
             }
         }
 
@@ -1417,7 +1425,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
         FD_ZERO(&fds);
         FD_SET(this->pipe_fd, &fds);
         struct timeval timeout = {};
-        select(this->pipe_fd + 1, &fds, NULL, NULL, &timeout);
+        select(this->pipe_fd + 1, &fds, nullptr, nullptr, &timeout);
         if (!FD_ISSET(this->pipe_fd, &fds)) {
             // No longer readable, no longer polling.
             polling_due_to_readable_fd = false;
@@ -1470,7 +1478,7 @@ std::unique_ptr<universal_notifier_t> universal_notifier_t::new_notifier_for_str
         }
     }
     DIE("should never reach this statement");
-    return NULL;
+    return nullptr;
 }
 
 // Default implementations.

@@ -3,12 +3,14 @@
 // issues.
 #include "config.h"  // IWYU pragma: keep
 
+#include "path.h"
+
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <cwchar>
-
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -19,7 +21,6 @@
 #include "expand.h"
 #include "fallback.h"  // IWYU pragma: keep
 #include "flog.h"
-#include "path.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 /// Unexpected error in path_get_path().
@@ -160,8 +161,7 @@ maybe_t<wcstring> path_get_cdpath(const wcstring &dir, const wcstring &wd,
                                   const environment_t &env_vars) {
     int err = ENOENT;
     if (dir.empty()) return none();
-
-    assert(wd.empty() || wd.back() == L'/');
+    assert(!wd.empty() && wd.back() == L'/');
     wcstring_list_t paths;
     if (dir.at(0) == L'/') {
         // Absolute path.
@@ -180,14 +180,16 @@ maybe_t<wcstring> path_get_cdpath(const wcstring &dir, const wcstring &wd,
         cdpathsv.push_back(L".");
         for (wcstring next_path : cdpathsv) {
             if (next_path.empty()) next_path = L".";
-            if (next_path == L"." && !wd.empty()) {
+            if (next_path == L".") {
                 // next_path is just '.', and we have a working directory, so use the wd instead.
                 next_path = wd;
             }
 
-            // If next_path starts with ./ we need to replace the . with the wd.
-            if (string_prefixes_string(L"./", next_path) && !wd.empty()) {
+            // We want to return an absolute path (see issue 6220)
+            if (string_prefixes_string(L"./", next_path)) {
                 next_path = next_path.replace(0, 2, wd);
+            } else if (string_prefixes_string(L"../", next_path) || next_path == L"..") {
+                next_path = next_path.insert(0, wd);
             }
 
             expand_tilde(next_path, env_vars);
@@ -274,11 +276,11 @@ static void maybe_issue_path_warning(const wcstring &which_dir, const wcstring &
     if (path.empty()) {
         FLOGF(error, _(L"Unable to locate the %ls directory."), which_dir.c_str());
         FLOGF(error, _(L"Please set the %ls or HOME environment variable before starting fish."),
-             xdg_var.c_str());
+              xdg_var.c_str());
     } else {
         const wchar_t *env_var = using_xdg ? xdg_var.c_str() : L"HOME";
         FLOGF(error, _(L"Unable to locate %ls directory derived from $%ls: '%ls'."),
-             which_dir.c_str(), env_var, path.c_str());
+              which_dir.c_str(), env_var, path.c_str());
         FLOGF(error, _(L"The error was '%s'."), std::strerror(saved_errno));
         FLOGF(error, _(L"Please set $%ls to a directory where you have write access."), env_var);
     }
@@ -291,7 +293,7 @@ struct base_directory_t {
     wcstring path{};       /// the path where we attempted to create the directory.
     bool success{false};   /// whether creating the directory succeeded.
     int err{0};            /// the error code if creating the directory failed.
-    bool used_xdg{false};  /// whether an XDG variable was used in resolving the direcotry.
+    bool used_xdg{false};  /// whether an XDG variable was used in resolving the directory.
 };
 
 /// Attempt to get a base directory, creating it if necessary. If a variable named \p xdg_var is
