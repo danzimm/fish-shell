@@ -249,16 +249,14 @@ static int read_init(const struct config_paths_t &paths) {
 }
 
 int run_command_list(std::vector<std::string> *cmds, const io_chain_t &io) {
-    int res = 1;
     parser_t &parser = parser_t::principal_parser();
 
     for (const auto &cmd : *cmds) {
         const wcstring cmd_wcs = str2wcstring(cmd);
-        eval_result_t eval_res = parser.eval(cmd_wcs, io);
-        res = (eval_res == eval_result_t::ok ? 0 : 1);
+        parser.eval(cmd_wcs, io);
     }
 
-    return res;
+    return 0;
 }
 
 /// Parse the argument list, return the index of the first non-flag arguments.
@@ -396,7 +394,7 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
     // command or file to execute and stdin is a tty. Note that the -i or
     // --interactive options also force interactive mode.
     if (opts->batch_cmds.empty() && optind == argc && isatty(STDIN_FILENO)) {
-        set_interactive_session(true);
+        set_interactive_session(session_interactivity_t::implied);
     }
 
     return optind;
@@ -446,11 +444,11 @@ int main(int argc, char **argv) {
     // Apply our options.
     if (opts.is_login) mark_login();
     if (opts.no_exec) mark_no_exec();
-    if (opts.is_interactive_session) set_interactive_session(true);
+    if (opts.is_interactive_session) set_interactive_session(session_interactivity_t::explicit_);
 
     // Only save (and therefore restore) the fg process group if we are interactive. See issues
     // #197 and #1002.
-    if (is_interactive_session()) {
+    if (session_interactivity() != session_interactivity_t::not_interactive) {
         save_term_foreground_process_group();
     }
 

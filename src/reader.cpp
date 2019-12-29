@@ -1065,8 +1065,6 @@ static bool command_ends_paging(readline_cmd_t c, bool focused_on_search_field) 
         case rl::upcase_word:
         case rl::downcase_word:
         case rl::capitalize_word:
-        case rl::vi_arg_digit:
-        case rl::vi_delete_to:
         case rl::beginning_of_buffer:
         case rl::end_of_buffer:
             // These commands operate on the search field if that's where the focus is.
@@ -1734,7 +1732,7 @@ static void reader_interactive_init(parser_t &parser) {
                 owner = tcgetpgrp(STDIN_FILENO);
             }
             if (owner == -1 && errno == ENOTTY) {
-                if (!is_interactive_session()) {
+                if (session_interactivity() == session_interactivity_t::not_interactive) {
                     // It's OK if we're not able to take control of the terminal. We handle
                     // the fallout from this in a few other places.
                     break;
@@ -1772,7 +1770,8 @@ static void reader_interactive_init(parser_t &parser) {
     // It shouldn't be necessary to place fish in its own process group and force control
     // of the terminal, but that works around fish being started with an invalid pgroup,
     // such as when launched via firejail (#5295)
-    if (shell_pgid == 0) {
+    // Also become the process group leader if flag -i/--interactive was given (#5909).
+    if (shell_pgid == 0 || session_interactivity() == session_interactivity_t::explicit_) {
         shell_pgid = getpid();
         if (setpgid(shell_pgid, shell_pgid) < 0) {
             FLOG(error, _(L"Failed to assign shell to its own process group"));
@@ -3191,11 +3190,6 @@ void reader_data_t::handle_readline_command(readline_cmd_t c, readline_loop_stat
         case rl::func_and: {
             DIE("self-insert should have been handled by inputter_t::readch");
         }
-        case rl::vi_arg_digit:
-        case rl::vi_delete_to: {
-            // TODO: what needs to happen with these?
-            break;
-        }
     }
 }
 
@@ -3239,7 +3233,7 @@ maybe_t<wcstring> reader_data_t::readline(int nchars_or_0) {
         // This check is required to work around certain issues with fish's approach to
         // terminal control when launching interactive processes while in non-interactive
         // mode. See #4178 for one such example.
-        if (err != ENOTTY || is_interactive_session()) {
+        if (err != ENOTTY || session_interactivity() != session_interactivity_t::not_interactive) {
             wperror(L"tcsetattr");
         }
     }
@@ -3342,7 +3336,8 @@ maybe_t<wcstring> reader_data_t::readline(int nchars_or_0) {
     if (!reader_exit_forced()) {
         // The order of the two conditions below is important. Try to restore the mode
         // in all cases, but only complain if interactive.
-        if (tcsetattr(0, TCSANOW, &old_modes) == -1 && is_interactive_session()) {
+        if (tcsetattr(0, TCSANOW, &old_modes) == -1 &&
+            session_interactivity() != session_interactivity_t::not_interactive) {
             if (errno == EIO) redirect_tty_output();
             wperror(L"tcsetattr");  // return to previous mode
         }
