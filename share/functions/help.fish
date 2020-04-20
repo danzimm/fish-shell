@@ -1,6 +1,6 @@
 function help --description 'Show help for the fish shell'
-    set -l options 'h/help'
-    argparse -n help --max-args=1 $options -- $argv
+    set -l options h/help
+    argparse -n help $options -- $argv
     or return
 
     if set -q _flag_help
@@ -9,6 +9,15 @@ function help --description 'Show help for the fish shell'
     end
 
     set -l fish_help_item $argv[1]
+    if test (count $argv) -gt 1
+        if string match -q string $argv[1]
+            set fish_help_item (string join '-' $argv[1] $argv[2])
+        else
+            echo "help: Expected at most 1 args, got 2"
+            return 1
+        end
+    end
+
     set -l help_topics syntax completion editor job-control todo bugs history killring help
     set -a help_topics color prompt title variables builtin-overview changes expand
     set -a help_topics expand-variable expand-home expand-brace expand-wildcard
@@ -67,9 +76,8 @@ function help --description 'Show help for the fish shell'
             # If the OS appears to be Windows (graphical), try to use cygstart
             if type -q cygstart
                 set fish_browser cygstart
-            # If xdg-open is available, just use that
-            # but only if an X session is running
-            else if type -q xdg-open; and set -q -x DISPLAY
+                # If xdg-open is available, just use that
+            else if type -q xdg-open
                 set fish_browser xdg-open
             end
 
@@ -77,8 +85,9 @@ function help --description 'Show help for the fish shell'
             #
             # We use this instead of xdg-open because that's useless without a backend
             # like wsl-open which we'll check in a minute.
-            if not type -q cygstart
-            and set -l cmd (command -s cmd.exe /mnt/c/Windows/System32/cmd.exe)
+            if test -f /proc/version
+                and string match -riq 'Microsoft|WSL' </proc/version
+                and set -l cmd (command -s cmd.exe /mnt/c/Windows/System32/cmd.exe)
                 # Use the first of these.
                 set fish_browser $cmd[1]
             end
@@ -98,8 +107,8 @@ function help --description 'Show help for the fish shell'
     # In Cygwin, start the user-specified browser using cygstart,
     # only if a Windows browser is to be used.
     if type -q cygstart
-        if test $fish_browser != "cygstart"
-        and not command -sq $fish_browser[1]
+        if test $fish_browser != cygstart
+            and not command -sq $fish_browser[1]
             # Escaped quotes are necessary to work with spaces in the path
             # when the command is finally eval'd.
             set fish_browser cygstart $fish_browser
@@ -145,15 +154,15 @@ function help --description 'Show help for the fish shell'
         # For Windows (Cygwin and WSL), we need to convert the base help dir to a Windows path before converting it to a file URL
         # but only if a Windows browser is being used
         if type -q cygpath
-        and string match -qr "cygstart" $fish_browser[1]
+            and string match -qr cygstart $fish_browser[1]
             set page_url file://(cygpath -m $__fish_help_dir)/$fish_help_page
         else if type -q wslpath
-        and string match -qr '.exe' $fish_browser[1]
+            and string match -qr '.exe' $fish_browser[1]
             set page_url file://(wslpath -w $__fish_help_dir)/$fish_help_page
         end
     else
         # Go to the web. Only include one dot in the version string
-        set -l version_string (echo $version| cut -d . -f 1,2)
+        set -l version_string (string split . -f 1,2 -- $version | string join .)
         set page_url https://fishshell.com/docs/$version_string/$fish_help_page
         # We don't need a trampoline for a remote URL.
         set need_trampoline
@@ -174,10 +183,10 @@ function help --description 'Show help for the fish shell'
             # For Windows (Cygwin and WSL), we need to convert the base help dir to a Windows path before converting it to a file URL
             # but only if a Windows browser is being used
             if type -q cygpath
-            and string match -qr "cygstart" $fish_browser[1]
+                and string match -qr cygstart $fish_browser[1]
                 set page_url file://(cygpath -m $tmpname)
             else if type -q wslpath
-            and string match -qr '.exe' $fish_browser[1]
+                and string match -qr '.exe' $fish_browser[1]
                 set page_url file://(wslpath -w $tmpname)
             end
         end
@@ -189,12 +198,13 @@ function help --description 'Show help for the fish shell'
         # If browser is known to be graphical, put into background
     else if contains -- $fish_browser[1] $graphical_browsers
         switch $fish_browser[1]
-            case 'htmlview' 'x-www-browser'
+            case htmlview x-www-browser
                 printf (_ 'help: Help is being displayed in your default browser.\n')
             case '*'
                 printf (_ 'help: Help is being displayed in %s.\n') $fish_browser[1]
         end
-        $fish_browser $page_url &; disown
+        $fish_browser $page_url &
+        disown
     else
         # Work around lynx bug where <div class="contents"> always has the same formatting as links (unreadable)
         # by using a custom style sheet. See https://github.com/fish-shell/fish-shell/issues/4170

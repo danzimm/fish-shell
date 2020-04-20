@@ -59,7 +59,7 @@ class scoped_buffer_t {
     screen_t &screen_;
 
    public:
-    scoped_buffer_t(screen_t &s) : screen_(s) { screen_.outp().beginBuffering(); }
+    explicit scoped_buffer_t(screen_t &s) : screen_(s) { screen_.outp().beginBuffering(); }
 
     ~scoped_buffer_t() { screen_.outp().endBuffering(); }
 };
@@ -278,7 +278,7 @@ maybe_t<prompt_layout_t> layout_cache_t::find_prompt_layout(const wcstring &inpu
 
 void layout_cache_t::add_prompt_layout(wcstring input, prompt_layout_t layout) {
     assert(!find_prompt_layout(input) && "Should not have a prompt layout for this input");
-    prompt_cache_.emplace_front(std::move(input), std::move(layout));
+    prompt_cache_.emplace_front(std::move(input), layout);
     if (prompt_cache_.size() > prompt_cache_max_size) {
         prompt_cache_.pop_back();
     }
@@ -1000,6 +1000,8 @@ void s_write(screen_t *s, const wcstring &left_prompt, const wcstring &right_pro
              const wcstring &commandline, size_t explicit_len,
              const std::vector<highlight_spec_t> &colors, const std::vector<int> &indent,
              size_t cursor_pos, const page_rendering_t &pager, bool cursor_is_within_pager) {
+    static relaxed_atomic_t<uint32_t> s_repaints{0};
+    FLOGF(screen, "Repaint %u", (unsigned)++s_repaints);
     screen_data_t::cursor_t cursor_arr;
 
     // Turn the command line into the explicit portion and the autosuggestion.
@@ -1153,7 +1155,7 @@ void s_reset(screen_t *s, screen_reset_mode_t mode) {
         if (screen_width > non_space_width) {
             bool justgrey = true;
             if (cur_term && enter_dim_mode) {
-                std::string dim = tparm(enter_dim_mode);
+                std::string dim = tparm((char *)enter_dim_mode);
                 if (!dim.empty()) {
                     // Use dim if they have it, so the color will be based on their actual normal
                     // color and the background of the termianl.
@@ -1164,22 +1166,22 @@ void s_reset(screen_t *s, screen_reset_mode_t mode) {
             if (cur_term && justgrey && set_a_foreground) {
                 if (max_colors >= 238) {
                     // draw the string in a particular grey
-                    abandon_line_string.append(str2wcstring(tparm(set_a_foreground, 237)));
+                    abandon_line_string.append(str2wcstring(tparm((char *)set_a_foreground, 237)));
                 } else if (max_colors >= 9) {
                     // bright black (the ninth color, looks grey)
-                    abandon_line_string.append(str2wcstring(tparm(set_a_foreground, 8)));
+                    abandon_line_string.append(str2wcstring(tparm((char *)set_a_foreground, 8)));
                 } else if (max_colors >= 2 && enter_bold_mode) {
                     // we might still get that color by setting black and going bold for bright
-                    abandon_line_string.append(str2wcstring(tparm(enter_bold_mode)));
-                    abandon_line_string.append(str2wcstring(tparm(set_a_foreground, 0)));
+                    abandon_line_string.append(str2wcstring(tparm((char *)enter_bold_mode)));
+                    abandon_line_string.append(str2wcstring(tparm((char *)set_a_foreground, 0)));
                 }
             }
 
             abandon_line_string.append(get_omitted_newline_str());
 
             if (cur_term && exit_attribute_mode) {
-                abandon_line_string.append(
-                    str2wcstring(tparm(exit_attribute_mode)));  // normal text ANSI escape sequence
+                abandon_line_string.append(str2wcstring(
+                    tparm((char *)exit_attribute_mode)));  // normal text ANSI escape sequence
             }
 
             int newline_glitch_width = term_has_xn ? 0 : 1;

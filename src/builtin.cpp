@@ -11,10 +11,10 @@
 // 2). Add a line like { L"NAME", &builtin_NAME, N_(L"Bla bla bla") }, to the builtin_data_t
 // variable. The description is used by the completion system. Note that this array is sorted.
 //
-// 3). Create a file sphinx_doc_src/NAME.rst, containing the manual for the builtin in
+// 3). Create a file doc_src/NAME.rst, containing the manual for the builtin in
 // reStructuredText-format. Check the other builtin manuals for proper syntax.
 //
-// 4). Use 'git add sphinx_doc_src/NAME.txt' to start tracking changes to the documentation file.
+// 4). Use 'git add doc_src/NAME.txt' to start tracking changes to the documentation file.
 #include "config.h"  // IWYU pragma: keep
 
 #include "builtin.h"
@@ -137,7 +137,6 @@ int parse_help_only_cmd_opts(struct help_only_cmd_opts_t &opts, int *optind, int
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -152,7 +151,7 @@ int parse_help_only_cmd_opts(struct help_only_cmd_opts_t &opts, int *optind, int
 ///    builtin or function name to get up help for
 ///
 /// Process and print help for the specified builtin or function.
-void builtin_print_help(parser_t &parser, io_streams_t &streams, const wchar_t *name,
+void builtin_print_help(parser_t &parser, const io_streams_t &streams, const wchar_t *name,
                         wcstring *error_message) {
     UNUSED(streams);
     // This won't ever work if no_exec is set.
@@ -178,9 +177,14 @@ void builtin_unknown_option(parser_t &parser, io_streams_t &streams, const wchar
 
 /// Perform error reporting for encounter with missing argument.
 void builtin_missing_argument(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
-                              const wchar_t *opt) {
+                              const wchar_t *opt, bool print_hints) {
+    if (opt[0] == L'-' && opt[1] != L'-') {
+        opt += std::wcslen(opt) - 1;
+    }
     streams.err.append_format(BUILTIN_ERR_MISSING, cmd, opt);
-    builtin_print_error_trailer(parser, streams.err, cmd);
+    if (print_hints) {
+        builtin_print_error_trailer(parser, streams.err, cmd);
+    }
 }
 
 /// Print the backtrace and call for help that we use at the end of error messages.
@@ -312,20 +316,14 @@ static int builtin_breakpoint(parser_t &parser, io_streams_t &streams, wchar_t *
 int builtin_true(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
     UNUSED(streams);
-    if (argv[1] != nullptr) {
-        streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, argv[0], 0, builtin_count_args(argv) - 1);
-        return STATUS_INVALID_ARGS;
-    }
+    UNUSED(argv);
     return STATUS_CMD_OK;
 }
 
 int builtin_false(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     UNUSED(parser);
     UNUSED(streams);
-    if (argv[1] != nullptr) {
-        streams.err.append_format(BUILTIN_ERR_ARG_COUNT1, argv[0], 0, builtin_count_args(argv) - 1);
-        return STATUS_INVALID_ARGS;
-    }
+    UNUSED(argv);
     return STATUS_CMD_ERROR;
 }
 
@@ -337,6 +335,8 @@ int builtin_false(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 // Functions that are bound to builtin_generic are handled directly by the parser.
 // NOTE: These must be kept in sorted order!
 static const builtin_data_t builtin_datas[] = {
+    {L".", &builtin_source, N_(L"Evaluate contents of file")},
+    {L":", &builtin_true, N_(L"Return a successful result")},
     {L"[", &builtin_test, N_(L"Test a condition")},
     {L"and", &builtin_generic, N_(L"Execute command if previous command succeeded")},
     {L"argparse", &builtin_argparse, N_(L"Parse options in fish script")},
@@ -389,6 +389,7 @@ static const builtin_data_t builtin_datas[] = {
     {L"string", &builtin_string, N_(L"Manipulate strings")},
     {L"switch", &builtin_generic, N_(L"Conditionally execute a block of commands")},
     {L"test", &builtin_test, N_(L"Test a condition")},
+    {L"time", &builtin_generic, N_(L"Measure how long a command or block takes")},
     {L"true", &builtin_true, N_(L"Return a successful result")},
     {L"ulimit", &builtin_ulimit, N_(L"Set or get the shells resource usage limits")},
     {L"wait", &builtin_wait, N_(L"Wait for background processes completed")},
@@ -432,7 +433,7 @@ static const wchar_t *const help_builtins[] = {L"for", L"while",  L"function", L
 static bool cmd_needs_help(const wchar_t *cmd) { return contains(help_builtins, cmd); }
 
 /// Execute a builtin command
-proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_streams_t &streams) {
+proc_status_t builtin_run(parser_t &parser, wchar_t **argv, io_streams_t &streams) {
     UNUSED(parser);
     UNUSED(streams);
     if (argv == nullptr || argv[0] == nullptr)
@@ -447,15 +448,7 @@ proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_str
     }
 
     if (const builtin_data_t *data = builtin_lookup(argv[0])) {
-        // If we are interactive, save the foreground pgroup and restore it after in case the
-        // builtin needs to read from the terminal. See #4540.
-        bool grab_tty = session_interactivity() != session_interactivity_t::not_interactive &&
-                        isatty(streams.stdin_fd);
-        pid_t pgroup_to_restore = grab_tty ? terminal_acquire_before_builtin(job_pgid) : -1;
         int ret = data->func(parser, streams, argv);
-        if (pgroup_to_restore >= 0) {
-            tcsetpgrp(STDIN_FILENO, pgroup_to_restore);
-        }
         return proc_status_t::from_exit_code(ret);
     }
 
@@ -474,7 +467,7 @@ wcstring_list_t builtin_get_names() {
 }
 
 /// Insert all builtin names into list.
-void builtin_get_names(std::vector<completion_t> *list) {
+void builtin_get_names(completion_list_t *list) {
     assert(list != nullptr);
     list->reserve(list->size() + BUILTIN_COUNT);
     for (const auto &builtin_data : builtin_datas) {

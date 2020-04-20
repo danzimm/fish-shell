@@ -29,7 +29,7 @@
 struct function_cmd_opts_t {
     bool print_help = false;
     bool shadow_scope = true;
-    wcstring description = L"";
+    wcstring description;
     std::vector<event_description_t> events;
     wcstring_list_t named_arguments;
     wcstring_list_t inherit_vars;
@@ -100,29 +100,23 @@ static int parse_cmd_opts(function_cmd_opts_t &opts, int *optind,  //!OCLINT(hig
             }
             case 'j':
             case 'p': {
-                pid_t pid;
                 event_description_t e(event_type_t::any);
 
                 if ((opt == 'j') && (wcscasecmp(w.woptarg, L"caller") == 0)) {
-                    job_id_t job_id = -1;
-
-                    if (parser.libdata().is_subshell) {
-                        job_id = parser.libdata().caller_job_id;
-                    }
-
-                    if (job_id == -1) {
+                    internal_job_id_t caller_id =
+                        parser.libdata().is_subshell ? parser.libdata().caller_id : 0;
+                    if (caller_id == 0) {
                         streams.err.append_format(
                             _(L"%ls: Cannot find calling job for event handler"), cmd);
                         return STATUS_INVALID_ARGS;
                     }
-                    e.type = event_type_t::job_exit;
-                    e.param1.job_id = job_id;
+                    e.type = event_type_t::caller_exit;
+                    e.param1.caller_id = caller_id;
                 } else if ((opt == 'p') && (wcscasecmp(w.woptarg, L"%self") == 0)) {
-                    pid = getpid();
                     e.type = event_type_t::exit;
-                    e.param1.pid = pid;
+                    e.param1.pid = getpid();
                 } else {
-                    pid = fish_wcstoi(w.woptarg);
+                    pid_t pid = fish_wcstoi(w.woptarg);
                     if (errno || pid < 0) {
                         streams.err.append_format(_(L"%ls: Invalid process id '%ls'"), cmd,
                                                   w.woptarg);
@@ -170,7 +164,6 @@ static int parse_cmd_opts(function_cmd_opts_t &opts, int *optind,  //!OCLINT(hig
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -207,7 +200,8 @@ static int validate_function_name(int argc, const wchar_t *const *argv, wcstring
 /// Define a function. Calls into `function.cpp` to perform the heavy lifting of defining a
 /// function.
 int builtin_function(parser_t &parser, io_streams_t &streams, const wcstring_list_t &c_args,
-                     const parsed_source_ref_t &source, tnode_t<grammar::job_list> body) {
+                     const parsed_source_ref_t &source,
+                     tnode_t<grammar::block_statement> func_node) {
     assert(source && "Missing source in builtin_function");
     // The wgetopt function expects 'function' as the first argument. Make a new wcstring_list with
     // that property. This is needed because this builtin has a different signature than the other
@@ -258,7 +252,7 @@ int builtin_function(parser_t &parser, io_streams_t &streams, const wcstring_lis
     props->shadow_scope = opts.shadow_scope;
     props->named_arguments = std::move(opts.named_arguments);
     props->parsed_source = source;
-    props->body_node = body;
+    props->func_node = func_node;
 
     // Populate inherit_vars.
     for (const wcstring &name : opts.inherit_vars) {

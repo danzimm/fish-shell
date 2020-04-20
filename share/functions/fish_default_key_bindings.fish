@@ -7,7 +7,7 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
 
     if not set -q argv[1]
         bind --erase --all --preset # clear earlier bindings, if any
-        if test "$fish_key_bindings" != "fish_default_key_bindings"
+        if test "$fish_key_bindings" != fish_default_key_bindings
             # Allow the user to set the variable universally
             set -q fish_key_bindings
             or set -g fish_key_bindings
@@ -20,7 +20,7 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
 
     # Silence warnings about unavailable keys. See #4431, 4188
     if not contains -- -s $argv
-        set argv "-s" $argv
+        set argv -s $argv
     end
 
     # These are shell-specific bindings that we share with vi mode.
@@ -33,6 +33,10 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
 
     # Space expands abbrs _and_ inserts itself.
     bind --preset $argv " " self-insert expand-abbr
+    bind --preset $argv ")" self-insert expand-abbr
+    # Ctrl-space inserts space without expanding abbrs
+    bind -k nul 'commandline -i " "'
+
 
     bind --preset $argv \n execute
     bind --preset $argv \r execute
@@ -56,9 +60,8 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
     bind --preset $argv \e\[3~ delete-char
     bind --preset $argv \e\[4~ end-of-line
 
-    # OS X SnowLeopard doesn't have these keys. Don't show an annoying error message.
-    bind --preset $argv -k home beginning-of-line 2>/dev/null
-    bind --preset $argv -k end end-of-line 2>/dev/null
+    bind --preset $argv -k home beginning-of-line
+    bind --preset $argv -k end end-of-line
     bind --preset $argv \e\[3\;2~ backward-delete-char # Mavericks Terminal.app shift-ctrl-delete
 
     bind --preset $argv \ca beginning-of-line
@@ -69,6 +72,8 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
     bind --preset $argv \cf forward-char
     bind --preset $argv \cb backward-char
     bind --preset $argv \ct transpose-chars
+    bind --preset $argv \c_ undo
+    bind --preset $argv \e/ redo
     bind --preset $argv \et transpose-words
     bind --preset $argv \eu upcase-word
 
@@ -80,8 +85,6 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
     bind --preset $argv \e\b backward-kill-word
     bind --preset $argv \eb backward-word
     bind --preset $argv \ef forward-word
-    bind --preset $argv \e\[1\;5C forward-word
-    bind --preset $argv \e\[1\;5D backward-word
     bind --preset $argv \e\< beginning-of-buffer
     bind --preset $argv \e\> end-of-buffer
 
@@ -93,7 +96,7 @@ function fish_default_key_bindings -d "Default (Emacs-like) key bindings for fis
             bind --preset $argv \e\[8~ end-of-line
             bind --preset $argv \eOc forward-word
             bind --preset $argv \eOd backward-word
-        case 'xterm-256color'
+        case xterm-256color
             # Microsoft's conemu uses xterm-256color plus
             # the following to tell a console to paste:
             bind --preset $argv \e\x20ep fish_clipboard_paste

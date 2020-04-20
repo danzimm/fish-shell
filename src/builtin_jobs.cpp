@@ -61,7 +61,7 @@ static void builtin_jobs_print(const job_t *j, int mode, int header, io_streams_
                 streams.out.append(_(L"State\tCommand\n"));
             }
 
-            streams.out.append_format(L"%d\t%d\t", j->job_id, j->pgid);
+            streams.out.append_format(L"%d\t%d\t", j->job_id(), j->pgid);
 
             if (have_proc_stat()) {
                 streams.out.append_format(L"%d%%\t", cpu_use(j));
@@ -105,7 +105,6 @@ static void builtin_jobs_print(const job_t *j, int mode, int header, io_streams_
         }
         default: {
             DIE("unexpected mode");
-            break;
         }
     }
 }
@@ -165,7 +164,6 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -188,14 +186,13 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
                 const job_t *j = nullptr;
 
                 if (argv[i][0] == L'%') {
-                    int jobId = -1;
-                    jobId = fish_wcstoi(argv[i] + 1);
-                    if (errno || jobId < -1) {
+                    int job_id = fish_wcstoi(argv[i] + 1);
+                    if (errno || job_id < -1) {
                         streams.err.append_format(_(L"%ls: '%ls' is not a valid job id"), cmd,
                                                   argv[i]);
                         return STATUS_INVALID_ARGS;
                     }
-                    j = job_t::from_job_id(jobId);
+                    j = parser.job_get(job_id);
                 } else {
                     int pid = fish_wcstoi(argv[i]);
                     if (errno || pid < 0) {
@@ -203,14 +200,16 @@ int builtin_jobs(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
                                                   argv[i]);
                         return STATUS_INVALID_ARGS;
                     }
-                    j = job_t::from_pid(pid);
+                    j = parser.job_get_from_pid(pid);
                 }
 
                 if (j && !j->is_completed() && j->is_constructed()) {
                     builtin_jobs_print(j, mode, false, streams);
                     found = true;
                 } else {
-                    streams.err.append_format(_(L"%ls: No suitable job: %ls\n"), cmd, argv[i]);
+                    if (mode != JOBS_PRINT_NOTHING) {
+                        streams.err.append_format(_(L"%ls: No suitable job: %ls\n"), cmd, argv[i]);
+                    }
                     return STATUS_CMD_ERROR;
                 }
             }

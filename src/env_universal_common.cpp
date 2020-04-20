@@ -48,8 +48,8 @@
 #include "wcstringutil.h"
 #include "wutil.h"
 
-#if __APPLE__
-#define FISH_NOTIFYD_AVAILABLE 1
+#ifdef __APPLE__
+#define FISH_NOTIFYD_AVAILABLE
 #include <notify.h>
 #endif
 
@@ -253,13 +253,13 @@ env_universal_t::env_universal_t(wcstring path)
     : narrow_vars_path(wcs2string(path)), explicit_vars_path(std::move(path)) {}
 
 maybe_t<env_var_t> env_universal_t::get(const wcstring &name) const {
-    var_table_t::const_iterator where = vars.find(name);
+    auto where = vars.find(name);
     if (where != vars.end()) return where->second;
     return none();
 }
 
 maybe_t<env_var_t::env_var_flags_t> env_universal_t::get_flags(const wcstring &name) const {
-    var_table_t::const_iterator where = vars.find(name);
+    auto where = vars.find(name);
     if (where != vars.end()) {
         return where->second.get_flags();
     }
@@ -277,9 +277,9 @@ void env_universal_t::set_internal(const wcstring &key, const env_var_t &var) {
     }
 }
 
-void env_universal_t::set(const wcstring &key, env_var_t var) {
+void env_universal_t::set(const wcstring &key, const env_var_t &var) {
     scoped_lock locker(lock);
-    this->set_internal(key, std::move(var));
+    this->set_internal(key, var);
 }
 
 bool env_universal_t::remove_internal(const wcstring &key) {
@@ -346,11 +346,12 @@ void env_universal_t::generate_callbacks_and_update_exports(const var_table_t &n
 
         bool old_exports = (existing != this->vars.end() && existing->second.exports());
         bool export_changed = (old_exports != new_entry.exports());
-        if (export_changed) {
+        bool value_changed = existing != this->vars.end() && existing->second != new_entry;
+        if (export_changed || value_changed) {
             export_generation += 1;
         }
-        if (existing == this->vars.end() || export_changed || existing->second != new_entry) {
-            // Value has changed.
+        if (existing == this->vars.end() || export_changed || value_changed) {
+            // Value is set for the first time, or has changed.
             callbacks.push_back(callback_data_t(key, new_entry.as_string()));
         }
     }
@@ -359,7 +360,7 @@ void env_universal_t::generate_callbacks_and_update_exports(const var_table_t &n
 void env_universal_t::acquire_variables(var_table_t &vars_to_acquire) {
     // Copy modified values from existing vars to vars_to_acquire.
     for (const auto &key : this->modified) {
-        var_table_t::iterator src_iter = this->vars.find(key);
+        auto src_iter = this->vars.find(key);
         if (src_iter == this->vars.end()) {
             /* The value has been deleted. */
             vars_to_acquire.erase(key);
@@ -382,7 +383,7 @@ void env_universal_t::load_from_fd(int fd, callback_data_list_t &callbacks) {
     // Get the dev / inode.
     const file_id_t current_file = file_id_for_fd(fd);
     if (current_file == last_read_file) {
-        debug(5, L"universal log sync elided based on fstat()");
+        FLOGF(uvar_file, L"universal log sync elided based on fstat()");
     } else {
         // Read a variables table from the file.
         var_table_t new_vars;
@@ -409,16 +410,15 @@ bool env_universal_t::load_from_path(const std::string &path, callback_data_list
     // Check to see if the file is unchanged. We do this again in load_from_fd, but this avoids
     // opening the file unnecessarily.
     if (last_read_file != kInvalidFileID && file_id_for_path(path) == last_read_file) {
-        debug(5, L"universal log sync elided based on fast stat()");
+        FLOGF(uvar_file, L"universal log sync elided based on fast stat()");
         return true;
     }
 
     bool result = false;
-    int fd = open_cloexec(path, O_RDONLY);
-    if (fd >= 0) {
-        debug(5, L"universal log reading from file");
-        this->load_from_fd(fd, callbacks);
-        close(fd);
+    autoclose_fd_t fd{open_cloexec(path.c_str(), O_RDONLY)};
+    if (fd.valid()) {
+        FLOGF(uvar_file, L"universal log reading from file");
+        this->load_from_fd(fd.fd(), callbacks);
         result = true;
     }
     return result;
@@ -519,34 +519,29 @@ bool env_universal_t::initialize(callback_data_list_t &callbacks) {
     return success;
 }
 
-bool env_universal_t::open_temporary_file(const wcstring &directory, wcstring *out_path,
-                                          int *out_fd) {
+autoclose_fd_t env_universal_t::open_temporary_file(const wcstring &directory, wcstring *out_path) {
     // Create and open a temporary file for writing within the given directory. Try to create a
     // temporary file, up to 10 times. We don't use mkstemps because we want to open it CLO_EXEC.
     // This should almost always succeed on the first try.
     assert(!string_suffixes_string(L"/", directory));  //!OCLINT(multiple unary operator)
 
-    bool success = false;
     int saved_errno;
     const wcstring tmp_name_template = directory + L"/fishd.tmp.XXXXXX";
-
+    autoclose_fd_t result;
     char *narrow_str = nullptr;
-    for (size_t attempt = 0; attempt < 10 && !success; attempt++) {
+    for (size_t attempt = 0; attempt < 10 && !result.valid(); attempt++) {
         narrow_str = wcs2str(tmp_name_template);
-        int result_fd = fish_mkstemp_cloexec(narrow_str);
+        result.reset(fish_mkstemp_cloexec(narrow_str));
         saved_errno = errno;
-        success = result_fd != -1;
-        *out_fd = result_fd;
     }
-
     *out_path = str2wcstring(narrow_str);
     free(narrow_str);
 
-    if (!success) {
+    if (!result.valid()) {
         const char *error = std::strerror(saved_errno);
         FLOGF(error, _(L"Unable to open temporary file '%ls': %s"), out_path->c_str(), error);
     }
-    return success;
+    return result;
 }
 
 /// Check how long the operation took and print a message if it took too long.
@@ -554,7 +549,8 @@ bool env_universal_t::open_temporary_file(const wcstring &directory, wcstring *o
 static bool check_duration(double start_time) {
     double duration = timef() - start_time;
     if (duration > 0.25) {
-        debug(1, _(L"Locking the universal var file took too long (%.3f seconds)."), duration);
+        FLOGF(warning, _(L"Locking the universal var file took too long (%.3f seconds)."),
+              duration);
         return false;
     }
     return true;
@@ -571,7 +567,7 @@ static bool lock_uvar_file(int fd) {
     return check_duration(start_time);
 }
 
-bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd) {
+bool env_universal_t::open_and_acquire_lock(const std::string &path, autoclose_fd_t *out_fd) {
     // Attempt to open the file for reading at the given path, atomically acquiring a lock. On BSD,
     // we can use O_EXLOCK. On Linux, we open the file, take a lock, and then compare fstat() to
     // stat(); if they match, it means that the file was not replaced before we acquired the lock.
@@ -589,11 +585,11 @@ bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd
     }
 #endif
 
-    int fd = -1;
-    while (fd == -1) {
+    autoclose_fd_t fd{};
+    while (!fd.valid()) {
         double start_time = timef();
-        fd = open_cloexec(path, flags, 0644);
-        if (fd == -1) {
+        fd = autoclose_fd_t{open_cloexec(path, flags, 0644)};
+        if (!fd.valid()) {
             if (errno == EINTR) continue;  // signaled; try again
 #ifdef O_EXLOCK
             if (do_locking && (errno == ENOTSUP || errno == EOPNOTSUPP)) {
@@ -606,12 +602,12 @@ bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd
             }
 #endif
             const char *error = std::strerror(errno);
-            FLOGF(error, _(L"Unable to open universal variable file '%ls': %s"), path.c_str(),
+            FLOGF(error, _(L"Unable to open universal variable file '%s': %s"), path.c_str(),
                   error);
             break;
         }
 
-        assert(fd >= 0);  // if we get here, we must have a valid fd
+        assert(fd.valid() && "Should have a valid fd here");
         if (!needs_lock && do_locking) {
             do_locking = check_duration(start_time);
         }
@@ -619,26 +615,25 @@ bool env_universal_t::open_and_acquire_lock(const std::string &path, int *out_fd
         // Try taking the lock, if necessary. If we failed, we may be on lockless NFS, etc.; in that
         // case we pretend we succeeded. See the comment in save_to_path for the rationale.
         if (needs_lock && do_locking) {
-            do_locking = lock_uvar_file(fd);
+            do_locking = lock_uvar_file(fd.fd());
         }
 
         // Hopefully we got the lock. However, it's possible the file changed out from under us
         // while we were waiting for the lock. Make sure that didn't happen.
-        if (file_id_for_fd(fd) != file_id_for_path(path)) {
+        if (file_id_for_fd(fd.fd()) != file_id_for_path(path)) {
             // Oops, it changed! Try again.
-            close(fd);
-            fd = -1;
+            fd.close();
         }
     }
 
-    *out_fd = fd;
-    return fd >= 0;
+    *out_fd = std::move(fd);
+    return out_fd->valid();
 }
 
 // Returns true if modified variables were written, false if not. (There may still be variable
 // changes due to other processes on a false return).
 bool env_universal_t::sync(callback_data_list_t &callbacks) {
-    debug(5, L"universal log sync");
+    FLOGF(uvar_file, L"universal log sync");
     scoped_lock locker(lock);
     // Our saving strategy:
     //
@@ -676,7 +671,7 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
         // FIXME: Why don't we initialize()?
         auto def_vars_path = default_vars_path();
         if (!def_vars_path) {
-            debug(2, L"No universal variable path available");
+            FLOG(uvar_file, L"No universal variable path available");
             return false;
         }
         explicit_vars_path = *def_vars_path;
@@ -686,37 +681,31 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
     // If we have no changes, just load.
     if (modified.empty()) {
         this->load_from_path(narrow_vars_path, callbacks);
-        debug(5, L"universal log no modifications");
+        FLOGF(uvar_file, L"universal log no modifications");
         return false;
     }
 
     const wcstring directory = wdirname(explicit_vars_path);
     bool success = true;
-    int vars_fd = -1;
+    autoclose_fd_t vars_fd{};
 
-    debug(5, L"universal log performing full sync");
+    FLOGF(uvar_file, L"universal log performing full sync");
 
     // Open the file.
     if (success) {
         success = this->open_and_acquire_lock(narrow_vars_path, &vars_fd);
-        if (!success) debug(5, L"universal log open_and_acquire_lock() failed");
+        if (!success) FLOGF(uvar_file, L"universal log open_and_acquire_lock() failed");
     }
 
     // Read from it.
     if (success) {
-        assert(vars_fd >= 0);
-        this->load_from_fd(vars_fd, callbacks);
+        assert(vars_fd.valid());
+        this->load_from_fd(vars_fd.fd(), callbacks);
     }
 
     if (success && ok_to_save) {
         success = this->save(directory, explicit_vars_path);
     }
-
-    // Clean up.
-    if (vars_fd >= 0) {
-        close(vars_fd);
-    }
-
     return success;
 }
 
@@ -725,27 +714,29 @@ bool env_universal_t::sync(callback_data_list_t &callbacks) {
 bool env_universal_t::save(const wcstring &directory, const wcstring &vars_path) {
     assert(ok_to_save && "It's not OK to save");
 
-    int private_fd = -1;
     wcstring private_file_path;
 
     // Open adjacent temporary file.
-    bool success = this->open_temporary_file(directory, &private_file_path, &private_fd);
-    if (!success) debug(5, L"universal log open_temporary_file() failed");
+    autoclose_fd_t private_fd = this->open_temporary_file(directory, &private_file_path);
+    bool success = private_fd.valid();
+
+    if (!success) FLOGF(uvar_file, L"universal log open_temporary_file() failed");
 
     // Write to it.
     if (success) {
-        assert(private_fd >= 0);
-        success = this->write_to_fd(private_fd, private_file_path);
-        if (!success) debug(5, L"universal log write_to_fd() failed");
+        assert(private_fd.valid());
+        success = this->write_to_fd(private_fd.fd(), private_file_path);
+        if (!success) FLOGF(uvar_file, L"universal log write_to_fd() failed");
     }
 
     if (success) {
         // Ensure we maintain ownership and permissions (#2176).
         struct stat sbuf;
         if (wstat(vars_path, &sbuf) >= 0) {
-            if (fchown(private_fd, sbuf.st_uid, sbuf.st_gid) == -1)
-                debug(5, L"universal log fchown() failed");
-            if (fchmod(private_fd, sbuf.st_mode) == -1) debug(5, L"universal log fchmod() failed");
+            if (fchown(private_fd.fd(), sbuf.st_uid, sbuf.st_gid) == -1)
+                FLOGF(uvar_file, L"universal log fchown() failed");
+            if (fchmod(private_fd.fd(), sbuf.st_mode) == -1)
+                FLOGF(uvar_file, L"universal log fchmod() failed");
         }
 
         // Linux by default stores the mtime with low precision, low enough that updates that occur
@@ -760,13 +751,13 @@ bool env_universal_t::save(const wcstring &directory, const wcstring &vars_path)
         struct timespec times[2] = {};
         times[0].tv_nsec = UTIME_OMIT;  // don't change ctime
         if (0 == clock_gettime(CLOCK_REALTIME, &times[1])) {
-            futimens(private_fd, times);
+            futimens(private_fd.fd(), times);
         }
 #endif
 
         // Apply new file.
         success = this->move_new_vars_file_into_place(private_file_path, vars_path);
-        if (!success) debug(5, L"universal log move_new_vars_file_into_place() failed");
+        if (!success) FLOGF(uvar_file, L"universal log move_new_vars_file_into_place() failed");
     }
 
     if (success) {
@@ -775,9 +766,6 @@ bool env_universal_t::save(const wcstring &directory, const wcstring &vars_path)
     }
 
     // Clean up.
-    if (private_fd >= 0) {
-        close(private_fd);
-    }
     if (!private_file_path.empty()) {
         wunlink(private_file_path);
     }
@@ -902,7 +890,7 @@ void env_universal_t::parse_message_30_internal(const wcstring &msgstr, var_tabl
 
     const wchar_t *cursor = msg;
     if (!match(&cursor, f3::SETUVAR)) {
-        debug(1, PARSE_ERR, msg);
+        FLOGF(warning, PARSE_ERR, msg);
         return;
     }
     // Parse out flags.
@@ -922,7 +910,7 @@ void env_universal_t::parse_message_30_internal(const wcstring &msgstr, var_tabl
 
     // Populate the variable with these flags.
     if (!populate_1_variable(cursor, flags, vars, storage)) {
-        debug(1, PARSE_ERR, msg);
+        FLOGF(warning, PARSE_ERR, msg);
     }
 }
 
@@ -933,7 +921,6 @@ void env_universal_t::parse_message_2x_internal(const wcstring &msgstr, var_tabl
     const wchar_t *const msg = msgstr.c_str();
     const wchar_t *cursor = msg;
 
-    // debug(3, L"parse_message( %ls );", msg);
     if (cursor[0] == L'#') return;
 
     env_var_t::env_var_flags_t flags = 0;
@@ -942,12 +929,12 @@ void env_universal_t::parse_message_2x_internal(const wcstring &msgstr, var_tabl
     } else if (match(&cursor, f2x::SET)) {
         flags |= 0;
     } else {
-        debug(1, PARSE_ERR, msg);
+        FLOGF(warning, PARSE_ERR, msg);
         return;
     }
 
     if (!populate_1_variable(cursor, flags, vars, storage)) {
-        debug(1, PARSE_ERR, msg);
+        FLOGF(warning, PARSE_ERR, msg);
     }
 }
 
@@ -1078,8 +1065,8 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
                  getuid());
 
         bool errored = false;
-        int fd = shm_open(path, O_RDWR | O_CREAT, 0600);
-        if (fd < 0) {
+        autoclose_fd_t fd{shm_open(path, O_RDWR | O_CREAT, 0600)};
+        if (!fd.valid()) {
             const char *error = std::strerror(errno);
             FLOGF(error, _(L"Unable to open shared memory with path '%s': %s"), path, error);
             errored = true;
@@ -1089,7 +1076,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         off_t size = 0;
         if (!errored) {
             struct stat buf = {};
-            if (fstat(fd, &buf) < 0) {
+            if (fstat(fd.fd(), &buf) < 0) {
                 const char *error = std::strerror(errno);
                 FLOGF(error, _(L"Unable to fstat shared memory object with path '%s': %s"), path,
                       error);
@@ -1100,7 +1087,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
 
         // Set the size, if it's too small.
         bool set_size = !errored && size < (off_t)sizeof(universal_notifier_shmem_t);
-        if (set_size && ftruncate(fd, sizeof(universal_notifier_shmem_t)) < 0) {
+        if (set_size && ftruncate(fd.fd(), sizeof(universal_notifier_shmem_t)) < 0) {
             const char *error = std::strerror(errno);
             FLOGF(error, _(L"Unable to truncate shared memory object with path '%s': %s"), path,
                   error);
@@ -1110,7 +1097,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         // Memory map the region.
         if (!errored) {
             void *addr = mmap(nullptr, sizeof(universal_notifier_shmem_t), PROT_READ | PROT_WRITE,
-                              MAP_SHARED, fd, 0);
+                              MAP_SHARED, fd.fd(), 0);
             if (addr == MAP_FAILED) {
                 const char *error = std::strerror(errno);
                 FLOGF(error, _(L"Unable to memory map shared memory object with path '%s': %s"),
@@ -1122,9 +1109,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
         }
 
         // Close the fd, even if the mapping succeeded.
-        if (fd >= 0) {
-            close(fd);
-        }
+        fd.close();
 
         // Read the current seed.
         this->poll();
@@ -1193,7 +1178,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
     }
 #else  // this class isn't valid on this system
    public:
-    universal_notifier_shmem_poller_t() {
+    [[noreturn]] universal_notifier_shmem_poller_t() {
         DIE("universal_notifier_shmem_poller_t cannot be used on this system");
     }
 #endif
@@ -1201,7 +1186,7 @@ class universal_notifier_shmem_poller_t : public universal_notifier_t {
 
 /// A notifyd-based notifier. Very straightforward.
 class universal_notifier_notifyd_t : public universal_notifier_t {
-#if FISH_NOTIFYD_AVAILABLE
+#ifdef FISH_NOTIFYD_AVAILABLE
     int notify_fd;
     int token;
     std::string name;
@@ -1216,8 +1201,8 @@ class universal_notifier_notifyd_t : public universal_notifier_t {
         uint32_t status =
             notify_register_file_descriptor(name.c_str(), &this->notify_fd, 0, &this->token);
         if (status != NOTIFY_STATUS_OK) {
-            debug(1, "notify_register_file_descriptor() failed with status %u.", status);
-            debug(1, "Universal variable notifications may not be received.");
+            FLOGF(warning, "notify_register_file_descriptor() failed with status %u.", status);
+            FLOGF(warning, "Universal variable notifications may not be received.");
         }
         if (this->notify_fd >= 0) {
             // Mark us for non-blocking reads, and CLO_EXEC.
@@ -1265,13 +1250,14 @@ class universal_notifier_notifyd_t : public universal_notifier_t {
     void post_notification() {
         uint32_t status = notify_post(name.c_str());
         if (status != NOTIFY_STATUS_OK) {
-            debug(1, "notify_post() failed with status %u. Uvar notifications may not be sent.",
+            FLOGF(warning,
+                  "notify_post() failed with status %u. Uvar notifications may not be sent.",
                   status);
         }
     }
 #else  // this class isn't valid on this system
    public:
-    universal_notifier_notifyd_t() {
+    [[noreturn]] universal_notifier_notifyd_t() {
         DIE("universal_notifier_notifyd_t cannot be used on this system");
     }
 #endif
@@ -1302,7 +1288,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
 
     void make_pipe(const wchar_t *test_path);
 
-    void drain_excessive_data() {
+    void drain_excessive_data() const {
         // The pipe seems to have data on it, that won't go away. Read a big chunk out of it. We
         // don't read until it's exhausted, because if someone were to pipe say /dev/null, that
         // would cause us to hang!
@@ -1313,7 +1299,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
     }
 
    public:
-    universal_notifier_named_pipe_t(const wchar_t *test_path)
+    explicit universal_notifier_named_pipe_t(const wchar_t *test_path)
         : pipe_fd(-1),
           readback_time_usec(0),
           readback_amount(0),
@@ -1449,7 +1435,7 @@ class universal_notifier_named_pipe_t : public universal_notifier_t {
 };
 
 universal_notifier_t::notifier_strategy_t universal_notifier_t::resolve_default_strategy() {
-#if FISH_NOTIFYD_AVAILABLE
+#ifdef FISH_NOTIFYD_AVAILABLE
     return strategy_notifyd;
 #elif defined(__CYGWIN__)
     return strategy_shmem_polling;

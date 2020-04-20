@@ -30,6 +30,7 @@
 #include "fallback.h"  // IWYU pragma: keep
 #include "flog.h"
 #include "output.h"
+#include "wcstringutil.h"
 #include "wutil.h"  // IWYU pragma: keep
 
 /// Whether term256 and term24bit are supported.
@@ -401,9 +402,14 @@ int outputter_t::writech(wint_t ch) {
 void outputter_t::writestr(const wchar_t *str) {
     assert(str && "Empty input string");
 
+    if (MB_CUR_MAX == 1) {
+        // Single-byte locale (C/POSIX/ISO-8859).
+        while (*str) writech(*str++);
+        return;
+    }
     size_t len = wcstombs(nullptr, str, 0);  // figure amount of space needed
     if (len == static_cast<size_t>(-1)) {
-        debug(1, L"Tried to print invalid wide character string");
+        FLOGF(output_invalid, L"Tried to print invalid wide character string");
         return;
     }
 

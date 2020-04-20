@@ -76,7 +76,6 @@ static int parse_cmd_opts(math_cmd_opts_t &opts, int *optind,  //!OCLINT(high nc
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -128,14 +127,14 @@ static const wchar_t *math_get_arg(int *argidx, wchar_t **argv, wcstring *storag
     return math_get_arg_argv(argidx, argv);
 }
 
-static const wchar_t *math_describe_error(te_error_t &error) {
+static const wchar_t *math_describe_error(const te_error_t &error) {
     if (error.position == 0) return L"NO ERROR?!?";
 
     switch (error.type) {
         case TE_ERROR_NONE:
             DIE("Error has no position");
-        case TE_ERROR_UNKNOWN_VARIABLE:
-            return _(L"Unknown variable");
+        case TE_ERROR_UNKNOWN_FUNCTION:
+            return _(L"Unknown function");
         case TE_ERROR_MISSING_CLOSING_PAREN:
             return _(L"Missing closing parenthesis");
         case TE_ERROR_MISSING_OPENING_PAREN:
@@ -186,8 +185,8 @@ static wcstring format_double(double v, const math_cmd_opts_t &opts) {
 }
 
 /// Evaluate math expressions.
-static int evaluate_expression(const wchar_t *cmd, parser_t &parser, io_streams_t &streams,
-                               math_cmd_opts_t &opts, wcstring &expression) {
+static int evaluate_expression(const wchar_t *cmd, const parser_t &parser, io_streams_t &streams,
+                               const math_cmd_opts_t &opts, wcstring &expression) {
     UNUSED(parser);
 
     int retval = STATUS_CMD_OK;

@@ -97,7 +97,7 @@ class tnode_t {
     uint8_t child_count() const { return nodeptr ? nodeptr->child_count : 0; }
 
     maybe_t<source_range_t> source_range() const {
-        if (nodeptr->source_start == NODE_OFFSET_INVALID) return none();
+        if (!nodeptr || nodeptr->source_start == NODE_OFFSET_INVALID) return none();
         return source_range_t{nodeptr->source_start, nodeptr->source_length};
     }
 
@@ -235,8 +235,7 @@ parse_statement_decoration_t get_decoration(tnode_t<grammar::plain_statement> st
 /// Return the type for a boolean statement.
 parse_job_decoration_t bool_statement_type(tnode_t<grammar::job_decorator> stmt);
 
-parse_job_decoration_t bool_statement_type(
-    tnode_t<grammar::job_conjunction_continuation> cont);
+parse_job_decoration_t bool_statement_type(tnode_t<grammar::job_conjunction_continuation> cont);
 
 /// Given a redirection node, get the parsed redirection and target of the redirection (file path,
 /// or fd).

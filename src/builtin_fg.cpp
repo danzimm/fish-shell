@@ -56,7 +56,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         bool found_job = false;
         int pid = fish_wcstoi(argv[optind]);
         if (errno == 0 && pid > 0) {
-            found_job = (job_t::from_pid(pid) != nullptr);
+            found_job = (parser.job_get_from_pid(pid) != nullptr);
         }
 
         if (found_job) {
@@ -73,7 +73,7 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             streams.err.append_format(BUILTIN_ERR_NOT_NUMBER, cmd, argv[optind]);
             builtin_print_error_trailer(parser, streams.err, cmd);
         } else {
-            job = job_t::from_pid(pid);
+            job = parser.job_get_from_pid(pid);
             if (!job || !job->is_constructed() || job->is_completed()) {
                 streams.err.append_format(_(L"%ls: No suitable job: %d\n"), cmd, pid);
                 job = nullptr;
@@ -91,16 +91,16 @@ int builtin_fg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     }
 
     if (streams.err_is_redirected) {
-        streams.err.append_format(FG_MSG, job->job_id, job->command_wcstr());
+        streams.err.append_format(FG_MSG, job->job_id(), job->command_wcstr());
     } else {
         // If we aren't redirecting, send output to real stderr, since stuff in sb_err won't get
         // printed until the command finishes.
-        std::fwprintf(stderr, FG_MSG, job->job_id, job->command_wcstr());
+        std::fwprintf(stderr, FG_MSG, job->job_id(), job->command_wcstr());
     }
 
-    const wcstring ft = tok_first(job->command());
+    wcstring ft = tok_command(job->command());
     // For compatibility with fish 2.0's $_, now replaced with `status current-command`
-    if (!ft.empty()) parser.vars().set_one(L"_", ENV_EXPORT, ft);
+    if (!ft.empty()) parser.set_var_and_fire(L"_", ENV_EXPORT, std::move(ft));
     reader_write_title(job->command(), parser);
 
     parser.job_promote(job);

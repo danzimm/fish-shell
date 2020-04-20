@@ -17,6 +17,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "common.h"
@@ -116,11 +117,14 @@ static const input_function_metadata_t input_function_metadata[] = {
     {readline_cmd_t::history_token_search_backward, L"history-token-search-backward"},
     {readline_cmd_t::history_token_search_forward, L"history-token-search-forward"},
     {readline_cmd_t::self_insert, L"self-insert"},
+    {readline_cmd_t::self_insert_notfirst, L"self-insert-notfirst"},
     {readline_cmd_t::transpose_chars, L"transpose-chars"},
     {readline_cmd_t::transpose_words, L"transpose-words"},
     {readline_cmd_t::upcase_word, L"upcase-word"},
     {readline_cmd_t::downcase_word, L"downcase-word"},
     {readline_cmd_t::capitalize_word, L"capitalize-word"},
+    {readline_cmd_t::togglecase_char, L"togglecase-char"},
+    {readline_cmd_t::togglecase_selection, L"togglecase-selection"},
     {readline_cmd_t::execute, L"execute"},
     {readline_cmd_t::beginning_of_buffer, L"beginning-of-buffer"},
     {readline_cmd_t::end_of_buffer, L"end-of-buffer"},
@@ -144,7 +148,10 @@ static const input_function_metadata_t input_function_metadata[] = {
     {readline_cmd_t::func_and, L"and"},
     {readline_cmd_t::expand_abbr, L"expand-abbr"},
     {readline_cmd_t::delete_or_exit, L"delete-or-exit"},
-    {readline_cmd_t::cancel, L"cancel"}};
+    {readline_cmd_t::cancel, L"cancel"},
+    {readline_cmd_t::undo, L"undo"},
+    {readline_cmd_t::redo, L"redo"},
+};
 
 static_assert(sizeof(input_function_metadata) / sizeof(input_function_metadata[0]) ==
                   input_function_count,
@@ -180,12 +187,13 @@ static wcstring input_get_bind_mode(const environment_t &vars) {
 }
 
 /// Set the current bind mode.
-static void input_set_bind_mode(env_stack_t &vars, const wcstring &bm) {
+static void input_set_bind_mode(parser_t &parser, const wcstring &bm) {
     // Only set this if it differs to not execute variable handlers all the time.
     // modes may not be empty - empty is a sentinel value meaning to not change the mode
     assert(!bm.empty());
-    if (input_get_bind_mode(vars) != bm) {
-        vars.set_one(FISH_BIND_MODE_VAR, ENV_GLOBAL, bm);
+    if (input_get_bind_mode(parser.vars()) != bm) {
+        // Must send events here - see #6653.
+        parser.set_var_and_fire(FISH_BIND_MODE_VAR, ENV_GLOBAL, bm);
     }
 }
 
@@ -359,7 +367,7 @@ void inputter_t::mapping_execute(const input_mapping_t &m, bool allow_commands) 
 
     // !has_functions && !has_commands: only set bind mode
     if (!has_commands && !has_functions) {
-        if (!m.sets_mode.empty()) input_set_bind_mode(parser_->vars(), m.sets_mode);
+        if (!m.sets_mode.empty()) input_set_bind_mode(*parser_, m.sets_mode);
         return;
     }
 
@@ -373,9 +381,7 @@ void inputter_t::mapping_execute(const input_mapping_t &m, bool allow_commands) 
         return;  // skip the input_set_bind_mode
     } else if (has_functions && !has_commands) {
         // Functions are added at the head of the input queue.
-        for (wcstring_list_t::const_reverse_iterator it = m.commands.rbegin(),
-                                                     end = m.commands.rend();
-             it != end; ++it) {
+        for (auto it = m.commands.rbegin(), end = m.commands.rend(); it != end; ++it) {
             readline_cmd_t code = input_function_get_code(*it).value();
             function_push_args(code);
             event_queue_.push_front(char_event_t(code, m.seq));
@@ -398,7 +404,7 @@ void inputter_t::mapping_execute(const input_mapping_t &m, bool allow_commands) 
     }
 
     // Empty bind mode indicates to not reset the mode (#2871)
-    if (!m.sets_mode.empty()) input_set_bind_mode(parser_->vars(), m.sets_mode);
+    if (!m.sets_mode.empty()) input_set_bind_mode(*parser_, m.sets_mode);
 }
 
 /// Try reading the specified function mapping.
@@ -427,9 +433,9 @@ bool inputter_t::mapping_is_match(const input_mapping_t &m) {
     return true;
 }
 
-void inputter_t::queue_ch(char_event_t ch) { event_queue_.push_back(ch); }
+void inputter_t::queue_ch(const char_event_t &ch) { event_queue_.push_back(ch); }
 
-void inputter_t::push_front(char_event_t ch) { event_queue_.push_front(ch); }
+void inputter_t::push_front(const char_event_t &ch) { event_queue_.push_front(ch); }
 
 /// \return the first mapping that matches, walking first over the user's mapping list, then the
 /// preset list. \return null if nothing matches.
@@ -457,7 +463,7 @@ void inputter_t::mapping_execute_matching_or_generic(bool allow_commands) {
     if (auto mapping = find_mapping()) {
         mapping_execute(*mapping, allow_commands);
     } else {
-        debug(2, L"no generic found, ignoring char...");
+        FLOGF(reader, L"no generic found, ignoring char...");
         auto evt = event_queue_.readch();
         if (evt.is_eof()) {
             event_queue_.push_front(evt);
@@ -495,7 +501,8 @@ char_event_t inputter_t::readch(bool allow_commands) {
 
         if (evt.is_readline()) {
             switch (evt.get_readline()) {
-                case readline_cmd_t::self_insert: {
+                case readline_cmd_t::self_insert:
+                case readline_cmd_t::self_insert_notfirst: {
                     // Typically self-insert is generated by the generic (empty) binding.
                     // However if it is generated by a real sequence, then insert that sequence.
                     for (auto iter = evt.seq.crbegin(); iter != evt.seq.crend(); ++iter) {
@@ -503,7 +510,13 @@ char_event_t inputter_t::readch(bool allow_commands) {
                     }
                     // Issue #1595: ensure we only insert characters, not readline functions. The
                     // common case is that this will be empty.
-                    return read_characters_no_readline();
+                    char_event_t res = read_characters_no_readline();
+
+                    // Hackish: mark the input style.
+                    res.input_style = evt.get_readline() == readline_cmd_t::self_insert_notfirst
+                                          ? char_input_style_t::notfirst
+                                          : char_input_style_t::normal;
+                    return res;
                 }
                 case readline_cmd_t::func_and: {
                     if (function_status_) {
@@ -560,7 +573,7 @@ bool input_mapping_set_t::erase(const wcstring &sequence, const wcstring &mode, 
 
     bool result = false;
     mapping_list_t &ml = user ? mapping_list_ : preset_mapping_list_;
-    for (std::vector<input_mapping_t>::iterator it = ml.begin(), end = ml.end(); it != end; ++it) {
+    for (auto it = ml.begin(), end = ml.end(); it != end; ++it) {
         if (sequence == it->seq && mode == it->mode) {
             ml.erase(it);
             result = true;
@@ -571,9 +584,9 @@ bool input_mapping_set_t::erase(const wcstring &sequence, const wcstring &mode, 
 }
 
 bool input_mapping_set_t::get(const wcstring &sequence, const wcstring &mode,
-                              wcstring_list_t *out_cmds, bool user, wcstring *out_sets_mode) {
+                              wcstring_list_t *out_cmds, bool user, wcstring *out_sets_mode) const {
     bool result = false;
-    mapping_list_t &ml = user ? mapping_list_ : preset_mapping_list_;
+    const auto &ml = user ? mapping_list_ : preset_mapping_list_;
     for (const input_mapping_t &m : ml) {
         if (sequence == m.seq && mode == m.mode) {
             *out_cmds = m.commands;

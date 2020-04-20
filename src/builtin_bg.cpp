@@ -22,12 +22,12 @@ static int send_to_bg(parser_t &parser, io_streams_t &streams, job_t *j) {
     if (!j->wants_job_control()) {
         wcstring error_message = format_string(
             _(L"%ls: Can't put job %d, '%ls' to background because it is not under job control\n"),
-            L"bg", j->job_id, j->command_wcstr());
+            L"bg", j->job_id(), j->command_wcstr());
         builtin_print_help(parser, streams, L"bg", &error_message);
         return STATUS_CMD_ERROR;
     }
 
-    streams.err.append_format(_(L"Send job %d '%ls' to background\n"), j->job_id,
+    streams.err.append_format(_(L"Send job %d '%ls' to background\n"), j->job_id(),
                               j->command_wcstr());
     parser.job_promote(j);
     j->mut_flags().foreground = false;
@@ -90,7 +90,7 @@ int builtin_bg(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     // Background all existing jobs that match the pids.
     // Non-existent jobs aren't an error, but information about them is useful.
     for (auto p : pids) {
-        if (job_t *j = job_t::from_pid(p)) {
+        if (job_t *j = parser.job_get_from_pid(p)) {
             retval |= send_to_bg(parser, streams, j);
         } else {
             streams.err.append_format(_(L"%ls: Could not find job '%d'\n"), cmd, p);

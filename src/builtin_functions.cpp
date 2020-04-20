@@ -23,9 +23,11 @@
 #include "function.h"
 #include "highlight.h"
 #include "io.h"
+#include "parser.h"
 #include "parser_keywords.h"
 #include "proc.h"
 #include "signal.h"
+#include "wcstringutil.h"
 #include "wgetopt.h"
 #include "wutil.h"  // IWYU pragma: keep
 
@@ -118,7 +120,6 @@ static int parse_cmd_opts(functions_cmd_opts_t &opts, int *optind,  //!OCLINT(hi
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -181,9 +182,8 @@ static wcstring functions_def(const wcstring &name) {
                     append_format(out, L" --on-job-exit %d", -d.param1.pid);
                 break;
             }
-            case event_type_t::job_exit: {
-                const job_t *j = job_t::from_job_id(d.param1.job_id);
-                if (j) append_format(out, L" --on-job-exit %d", j->pgid);
+            case event_type_t::caller_exit: {
+                append_format(out, L" --on-job-exit caller");
                 break;
             }
             case event_type_t::generic: {
@@ -193,7 +193,6 @@ static wcstring functions_def(const wcstring &name) {
             case event_type_t::any:
             default: {
                 DIE("unexpected next->type");
-                break;
             }
         }
     }
@@ -223,9 +222,8 @@ static wcstring functions_def(const wcstring &name) {
             out.append(earg);
         }
     }
-
-    // More forced indentation.
-    append_format(out, L"\n    %ls", def.c_str());
+    out.push_back('\n');
+    out.append(def);
 
     // Append a newline before the 'end', unless there already is one there.
     if (!string_suffixes_string(L"\n", def)) {
@@ -263,8 +261,9 @@ static int report_function_metadata(const wchar_t *funcname, bool verbose, io_st
             append_format(comment, L"# Defined in %ls @ line %d\n", path, line_number);
             if (!streams.out_is_redirected && isatty(STDOUT_FILENO)) {
                 std::vector<highlight_spec_t> colors;
-                highlight_shell_no_io(comment, colors, comment.size(), nullptr,
-                                      env_stack_t::globals());
+                highlight_shell_no_io(
+                    comment, colors, comment.size(),
+                    operation_context_t{nullptr, env_stack_t::globals(), no_cancel});
                 streams.out.append(str2wcstring(colorize(comment, colors)));
             } else {
                 streams.out.append(comment);
@@ -437,7 +436,7 @@ int builtin_functions(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
 
                 if (!streams.out_is_redirected && isatty(STDOUT_FILENO)) {
                     std::vector<highlight_spec_t> colors;
-                    highlight_shell_no_io(def, colors, def.size(), nullptr, env_stack_t::globals());
+                    highlight_shell_no_io(def, colors, def.size(), operation_context_t::globals());
                     streams.out.append(str2wcstring(colorize(def, colors)));
                 } else {
                     streams.out.append(def);

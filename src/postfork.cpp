@@ -9,7 +9,7 @@
 
 #include <cstring>
 #include <memory>
-#if FISH_USE_POSIX_SPAWN
+#ifdef FISH_USE_POSIX_SPAWN
 #include <spawn.h>
 #endif
 #include <cwchar>
@@ -38,68 +38,67 @@
 /// Fork error message.
 #define FORK_ERROR "Could not create child process - exiting"
 
+static char *get_interpreter(const char *command, char *buffer, size_t buff_size);
+
+/// Report the error code \p err for a failed setpgid call.
+static void report_setpgid_error(int err, const job_t *j, const process_t *p) {
+    char pid_buff[128];
+    char job_id_buff[128];
+    char getpgid_buff[128];
+    char job_pgid_buff[128];
+    char argv0[64];
+    char command[64];
+
+    format_long_safe(pid_buff, p->pid);
+    format_long_safe(job_id_buff, j->job_id());
+    format_long_safe(getpgid_buff, getpgid(p->pid));
+    format_long_safe(job_pgid_buff, j->pgid);
+    narrow_string_safe(argv0, p->argv0());
+    narrow_string_safe(command, j->command_wcstr());
+
+    debug_safe(1, "Could not send own process %s, '%s' in job %s, '%s' from group %s to group %s",
+               pid_buff, argv0, job_id_buff, command, getpgid_buff, job_pgid_buff);
+
+    if (is_windows_subsystem_for_linux() && errno == EPERM) {
+        debug_safe(1,
+                   "Please update to Windows 10 1809/17763 or higher to address known issues "
+                   "with process groups and zombie processes.");
+    }
+
+    errno = err;
+    safe_perror("setpgid");
+}
+
 /// Called only by the child to set its own process group (possibly creating a new group in the
 /// process if it is the first in a JOB_CONTROL job.
 /// Returns true on success, false on failure.
 bool child_set_group(job_t *j, process_t *p) {
-    if (j->wants_job_control()) {
-        if (j->pgid == INVALID_PID) {
-            j->pgid = p->pid;
-        }
-
-        for (int i = 0; setpgid(p->pid, j->pgid) != 0; ++i) {
-            // Put a cap on how many times we retry so we are never stuck here
-            if (i < 100) {
-                if (errno == EPERM) {
-                    // The setpgid(2) man page says that EPERM is returned only if attempts are made
-                    // to move processes into groups across session boundaries (which can never be
-                    // the case in fish, anywhere) or to change the process group ID of a session
-                    // leader (again, can never be the case). I'm pretty sure this is a WSL bug, as
-                    // we see the same with tcsetpgrp(2) in other places and it disappears on retry.
-                    debug_safe(2, "setpgid(2) returned EPERM. Retrying");
-                    continue;
-                } else if (errno == EINTR) {
-                    // I don't think signals are blocked here. The parent (fish) redirected the
-                    // signal handlers and `child_setup_process()` calls `signal_reset_handlers()`
-                    // after we're done here (and not `signal_unblock()`). We're already in a loop,
-                    // so let's just handle EINTR just in case.
-                    continue;
-                }
-            }
-
-            char pid_buff[128];
-            char job_id_buff[128];
-            char getpgid_buff[128];
-            char job_pgid_buff[128];
-            char argv0[64];
-            char command[64];
-
-            format_long_safe(pid_buff, p->pid);
-            format_long_safe(job_id_buff, j->job_id);
-            format_long_safe(getpgid_buff, getpgid(p->pid));
-            format_long_safe(job_pgid_buff, j->pgid);
-            narrow_string_safe(argv0, p->argv0());
-            narrow_string_safe(command, j->command_wcstr());
-
-            debug_safe(
-                1, "Could not send own process %s, '%s' in job %s, '%s' from group %s to group %s",
-                pid_buff, argv0, job_id_buff, command, getpgid_buff, job_pgid_buff);
-
-            if (is_windows_subsystem_for_linux() && errno == EPERM) {
-                debug_safe(
-                    1,
-                    "Please update to Windows 10 1809/17763 or higher to address known issues "
-                    "with process groups and zombie processes.");
-            }
-
-            safe_perror("setpgid");
-
-            return false;
-        }
-    } else {
-        j->pgid = getpgrp();
+    if (j->pgid == INVALID_PID) {
+        assert(j->pgroup_provenance == pgroup_provenance_t::first_external_proc &&
+               "pgroup should only be unset if we need to become the leader");
+        j->pgid = p->pid;
     }
-    return true;
+    // Put a cap on how many times we retry so we are never stuck here.
+    for (int i = 0; i < 100; i++) {
+        if (setpgid(p->pid, j->pgid) == 0) {
+            return true;
+        } else if (errno == EPERM) {
+            // The setpgid(2) man page says that EPERM is returned only if attempts are made
+            // to move processes into groups across session boundaries (which can never be
+            // the case in fish, anywhere) or to change the process group ID of a session
+            // leader (again, can never be the case). I'm pretty sure this is a WSL bug, as
+            // we see the same with tcsetpgrp(2) in other places and it disappears on retry.
+            debug_safe(2, "setpgid(2) returned EPERM. Retrying");
+            continue;
+        } else if (errno == EINTR) {
+            // Retry on EINTR.
+            continue;
+        } else {
+            break;
+        }
+    }
+    report_setpgid_error(errno, j, p);
+    return false;
 }
 
 /// Called only by the parent only after a child forks and successfully calls child_set_group,
@@ -124,7 +123,8 @@ bool set_child_group(job_t *j, pid_t child_pid) {
                 // ever leads to a terminal hang due if both this setpgid call AND posix_spawn's
                 // internal setpgid calls failed), write to the debug log so a future developer
                 // doesn't go crazy trying to track this down.
-                debug(2, "Error %d while calling setpgid for child %d (probably harmless)", errno,
+                FLOGF(proc_pgroup,
+                      "Error %d while calling setpgid for child %d (probably harmless)", errno,
                       child_pid);
             }
         }
@@ -135,7 +135,7 @@ bool set_child_group(job_t *j, pid_t child_pid) {
     return true;
 }
 
-int child_setup_process(pid_t new_termowner, bool is_forked, const dup2_list_t &dup2s) {
+int child_setup_process(pid_t new_termowner, const job_t &job, bool is_forked, const dup2_list_t &dup2s) {
     // Note we are called in a forked child.
     for (const auto &act : dup2s.get_actions()) {
         int err;
@@ -169,6 +169,11 @@ int child_setup_process(pid_t new_termowner, bool is_forked, const dup2_list_t &
             signal(SIGTTOU, SIG_IGN);
             (void)tcsetpgrp(STDIN_FILENO, new_termowner);
         }
+    }
+    sigset_t sigmask;
+    sigemptyset(&sigmask);
+    if (blocked_signals_for_job(job, &sigmask)) {
+        sigprocmask(SIG_SETMASK, &sigmask, nullptr);
     }
     // Set the handling for job control signals back to the default.
     // Do this after any tcsetpgrp call so that we swallow SIGTTIN.
@@ -275,7 +280,10 @@ bool fork_actions_make_spawn_properties(posix_spawnattr_t *attr,
     // No signals blocked.
     sigset_t sigmask;
     sigemptyset(&sigmask);
-    if (!err && reset_sigmask) err = posix_spawnattr_setsigmask(attr, &sigmask);
+    if (!err && reset_sigmask) {
+        blocked_signals_for_job(*j, &sigmask);
+        err = posix_spawnattr_setsigmask(attr, &sigmask);
+    }
 
     // Apply our dup2s.
     for (const auto &act : dup2s.get_actions()) {
@@ -321,11 +329,21 @@ void safe_report_exec_error(int err, const char *actual_cmd, const char *const *
             arg_max = sysconf(_SC_ARG_MAX);
 
             if (arg_max > 0) {
-                format_size_safe(sz2, static_cast<unsigned long long>(arg_max));
-                debug_safe(0,
-                           "The total size of the argument and environment lists %s exceeds the "
-                           "operating system limit of %s.",
-                           sz1, sz2);
+                if (sz >= static_cast<unsigned long long>(arg_max)) {
+                    format_size_safe(sz2, static_cast<unsigned long long>(arg_max));
+                    debug_safe(
+                        0,
+                        "The total size of the argument and environment lists %s exceeds the "
+                        "operating system limit of %s.",
+                        sz1, sz2);
+                } else {
+                    // MAX_ARG_STRLEN, a linux thing that limits the size of one argument. It's
+                    // defined in binfmt.h, but we don't want to include that just to be able to
+                    // print the real limit.
+                    debug_safe(0,
+                               "One of your arguments exceeds the operating system's argument "
+                               "length limit.");
+                }
             } else {
                 debug_safe(0,
                            "The total size of the argument and environment lists (%s) exceeds the "
@@ -353,8 +371,9 @@ void safe_report_exec_error(int err, const char *actual_cmd, const char *const *
             // an open file action fails. These cases appear to be impossible to distinguish. We
             // address this by not using posix_spawn for file redirections, so all the ENOENTs we
             // find must be errors from exec().
-            char interpreter_buff[128] = {}, *interpreter;
-            interpreter = get_interpreter(actual_cmd, interpreter_buff, sizeof interpreter_buff);
+            char interpreter_buff[128] = {};
+            const char *interpreter =
+                get_interpreter(actual_cmd, interpreter_buff, sizeof interpreter_buff);
             if (interpreter && 0 != access(interpreter, X_OK)) {
                 debug_safe(0,
                            "The file '%s' specified the interpreter '%s', which is not an "
@@ -374,10 +393,33 @@ void safe_report_exec_error(int err, const char *actual_cmd, const char *const *
         default: {
             const char *err = safe_strerror(errno);
             debug_safe(0, "exec: %s", err);
-
-            // FLOGF(error, L"The file '%ls' is marked as an executable but could not be run by the
-            // operating system.", p->actual_cmd);
             break;
         }
     }
+}
+
+/// Returns the interpreter for the specified script. Returns NULL if file is not a script with a
+/// shebang.
+static char *get_interpreter(const char *command, char *buffer, size_t buff_size) {
+    // OK to not use CLO_EXEC here because this is only called after fork.
+    int fd = open(command, O_RDONLY);
+    if (fd >= 0) {
+        size_t idx = 0;
+        while (idx + 1 < buff_size) {
+            char ch;
+            ssize_t amt = read(fd, &ch, sizeof ch);
+            if (amt <= 0) break;
+            if (ch == '\n') break;
+            buffer[idx++] = ch;
+        }
+        buffer[idx++] = '\0';
+        close(fd);
+    }
+
+    if (std::strncmp(buffer, "#! /", 4) == 0) {
+        return buffer + 3;
+    } else if (std::strncmp(buffer, "#!/", 3) == 0) {
+        return buffer + 2;
+    }
+    return nullptr;
 }

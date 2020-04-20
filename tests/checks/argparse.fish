@@ -1,5 +1,8 @@
 #RUN: %fish %s
 ##########
+
+set -g LANG C
+
 # Start by verifying a bunch of error conditions.
 
 # No args is an error
@@ -58,19 +61,19 @@ end
 
 # Defining a short flag more than once
 begin
-    argparse 's/short' 'x/xray' 's/long' -- -s -x --long
+    argparse s/short x/xray s/long -- -s -x --long
     # CHECKERR: argparse: Short flag 's' already defined
 end
 
 # Defining a long flag more than once
 begin
-    argparse 's/short' 'x/xray' 'l/short' -- -s -x --long
+    argparse s/short x/xray l/short -- -s -x --long
     # CHECKERR: argparse: Long flag 'short' already defined
 end
 
 # Defining an implicit int flag more than once
 begin
-    argparse '#-val' 'x/xray' 'v#val' -- -s -x --long
+    argparse '#-val' x/xray 'v#val' -- -s -x --long
     # CHECKERR: argparse: Implicit int flag '#' already defined
 end
 
@@ -106,7 +109,7 @@ end
 
 # Required, optional, and multiple flags
 begin
-    argparse 'h/help' 'a/abc=' 'd/def=?' 'g/ghk=+' -- help --help me --ghk=g1 --abc=ABC --ghk g2 --d -g g3
+    argparse h/help 'a/abc=' 'd/def=?' 'g/ghk=+' -- help --help me --ghk=g1 --abc=ABC --ghk g2 --d -g g3
     set -l
     # CHECK: _flag_a ABC
     # CHECK: _flag_abc ABC
@@ -121,7 +124,7 @@ end
 
 # --stop-nonopt works
 begin
-    argparse --stop-nonopt 'h/help' 'a/abc=' -- -a A1 -h --abc A2 non-opt 'second non-opt' --help
+    argparse --stop-nonopt h/help 'a/abc=' -- -a A1 -h --abc A2 non-opt 'second non-opt' --help
     set -l
     # CHECK: _flag_a A2
     # CHECK: _flag_abc A2
@@ -138,7 +141,7 @@ begin
     # CHECK: argv 'abc'  'def'
 end
 begin
-    argparse 'v/verbose' '#-val' 't/token=' -- -123 a1 --token woohoo --234 -v a2 --verbose
+    argparse v/verbose '#-val' 't/token=' -- -123 a1 --token woohoo --234 -v a2 --verbose
     set -l
     # CHECK: _flag_t woohoo
     # CHECK: _flag_token woohoo
@@ -168,7 +171,7 @@ end
 
 # Bool short flag only
 begin
-    argparse 'C' 'v' -- -C -v arg1 -v arg2
+    argparse C v -- -C -v arg1 -v arg2
     set -l
     # CHECK: _flag_C -C
     # CHECK: _flag_v '-v'  '-v'
@@ -177,7 +180,7 @@ end
 
 # Value taking short flag only
 begin
-    argparse 'x=' 'v/verbose' -- --verbose arg1 -v -x arg2
+    argparse 'x=' v/verbose -- --verbose arg1 -v -x arg2
     set -l
     # CHECK: _flag_v '--verbose'  '-v'
     # CHECK: _flag_verbose '--verbose'  '-v'
@@ -187,7 +190,7 @@ end
 
 # Implicit int short flag only
 begin
-    argparse 'x#' 'v/verbose' -- -v -v argle -v -x 321 bargle
+    argparse 'x#' v/verbose -- -v -v argle -v -x 321 bargle
     set -l
     # CHECK: _flag_v '-v'  '-v'  '-v'
     # CHECK: _flag_verbose '-v'  '-v'  '-v'
@@ -197,7 +200,7 @@ end
 
 # Implicit int short flag only with custom validation passes
 begin
-    argparse 'x#!_validate_int --max 500' 'v/verbose' -- -v -v -x 499 -v
+    argparse 'x#!_validate_int --max 500' v/verbose -- -v -v -x 499 -v
     set -l
     # CHECK: _flag_v '-v'  '-v'  '-v'
     # CHECK: _flag_verbose '-v'  '-v'  '-v'
@@ -207,7 +210,7 @@ end
 
 # Implicit int short flag only with custom validation fails
 begin
-    argparse 'x#!_validate_int --min 500' 'v/verbose' -- -v -v -x 499 -v
+    argparse 'x#!_validate_int --min 500' v/verbose -- -v -v -x 499 -v
     set -l
     # CHECKERR: argparse: Value '499' for flag 'x' less than min allowed of '500'
 end
@@ -224,7 +227,7 @@ and echo unxpected argparse return status >&2
 # CHECKERR: argparse: Value 'a1' for flag 'm' is not an integer
 
 # Check the exit status from argparse validation
-argparse 'm#max!set | grep _flag_; function x; return 57; end; x' -- argle --max=83 bargle 2>&1
+argparse 'm#max!set | grep "^_flag_"; function x; return 57; end; x' -- argle --max=83 bargle 2>&1
 set -l saved_status $status
 test $saved_status -eq 57
 and echo expected argparse return status $saved_status
@@ -300,3 +303,88 @@ begin
     # CHECK: argv
     # CHECK: saved_status 57
 end
+
+# #6483 - error messages for missing arguments
+argparse -n foo q r/required= -- foo -qr
+# CHECKERR: foo: Expected argument for option r
+
+argparse r/required= -- foo --required
+# CHECKERR: argparse: Expected argument for option --required
+
+### The fish_opt wrapper:
+# No args is an error
+fish_opt
+and echo unexpected status $status
+#CHECKERR: fish_opt: The --short flag is required and must be a single character
+
+# No short flag or an invalid short flag is an error
+fish_opt -l help
+and echo unexpected status $status
+#CHECKERR: fish_opt: The --short flag is required and must be a single character
+fish_opt -s help
+and echo unexpected status $status
+#CHECKERR: fish_opt: The --short flag is required and must be a single character
+
+# A required and optional arg makes no sense
+fish_opt -s h -l help -r --optional-val
+and echo unexpected status $status
+#CHECKERR: fish_opt: Mutually exclusive flags 'o/optional-val' and `r/required-val` seen
+
+# A repeated and optional arg makes no sense
+fish_opt -s h -l help --multiple-vals --optional-val
+and echo unexpected status $status
+#CHECKERR: fish_opt: Mutually exclusive flags 'multiple-vals' and `o/optional-val` seen
+
+# An unexpected arg not associated with a flag is an error
+fish_opt -s h -l help hello
+and echo unexpected status $status
+#CHECKERR: fish_opt: Expected at most 0 args, got 1
+
+# Now verify that valid combinations of options produces the correct output.
+
+# Bool, short only
+fish_opt -s h
+or echo unexpected status $status
+#CHECK: h
+
+# Bool, short and long
+fish_opt --short h --long help
+or echo unexpected status $status
+#CHECK: h/help
+
+# Bool, short and long but the short var cannot be used
+fish_opt --short h --long help --long-only
+#CHECK: h-help
+
+# Required val, short and long but the short var cannot be used
+fish_opt --short h --long help -r --long-only
+or echo unexpected status $status
+#CHECK: h-help=
+
+# Optional val, short and long valid
+fish_opt --short h -l help --optional-val
+or echo unexpected status $status
+#CHECK: h/help=?
+
+# Optional val, short and long but the short var cannot be used
+fish_opt --short h -l help --optional-val --long-only
+or echo unexpected status $status
+#CHECK: h-help=?
+
+# Repeated val, short and long valid
+fish_opt --short h -l help --multiple-vals
+or echo unexpected status $status
+#CHECK: h/help=+
+
+# Repeated val, short and long but short not valid
+fish_opt --short h -l help --multiple-vals --long-only
+or echo unexpected status $status
+#CHECK: h-help=+
+
+# Repeated val, short only
+fish_opt -s h --multiple-vals
+or echo unexpected status $status
+fish_opt -s h --multiple-vals --long-only
+or echo unexpected status $status
+#CHECK: h=+
+#CHECK: h=+

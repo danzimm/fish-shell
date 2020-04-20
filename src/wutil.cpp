@@ -130,7 +130,7 @@ bool wreaddir_for_dirs(DIR *dir, wcstring *out_name) {
     return result != nullptr;
 }
 
-const wcstring wgetcwd() {
+wcstring wgetcwd() {
     char cwd[PATH_MAX];
     char *res = getcwd(cwd, sizeof(cwd));
     if (res) {
@@ -139,42 +139,6 @@ const wcstring wgetcwd() {
 
     FLOGF(error, _(L"getcwd() failed with errno %d/%s"), errno, std::strerror(errno));
     return wcstring();
-}
-
-FILE *wfopen(const wcstring &path, const char *mode) {
-    int permissions = 0, options = 0;
-    size_t idx = 0;
-    switch (mode[idx++]) {
-        case 'r': {
-            permissions = O_RDONLY;
-            break;
-        }
-        case 'w': {
-            permissions = O_WRONLY;
-            options = O_CREAT | O_TRUNC;
-            break;
-        }
-        case 'a': {
-            permissions = O_WRONLY;
-            options = O_CREAT | O_APPEND;
-            break;
-        }
-        default: {
-            errno = EINVAL;
-            return nullptr;
-        }
-    }
-    // Skip binary.
-    if (mode[idx] == 'b') idx++;
-
-    // Consider append option.
-    if (mode[idx] == '+') permissions = O_RDWR;
-
-    int fd = wopen_cloexec(path, permissions | options, 0666);
-    if (fd < 0) return nullptr;
-    FILE *result = fdopen(fd, mode);
-    if (result == nullptr) close(fd);
-    return result;
 }
 
 int set_cloexec(int fd, bool should_set) {
@@ -197,35 +161,30 @@ int set_cloexec(int fd, bool should_set) {
     }
 }
 
-int open_cloexec(const std::string &cstring, int flags, mode_t mode, bool cloexec) {
+int open_cloexec(const std::string &path, int flags, mode_t mode) {
+    return open_cloexec(path.c_str(), flags, mode);
+}
+
+int open_cloexec(const char *path, int flags, mode_t mode) {
     ASSERT_IS_NOT_FORKED_CHILD();
     int fd;
 
 #ifdef O_CLOEXEC
     // Prefer to use O_CLOEXEC. It has to both be defined and nonzero.
-    if (cloexec) {
-        fd = open(cstring.c_str(), flags | O_CLOEXEC, mode);
-    } else {
-        fd = open(cstring.c_str(), flags, mode);
-    }
+    fd = open(path, flags | O_CLOEXEC, mode);
 #else
-    fd = open(cstring.c_str(), flags, mode);
+    fd = open(path, flags, mode);
     if (fd >= 0 && !set_cloexec(fd)) {
-        close(fd);
+        exec_close(fd);
         fd = -1;
     }
 #endif
     return fd;
 }
 
-int wopen(const wcstring &pathname, int flags, mode_t mode) {
-    cstring tmp = wcs2string(pathname);
-    return open(tmp.c_str(), flags, mode);
-}
-
 int wopen_cloexec(const wcstring &pathname, int flags, mode_t mode) {
     cstring tmp = wcs2string(pathname);
-    return open_cloexec(tmp, flags, mode, true);
+    return open_cloexec(tmp, flags, mode);
 }
 
 DIR *wopendir(const wcstring &name) {
@@ -247,7 +206,7 @@ dir_t::~dir_t() {
 
 bool dir_t::valid() const { return this->dir != nullptr; }
 
-bool dir_t::read(wcstring &name) { return wreaddir(this->dir, name); }
+bool dir_t::read(wcstring &name) const { return wreaddir(this->dir, name); }
 
 int wstat(const wcstring &file_name, struct stat *buf) {
     const cstring tmp = wcs2string(file_name);
@@ -305,10 +264,11 @@ int fd_check_is_remote(int fd) {
     }
     // Linux has constants for these like NFS_SUPER_MAGIC, SMB_SUPER_MAGIC, CIFS_MAGIC_NUMBER but
     // these are in varying headers. Simply hard code them.
-    switch (buf.f_type) {
-        case 0x6969:      // NFS_SUPER_MAGIC
-        case 0x517B:      // SMB_SUPER_MAGIC
-        case 0xFF534D42:  // CIFS_MAGIC_NUMBER
+    // NOTE: The cast is necessary for 32-bit systems because of the 4-byte CIFS_MAGIC_NUMBER
+    switch ((unsigned int)buf.f_type) {
+        case 0x6969:       // NFS_SUPER_MAGIC
+        case 0x517B:       // SMB_SUPER_MAGIC
+        case 0xFF534D42U:  // CIFS_MAGIC_NUMBER
             return 1;
         default:
             // Other FSes are assumed local.

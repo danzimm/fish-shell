@@ -677,6 +677,12 @@ std::vector<int> parse_util_compute_indents(const wcstring &src) {
     const size_t src_size = src.size();
     std::vector<int> indents(src_size, -1);
 
+    // Simple trick: if our source does not contain a newline, then all indents are 0.
+    if (src.find('\n') == wcstring::npos) {
+        std::fill(indents.begin(), indents.end(), 0);
+        return indents;
+    }
+
     // Parse the string. We pass continue_after_error to produce a forest; the trailing indent of
     // the last node we visited becomes the input indent of the next. I.e. in the case of 'switch
     // foo ; cas', we get an invalid parse tree (since 'cas' is not valid) but we indent it as if it
@@ -1008,7 +1014,6 @@ parser_test_error_bits_t parse_util_detect_errors_in_argument(tnode_t<grammar::a
             }
             default: {
                 DIE("unexpected parse_util_locate_cmdsubst() return value");
-                break;
             }
         }
     }
@@ -1129,8 +1134,8 @@ static bool detect_errors_in_plain_statement(const wcstring &buff_src,
     if (maybe_t<wcstring> unexp_command = command_for_plain_statement(pst, buff_src)) {
         wcstring command;
         // Check that we can expand the command.
-        if (expand_to_command_and_args(*unexp_command, null_environment_t{}, &command, nullptr,
-                                       parse_errors) == expand_result_t::error) {
+        if (expand_to_command_and_args(*unexp_command, operation_context_t::empty(), &command,
+                                       nullptr, parse_errors) == expand_result_t::error) {
             errored = true;
             parse_error_offset_source_start(parse_errors, source_start);
         }
@@ -1193,7 +1198,7 @@ static bool detect_errors_in_plain_statement(const wcstring &buff_src,
 
         // Check that we don't do an invalid builtin (issue #1252).
         if (!errored && decoration == parse_statement_decoration_builtin &&
-            expand_one(*unexp_command, expand_flag::skip_cmdsubst, null_environment_t{}, nullptr,
+            expand_one(*unexp_command, expand_flag::skip_cmdsubst, operation_context_t::empty(),
                        parse_errors) &&
             !builtin_exists(*unexp_command)) {
             errored = append_syntax_error(parse_errors, source_start, UNKNOWN_BUILTIN_ERR_MSG,

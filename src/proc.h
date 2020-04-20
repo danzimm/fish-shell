@@ -82,6 +82,9 @@ class proc_status_t {
     /// \return if we are stopped (as in SIGSTOP).
     bool stopped() const { return WIFSTOPPED(status_); }
 
+    /// \return if we are continued (as in SIGCONT).
+    bool continued() const { return WIFCONTINUED(status_); }
+
     /// \return if we exited normally (not a signal).
     bool normal_exited() const { return WIFEXITED(status_); }
 
@@ -237,6 +240,9 @@ class process_t {
     /// launch. This helps us avoid spurious waitpid calls.
     void check_generations_before_launch();
 
+    /// \return whether this process type is internal (block, function, or builtin).
+    bool is_internal() const;
+
     /// Actual command to pass to exec in case of process_type_t::external or process_type_t::exec.
     wcstring actual_cmd;
 
@@ -266,7 +272,12 @@ class process_t {
 typedef std::unique_ptr<process_t> process_ptr_t;
 typedef std::vector<process_ptr_t> process_list_t;
 
-typedef int job_id_t;
+/// The non user-visible, never-recycled job ID.
+/// Every job has a unique positive value for this.
+using internal_job_id_t = uint64_t;
+
+/// The user-visible, optional, recycled job ID.
+using job_id_t = int;
 job_id_t acquire_job_id(void);
 void release_job_id(job_id_t jid);
 
@@ -280,6 +291,10 @@ struct job_lineage_t {
     /// is part of a pipeline, then this may be set.
     maybe_t<pid_t> parent_pgid{};
 
+    /// Whether job control is on for the root.
+    /// This is set if our job is nested as part of a function or block execution.
+    bool root_has_job_control{false};
+
     /// The IO chain associated with any block containing this job.
     /// For example, in `begin; foo ; end < file.txt` this would have the 'file.txt' IO.
     io_chain_t block_io{};
@@ -289,8 +304,25 @@ struct job_lineage_t {
     std::shared_ptr<relaxed_atomic_bool_t> root_constructed{};
 };
 
-/// A struct represeting a job. A job is basically a pipeline of one or more processes and a couple
-/// of flags.
+/// A job has a mode which describes how its pgroup is assigned (before the value is known).
+/// This is a constant property of the job.
+enum class pgroup_provenance_t {
+    /// The job has no pgroup assignment. This is used for e.g. a simple function invocation with no
+    /// pipeline.
+    unassigned,
+
+    /// The job's pgroup is fish's pgroup. This is used when fish needs to read from the terminal,
+    /// or if job control is disabled.
+    fish_itself,
+
+    /// The job's pgroup will come from its first external process.
+    first_external_proc,
+
+    /// The job's pgroup will come from its lineage. This is used for jobs that are run nested.
+    lineage,
+};
+
+/// A struct representing a job. A job is a pipeline of one or more processes.
 class job_t {
    public:
     /// A set of jobs properties. These are immutable: they do not change for the lifetime of the
@@ -305,6 +337,9 @@ class job_t {
 
         /// Whether this job was created as part of an event handler.
         bool from_event_handler{};
+
+        /// Whether the job is under job control, i.e. has its own pgrp.
+        bool job_control{};
     };
 
    private:
@@ -315,12 +350,15 @@ class job_t {
     /// messages about job status on the terminal.
     wcstring command_str;
 
+    /// The job_id for this job.
+    job_id_t job_id_;
+
     // No copying.
     job_t(const job_t &rhs) = delete;
     void operator=(const job_t &) = delete;
 
    public:
-    job_t(job_id_t job_id, const properties_t &props, job_lineage_t lineage);
+    job_t(job_id_t job_id, const properties_t &props, const job_lineage_t &lineage);
     ~job_t();
 
     /// Returns the command as a wchar_t *. */
@@ -377,8 +415,23 @@ class job_t {
     /// Set to a nonexistent, non-return-value of getpgid() integer by the constructor
     pid_t pgid{INVALID_PID};
 
+    /// How the above pgroup is assigned. This should be set at construction and not modified after.
+    pgroup_provenance_t pgroup_provenance{};
+
     /// The id of this job.
-    const job_id_t job_id;
+    /// This is user-visible, is recycled, and may be -1.
+    job_id_t job_id() const { return job_id_; }
+
+    /// A non-user-visible, never-recycled job ID.
+    const internal_job_id_t internal_job_id;
+
+    /// Mark this job as internal. Internal jobs' job_ids are removed from the
+    /// list of jobs so that, among other things, they don't take a job_id
+    /// entry.
+    void mark_internal() {
+        release_job_id(job_id_);
+        job_id_ = -1;
+    }
 
     /// The saved terminal modes of this job. This needs to be saved so that we can restore the
     /// terminal to the same state after temporarily taking control over the terminal when a job
@@ -405,11 +458,11 @@ class job_t {
         /// Whether the exit status should be negated. This flag can only be set by the not builtin.
         bool negate{false};
 
-        /// Whether the job is under job control, i.e. has its own pgrp.
-        bool job_control{false};
-
         /// This job is disowned, and should be removed from the active jobs list.
         bool disown_requested{false};
+
+        /// Whether to print timing for this job.
+        bool has_time_prefix{false};
     } job_flags{};
 
     /// Access the job flags.
@@ -419,13 +472,19 @@ class job_t {
     flags_t &mut_flags() { return job_flags; }
 
     /// \return if we want job control.
-    bool wants_job_control() const { return flags().job_control; }
+    bool wants_job_control() const { return properties.job_control; }
 
     /// \return if this job should own the terminal when it runs.
     bool should_claim_terminal() const { return properties.wants_terminal && is_foreground(); }
 
     /// Mark this job as constructed. The job must not have previously been marked as constructed.
     void mark_constructed();
+
+    /// \return whether we have internal or external procs, respectively.
+    /// Internal procs are builtins, blocks, and functions.
+    /// External procs include exec and external.
+    bool has_internal_proc() const;
+    bool has_external_proc() const;
 
     // Helper functions to check presence of flags on instances of jobs
     /// The job has been fully constructed, i.e. all its member processes have been launched
@@ -465,13 +524,6 @@ class job_t {
 
     /// \returns the statuses for this job.
     statuses_t get_statuses() const;
-
-    /// Return the job instance matching this unique job id.
-    /// If id is 0 or less, return the last job used.
-    static job_t *from_job_id(job_id_t id);
-
-    /// Return the job containing the process identified by the unique pid provided.
-    static job_t *from_pid(pid_t pid);
 };
 
 /// Whether this shell is attached to the keyboard at all.
@@ -504,6 +556,14 @@ void set_job_control_mode(job_control_t mode);
 class parser_t;
 bool job_reap(parser_t &parser, bool interactive);
 
+/// \return the list of background jobs which we should warn the user about, if the user attempts to
+/// exit. An empty result (common) means no such jobs.
+job_list_t jobs_requiring_warning_on_exit(const parser_t &parser);
+
+/// Print the exit warning for the given jobs, which should have been obtained via
+/// jobs_requiring_warning_on_exit().
+void print_exit_warning_for_jobs(const job_list_t &jobs);
+
 /// Mark a process as failed to execute (and therefore completed).
 void job_mark_process_as_failed(const std::shared_ptr<job_t> &job, const process_t *failed_proc);
 
@@ -534,8 +594,8 @@ void proc_wait_any(parser_t &parser);
 void set_is_within_fish_initialization(bool flag);
 bool is_within_fish_initialization();
 
-/// Terminate all background jobs
-void hup_background_jobs(const parser_t &parser);
+/// Send SIGHUP to the list \p jobs, excepting those which are in fish's pgroup.
+void hup_jobs(const job_list_t &jobs);
 
 /// Give ownership of the terminal to the specified job, if it wants it.
 ///
@@ -545,10 +605,6 @@ void hup_background_jobs(const parser_t &parser);
 /// the job.
 /// \return 1 if transferred, 0 if no transfer was necessary, -1 on error.
 int terminal_maybe_give_to_job(const job_t *j, bool continuing_from_stopped);
-
-/// Given that we are about to run a builtin, acquire the terminal if it is owned by the given job.
-/// Returns the pid to restore after running the builtin, or -1 if there is no pid to restore.
-pid_t terminal_acquire_before_builtin(int job_pgid);
 
 /// Add a pid to the list of pids we wait on even though they are not associated with any jobs.
 /// Used to avoid zombie processes after disown.

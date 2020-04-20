@@ -14,17 +14,18 @@
 // We need the sys/file.h for the flock() declaration on Linux but not OS X.
 #include <sys/file.h>  // IWYU pragma: keep
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 #include <wctype.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cwchar>
 #include <functional>
 #include <iterator>
 #include <map>
 #include <numeric>
+#include <random>
 #include <type_traits>
 #include <unordered_set>
 
@@ -79,7 +80,7 @@ namespace {
 
 /// If the size of \p buffer is at least \p min_size, output the contents of a string \p str to \p
 /// fd, and clear the string. \return 0 on success, an error code on failure.
-static int flush_to_fd(std::string *buffer, int fd, size_t min_size) {
+int flush_to_fd(std::string *buffer, int fd, size_t min_size) {
     if (buffer->empty() || buffer->size() < min_size) {
         return 0;
     }
@@ -106,9 +107,24 @@ class time_profiler_t {
     }
 };
 
+/// \return the path for the history file for the given \p session_id, or none() if it could not be
+/// loaded. If suffix is provided, append that suffix to the path; this is used for temporary files.
+maybe_t<wcstring> history_filename(const wcstring &session_id, const wcstring &suffix = {}) {
+    if (session_id.empty()) return none();
+
+    wcstring result;
+    if (!path_get_data(result)) return none();
+
+    result.append(L"/");
+    result.append(session_id);
+    result.append(L"_history");
+    result.append(suffix);
+    return result;
+}
+
 /// Lock the history file.
 /// Returns true on success, false on failure.
-static bool history_file_lock(int fd, int lock_type) {
+bool history_file_lock(int fd, int lock_type) {
     static std::atomic<bool> do_locking(true);
     if (!do_locking) return false;
 
@@ -116,7 +132,7 @@ static bool history_file_lock(int fd, int lock_type) {
     int retval = flock(fd, lock_type);
     double duration = timef() - start_time;
     if (duration > 0.25) {
-        debug(1, _(L"Locking the history file took too long (%.3f seconds)."), duration);
+        FLOGF(warning, _(L"Locking the history file took too long (%.3f seconds)."), duration);
         // we've decided to stop doing any locking behavior
         // but make sure we don't leave the file locked!
         if (retval == 0 && lock_type != LOCK_UN) {
@@ -152,8 +168,6 @@ class history_lru_cache_t : public lru_cache_t<history_lru_cache_t, history_item
         }
     }
 };
-
-static wcstring history_filename(const wcstring &session_id, const wcstring &suffix);
 
 /// We can merge two items if they are the same command. We use the more recent timestamp, more
 /// recent identifier, and the longer list of required paths.
@@ -353,6 +367,11 @@ struct history_impl_t {
 };
 
 void history_impl_t::add(const history_item_t &item, bool pending, bool do_save) {
+    // We use empty items as sentinels to indicate the end of history.
+    // Do not allow them to be added (#6032).
+    if (item.contents.empty()) {
+        return;
+    }
     // Try merging with the last item.
     if (!new_items.empty() && new_items.back().merge(item)) {
         // We merged, so we don't have to add anything. Maybe this item was pending, but it just got
@@ -378,9 +397,12 @@ void history_impl_t::save_unless_disabled() {
     // the counter.
     const int kVacuumFrequency = 25;
     if (countdown_to_vacuum < 0) {
-        unsigned int seed = static_cast<unsigned int>(time(nullptr));
         // Generate a number in the range [0, kVacuumFrequency).
-        countdown_to_vacuum = rand_r(&seed) / (RAND_MAX / kVacuumFrequency + 1);
+        std::uniform_int_distribution<unsigned> dist{0, kVacuumFrequency - 1};
+        unsigned seed =
+            static_cast<unsigned>(std::chrono::system_clock::now().time_since_epoch().count());
+        std::minstd_rand gen{seed};
+        countdown_to_vacuum = dist(gen);
     }
 
     // Determine if we're going to vacuum.
@@ -444,8 +466,7 @@ void history_impl_t::set_valid_file_paths(const wcstring_list_t &valid_file_path
     }
 
     // Look for an item with the given identifier. It is likely to be at the end of new_items.
-    for (history_item_list_t::reverse_iterator iter = new_items.rbegin(); iter != new_items.rend();
-         ++iter) {
+    for (auto iter = new_items.rbegin(); iter != new_items.rend(); ++iter) {
         if (iter->identifier == ident) {  // found it
             iter->required_paths = valid_file_paths;
             break;
@@ -554,9 +575,9 @@ void history_impl_t::load_old_if_needed() {
     loaded_old = true;
 
     time_profiler_t profiler("load_old");  //!OCLINT(side-effect)
-    wcstring filename = history_filename(name, L"");
-    if (!filename.empty()) {
-        int fd = wopen_cloexec(filename, O_RDONLY);
+    if (maybe_t<wcstring> filename = history_filename(name)) {
+        autoclose_fd_t file{wopen_cloexec(*filename, O_RDONLY)};
+        int fd = file.fd();
         if (fd >= 0) {
             // Take a read lock to guard against someone else appending. This is released when the
             // file is closed (below). We will read the file after releasing the lock, but that's
@@ -572,7 +593,6 @@ void history_impl_t::load_old_if_needed() {
             file_contents = history_file_contents_t::create(fd);
             this->history_file_id = file_contents ? file_id_for_fd(fd) : kInvalidFileID;
             if (!history_t::chaos_mode) history_file_lock(fd, LOCK_UN);
-            close(fd);
 
             time_profiler_t profiler("populate_from_file_contents");  //!OCLINT(side-effect)
             this->populate_from_file_contents();
@@ -582,16 +602,12 @@ void history_impl_t::load_old_if_needed() {
 
 bool history_search_t::go_backwards() {
     // Backwards means increasing our index.
-    const size_t max_index = static_cast<size_t>(-1);
+    const auto max_index = static_cast<size_t>(-1);
 
     if (current_index_ == max_index) return false;
 
     size_t index = current_index_;
     while (++index < max_index) {
-        if (reader_test_should_cancel()) {
-            return false;
-        }
-
         history_item_t item = history_->item_at_index(index);
 
         // We're done if it's empty or we cancelled.
@@ -623,19 +639,6 @@ const history_item_t &history_search_t::current_item() const {
 }
 
 const wcstring &history_search_t::current_string() const { return this->current_item().str(); }
-
-static wcstring history_filename(const wcstring &session_id, const wcstring &suffix) {
-    if (session_id.empty()) return L"";
-
-    wcstring result;
-    if (!path_get_data(result)) return L"";
-
-    result.append(L"/");
-    result.append(session_id);
-    result.append(L"_history");
-    result.append(suffix);
-    return result;
-}
 
 void history_impl_t::clear_file_state() {
     // Erase everything we know about our file.
@@ -718,26 +721,23 @@ bool history_impl_t::rewrite_to_temporary_file(int existing_fd, int dst_fd) cons
         err = flush_to_fd(&buffer, dst_fd, 0);
     }
     if (err) {
-        debug(2, L"Error %d when writing to temporary history file", err);
+        FLOGF(history_file, L"Error %d when writing to temporary history file", err);
     }
 
     return err == 0;
 }
 
-// Returns the fd of an opened temporary file, or -1 on failure
-static int create_temporary_file(const wcstring &name_template, wcstring *out_path) {
-    int out_fd = -1;
-    char *narrow_str = nullptr;
-    for (size_t attempt = 0; attempt < 10 && out_fd == -1; attempt++) {
-        narrow_str = wcs2str(name_template);
-        out_fd = fish_mkstemp_cloexec(narrow_str);
+// Returns the fd of an opened temporary file, or an invalid fd on failure.
+static autoclose_fd_t create_temporary_file(const wcstring &name_template, wcstring *out_path) {
+    for (int attempt = 0; attempt < 10; attempt++) {
+        std::string narrow_str = wcs2string(name_template);
+        autoclose_fd_t out_fd{fish_mkstemp_cloexec(&narrow_str[0])};
+        if (out_fd.valid()) {
+            *out_path = str2wcstring(narrow_str);
+            return out_fd;
+        }
     }
-
-    if (out_fd >= 0) {
-        *out_path = str2wcstring(narrow_str);
-    }
-    free(narrow_str);
-    return out_fd;
+    return autoclose_fd_t{};
 }
 
 bool history_impl_t::save_internal_via_rewrite() {
@@ -748,29 +748,28 @@ bool history_impl_t::save_internal_via_rewrite() {
     // We want to rewrite the file, while holding the lock for as briefly as possible
     // To do this, we speculatively write a file, and then lock and see if our original file changed
     // Repeat until we succeed or give up
-    const wcstring target_name = history_filename(name, wcstring());
-    const wcstring tmp_name_template = history_filename(name, L".XXXXXX");
-    if (target_name.empty() || tmp_name_template.empty()) {
+    const maybe_t<wcstring> target_name = history_filename(name);
+    const maybe_t<wcstring> tmp_name_template = history_filename(name, L".XXXXXX");
+    if (!target_name.has_value() || !tmp_name_template.has_value()) {
         return false;
     }
 
     // Make our temporary file
     // Remember that we have to close this fd!
     wcstring tmp_name;
-    int tmp_fd = create_temporary_file(tmp_name_template, &tmp_name);
-    if (tmp_fd < 0) {
+    autoclose_fd_t tmp_file = create_temporary_file(*tmp_name_template, &tmp_name);
+    if (!tmp_file.valid()) {
         return false;
     }
-
+    const int tmp_fd = tmp_file.fd();
     bool done = false;
     for (int i = 0; i < max_save_tries && !done; i++) {
         // Open any target file, but do not lock it right away
-        int target_fd_before = wopen_cloexec(target_name, O_RDONLY | O_CREAT, history_file_mode);
-        file_id_t orig_file_id = file_id_for_fd(target_fd_before);  // possibly invalid
-        bool wrote = this->rewrite_to_temporary_file(target_fd_before, tmp_fd);
-        if (target_fd_before >= 0) {
-            close(target_fd_before);
-        }
+        autoclose_fd_t target_fd_before{
+            wopen_cloexec(*target_name, O_RDONLY | O_CREAT, history_file_mode)};
+        file_id_t orig_file_id = file_id_for_fd(target_fd_before.fd());  // possibly invalid
+        bool wrote = this->rewrite_to_temporary_file(target_fd_before.fd(), tmp_fd);
+        target_fd_before.close();
         if (!wrote) {
             // Failed to write, no good
             break;
@@ -780,21 +779,21 @@ bool history_impl_t::save_internal_via_rewrite() {
         // were rewriting it. Make an effort to take the lock before checking, to avoid racing.
         // If the open fails, then proceed; this may be because there is no current history
         file_id_t new_file_id = kInvalidFileID;
-        int target_fd_after = wopen_cloexec(target_name, O_RDONLY);
-        if (target_fd_after >= 0) {
+        autoclose_fd_t target_fd_after{wopen_cloexec(*target_name, O_RDONLY)};
+        if (target_fd_after.valid()) {
             // critical to take the lock before checking file IDs,
             // and hold it until after we are done replacing
             // Also critical to check the file at the path, NOT based on our fd
             // It's only OK to replace the file while holding the lock
-            history_file_lock(target_fd_after, LOCK_EX);
-            new_file_id = file_id_for_path(target_name);
+            history_file_lock(target_fd_after.fd(), LOCK_EX);
+            new_file_id = file_id_for_path(*target_name);
         }
         bool can_replace_file = (new_file_id == orig_file_id || new_file_id == kInvalidFileID);
         if (!can_replace_file) {
             // The file has changed, so we're going to re-read it
             // Truncate our tmp_fd so we can reuse it
             if (ftruncate(tmp_fd, 0) == -1 || lseek(tmp_fd, 0, SEEK_SET) == -1) {
-                debug(2, L"Error %d when truncating temporary history file", errno);
+                FLOGF(history_file, L"Error %d when truncating temporary history file", errno);
             }
         } else {
             // The file is unchanged, or the new file doesn't exist or we can't read it
@@ -806,32 +805,27 @@ bool history_impl_t::save_internal_via_rewrite() {
             // did, it would be tricky to set the permissions correctly. (bash doesn't get this
             // case right either).
             struct stat sbuf;
-            if (target_fd_after >= 0 && fstat(target_fd_after, &sbuf) >= 0) {
+            if (target_fd_after.valid() && fstat(target_fd_after.fd(), &sbuf) >= 0) {
                 if (fchown(tmp_fd, sbuf.st_uid, sbuf.st_gid) == -1) {
-                    debug(2, L"Error %d when changing ownership of history file", errno);
+                    FLOGF(history_file, L"Error %d when changing ownership of history file", errno);
                 }
                 if (fchmod(tmp_fd, sbuf.st_mode) == -1) {
-                    debug(2, L"Error %d when changing mode of history file", errno);
+                    FLOGF(history_file, L"Error %d when changing mode of history file", errno);
                 }
             }
 
             // Slide it into place
-            if (wrename(tmp_name, target_name) == -1) {
-                debug(2, L"Error %d when renaming history file", errno);
+            if (wrename(tmp_name, *target_name) == -1) {
+                FLOGF(history_file, L"Error %d when renaming history file", errno);
             }
 
             // We did it
             done = true;
         }
-
-        if (target_fd_after >= 0) {
-            close(target_fd_after);
-        }
     }
 
     // Ensure we never leave the old file around
     wunlink(tmp_name);
-    close(tmp_fd);
 
     if (done) {
         // We've saved everything, so we have no more unsaved items.
@@ -862,19 +856,20 @@ bool history_impl_t::save_internal_via_appending() {
     bool file_changed = false;
 
     // Get the path to the real history file.
-    wcstring history_path = history_filename(name, wcstring());
-    if (history_path.empty()) {
+    maybe_t<wcstring> maybe_history_path = history_filename(name);
+    if (!maybe_history_path) {
         return true;
     }
+    wcstring history_path = maybe_history_path.acquire();
 
     // We are going to open the file, lock it, append to it, and then close it
     // After locking it, we need to stat the file at the path; if there is a new file there, it
     // means the file was replaced and we have to try again.
     // Limit our max tries so we don't do this forever.
-    int history_fd = -1;
+    autoclose_fd_t history_fd{};
     for (int i = 0; i < max_save_tries; i++) {
-        int fd = wopen_cloexec(history_path, O_WRONLY | O_APPEND);
-        if (fd < 0) {
+        autoclose_fd_t fd{wopen_cloexec(history_path, O_WRONLY | O_APPEND)};
+        if (!fd.valid()) {
             // can't open, we're hosed
             break;
         }
@@ -885,23 +880,20 @@ bool history_impl_t::save_internal_via_appending() {
         // by writing with O_APPEND.
         //
         // Simulate a failing lock in chaos_mode
-        if (!history_t::chaos_mode) history_file_lock(fd, LOCK_EX);
-        const file_id_t file_id = file_id_for_fd(fd);
-        if (file_id_for_path(history_path) != file_id) {
-            // The file has changed, we're going to retry
-            close(fd);
-        } else {
+        if (!history_t::chaos_mode) history_file_lock(fd.fd(), LOCK_EX);
+        const file_id_t file_id = file_id_for_fd(fd.fd());
+        if (file_id_for_path(history_path) == file_id) {
             // File IDs match, so the file we opened is still at that path
             // We're going to use this fd
             if (file_id != this->history_file_id) {
                 file_changed = true;
             }
-            history_fd = fd;
+            history_fd = std::move(fd);
             break;
         }
     }
 
-    if (history_fd >= 0) {
+    if (history_fd.valid()) {
         // We (hopefully successfully) took the exclusive lock. Append to the file.
         // Note that this is sketchy for a few reasons:
         //   - Another shell may have appended its own items with a later timestamp, so our file may
@@ -929,14 +921,14 @@ bool history_impl_t::save_internal_via_appending() {
         while (first_unwritten_new_item_index < new_items.size()) {
             const history_item_t &item = new_items.at(first_unwritten_new_item_index);
             append_history_item_to_buffer(item, &buffer);
-            err = flush_to_fd(&buffer, history_fd, HISTORY_OUTPUT_BUFFER_SIZE);
+            err = flush_to_fd(&buffer, history_fd.fd(), HISTORY_OUTPUT_BUFFER_SIZE);
             if (err) break;
             // We wrote this item, hooray.
             first_unwritten_new_item_index++;
         }
 
         if (!err) {
-            err = flush_to_fd(&buffer, history_fd, 0);
+            err = flush_to_fd(&buffer, history_fd.fd(), 0);
         }
 
         // Since we just modified the file, update our mmap_file_id to match its current state
@@ -944,12 +936,11 @@ bool history_impl_t::save_internal_via_appending() {
         // write.
         // We don't update the mapping since we only appended to the file, and everything we
         // appended remains in our new_items
-        this->history_file_id = file_id_for_fd(history_fd);
-
-        close(history_fd);
+        this->history_file_id = file_id_for_fd(history_fd.fd());
 
         ok = (err == 0);
     }
+    history_fd.close();
 
     // If someone has replaced the file, forget our file state.
     if (file_changed) {
@@ -964,7 +955,7 @@ void history_impl_t::save(bool vacuum) {
     // Nothing to do if there's no new items.
     if (first_unwritten_new_item_index >= new_items.size() && deleted_items.empty()) return;
 
-    if (history_filename(name, L"").empty()) {
+    if (!history_filename(name).has_value()) {
         // We're in the "incognito" mode. Pretend we've saved the history.
         this->first_unwritten_new_item_index = new_items.size();
         this->deleted_items.clear();
@@ -1030,8 +1021,9 @@ void history_impl_t::clear() {
     deleted_items.clear();
     first_unwritten_new_item_index = 0;
     old_item_offsets.clear();
-    wcstring filename = history_filename(name, L"");
-    if (!filename.empty()) wunlink(filename);
+    if (maybe_t<wcstring> filename = history_filename(name)) {
+        wunlink(*filename);
+    }
     this->clear_file_state();
 }
 
@@ -1048,13 +1040,13 @@ bool history_impl_t::is_empty() {
     } else {
         // If we have not loaded old items, don't actually load them (which may be expensive); just
         // stat the file and see if it exists and is nonempty.
-        const wcstring where = history_filename(name, L"");
-        if (where.empty()) {
+        const maybe_t<wcstring> where = history_filename(name);
+        if (!where.has_value()) {
             return true;
         }
 
         struct stat buf = {};
-        if (wstat(where, &buf) != 0) {
+        if (wstat(*where, &buf) != 0) {
             // Access failed, assume missing.
             empty = true;
         } else {
@@ -1069,8 +1061,8 @@ bool history_impl_t::is_empty() {
 /// clearing ourselves, and copying the contents of the old history file to the new history file.
 /// The new contents will automatically be re-mapped later.
 void history_impl_t::populate_from_config_path() {
-    wcstring new_file = history_filename(name, wcstring());
-    if (new_file.empty()) {
+    maybe_t<wcstring> new_file = history_filename(name);
+    if (!new_file.has_value()) {
         return;
     }
 
@@ -1079,26 +1071,23 @@ void history_impl_t::populate_from_config_path() {
         old_file.append(L"/");
         old_file.append(name);
         old_file.append(L"_history");
-        int src_fd = wopen_cloexec(old_file, O_RDONLY, 0);
-        if (src_fd != -1) {
+        autoclose_fd_t src_fd{wopen_cloexec(old_file, O_RDONLY, 0)};
+        if (src_fd.valid()) {
             // Clear must come after we've retrieved the new_file name, and before we open
             // destination file descriptor, since it destroys the name and the file.
             this->clear();
 
-            int dst_fd = wopen_cloexec(new_file, O_WRONLY | O_CREAT, history_file_mode);
+            autoclose_fd_t dst_fd{wopen_cloexec(*new_file, O_WRONLY | O_CREAT, history_file_mode)};
             char buf[BUFSIZ];
             ssize_t size;
-            while ((size = read(src_fd, buf, BUFSIZ)) > 0) {
-                ssize_t written = write(dst_fd, buf, static_cast<size_t>(size));
+            while ((size = read(src_fd.fd(), buf, BUFSIZ)) > 0) {
+                ssize_t written = write(dst_fd.fd(), buf, static_cast<size_t>(size));
                 if (written < 0) {
                     // This message does not have high enough priority to be shown by default.
-                    debug(2, L"Error when writing history file");
+                    FLOGF(history_file, L"Error when writing history file");
                     break;
                 }
             }
-
-            close(src_fd);
-            close(dst_fd);
         }
     }
 }
@@ -1271,6 +1260,12 @@ void history_t::remove(const wcstring &str) { impl()->remove(str); }
 
 void history_t::add_pending_with_file_detection(const wcstring &str,
                                                 const wcstring &working_dir_slash) {
+    // We use empty items as sentinels to indicate the end of history.
+    // Do not allow them to be added (#6032).
+    if (str.empty()) {
+        return;
+    }
+
     // Find all arguments that look like they could be file paths.
     bool needs_sync_write = false;
     parse_node_tree_t tree;
@@ -1348,10 +1343,11 @@ void history_t::save() { impl()->save(); }
 /// \p func returns true, continue the search; else stop it.
 static void do_1_history_search(history_t &hist, history_search_type_t search_type,
                                 const wcstring &search_string, bool case_sensitive,
-                                const std::function<bool(const history_item_t &item)> &func) {
+                                const std::function<bool(const history_item_t &item)> &func,
+                                const cancel_checker_t &cancel_check) {
     history_search_t searcher = history_search_t(hist, search_string, search_type,
                                                  case_sensitive ? 0 : history_search_ignore_case);
-    while (searcher.go_backwards()) {
+    while (!cancel_check() && searcher.go_backwards()) {
         if (!func(searcher.current_item())) {
             break;
         }
@@ -1361,7 +1357,8 @@ static void do_1_history_search(history_t &hist, history_search_type_t search_ty
 // Searches history.
 bool history_t::search(history_search_type_t search_type, const wcstring_list_t &search_args,
                        const wchar_t *show_time_format, size_t max_items, bool case_sensitive,
-                       bool null_terminate, bool reverse, io_streams_t &streams) {
+                       bool null_terminate, bool reverse, const cancel_checker_t &cancel_check,
+                       io_streams_t &streams) {
     wcstring_list_t collected;
     wcstring formatted_record;
     size_t remaining = max_items;
@@ -1383,14 +1380,16 @@ bool history_t::search(history_search_type_t search_type, const wcstring_list_t 
 
     if (search_args.empty()) {
         // The user had no search terms; just append everything.
-        do_1_history_search(*this, history_search_type_t::match_everything, {}, false, func);
+        do_1_history_search(*this, history_search_type_t::match_everything, {}, false, func,
+                            cancel_check);
     } else {
         for (const wcstring &search_string : search_args) {
             if (search_string.empty()) {
                 streams.err.append_format(L"Searching for the empty string isn't allowed");
                 return false;
             }
-            do_1_history_search(*this, search_type, search_string, case_sensitive, func);
+            do_1_history_search(*this, search_type, search_string, case_sensitive, func,
+                                cancel_check);
         }
     }
 
@@ -1441,13 +1440,12 @@ history_t &history_t::history_with_name(const wcstring &name) {
     return *hist;
 }
 
-static std::atomic<bool> private_mode{false};
+static relaxed_atomic_bool_t private_mode{false};
 
-void start_private_mode() {
-    private_mode.store(true);
-    auto &vars = parser_t::principal_parser().vars();
+void start_private_mode(env_stack_t &vars) {
+    private_mode = true;
     vars.set_one(L"fish_history", ENV_GLOBAL, L"");
     vars.set_one(L"fish_private_mode", ENV_GLOBAL, L"1");
 }
 
-bool in_private_mode() { return private_mode.load(); }
+bool in_private_mode() { return private_mode; }

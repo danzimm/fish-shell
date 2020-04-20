@@ -19,21 +19,16 @@
 #include "common.h"
 #include "maybe.h"
 
-/// Wide character version of fopen(). This sets CLO_EXEC.
-FILE *wfopen(const wcstring &path, const char *mode);
-
 /// Sets CLO_EXEC on a given fd according to the value of \p should_set.
 int set_cloexec(int fd, bool should_set = true);
-
-/// Wide character version of open().
-int wopen(const wcstring &pathname, int flags, mode_t mode = 0);
 
 /// Wide character version of open() that also sets the close-on-exec flag (atomically when
 /// possible).
 int wopen_cloexec(const wcstring &pathname, int flags, mode_t mode = 0);
 
-/// Narrow version of wopen_cloexec.
-int open_cloexec(const std::string &cstring, int flags, mode_t mode = 0, bool cloexec = true);
+/// Narrow versions of wopen_cloexec.
+int open_cloexec(const std::string &path, int flags, mode_t mode = 0);
+int open_cloexec(const char *path, int flags, mode_t mode = 0);
 
 /// Mark an fd as nonblocking; returns errno or 0 on success.
 int make_fd_nonblocking(int fd);
@@ -71,7 +66,7 @@ void safe_perror(const char *message);
 const char *safe_strerror(int err);
 
 /// Wide character version of getcwd().
-const wcstring wgetcwd();
+wcstring wgetcwd();
 
 /// Wide character version of realpath function.
 /// \returns the canonicalized path, or none if the path is invalid.
@@ -178,7 +173,7 @@ struct file_id_t {
 struct dir_t {
     DIR *dir;
     bool valid() const;
-    bool read(wcstring &name);
+    bool read(wcstring &name) const;
     dir_t(const wcstring &path);
     ~dir_t();
 };

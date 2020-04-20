@@ -3,8 +3,11 @@
 """ Command line test driver. """
 
 from __future__ import unicode_literals
+from __future__ import print_function
 
 import argparse
+from collections import deque
+import datetime
 import io
 import re
 import shlex
@@ -27,6 +30,12 @@ class Config(object):
         self.verbose = False
         # Whether output gets ANSI colorization.
         self.colorize = False
+        # Whether to show which file was tested.
+        self.progress = False
+        # How many after lines to print
+        self.after = 5
+        # How many before lines to print
+        self.before = 5
 
     def colors(self):
         """ Return a dictionary mapping color names to ANSI escapes """
@@ -112,13 +121,17 @@ class RunCmd(object):
 
 
 class TestFailure(object):
-    def __init__(self, line, check, testrun):
+    def __init__(self, line, check, testrun, before=None, after=None):
         self.line = line
         self.check = check
         self.testrun = testrun
         self.error_annotation_line = None
+        # The output that comes *after* the failure.
+        self.after = after
+        self.before = before
 
     def message(self):
+        afterlines = self.testrun.config.after
         fields = self.testrun.config.colors()
         fields["name"] = self.testrun.name
         fields["subbed_command"] = self.testrun.subbed_command
@@ -139,7 +152,8 @@ class TestFailure(object):
                     "check_type": self.check.type,
                 }
             )
-        fmtstrs = ["{RED}Failure{RESET} in {name}:", ""]
+        filemsg = "" if self.testrun.config.progress else " in {name}"
+        fmtstrs = ["{RED}Failure{RESET}" + filemsg + ":", ""]
         if self.line and self.check:
             fmtstrs += [
                 "  The {check_type} on line {input_lineno} wants:",
@@ -171,6 +185,17 @@ class TestFailure(object):
                 "  additional output on stderr:{error_annotation_lineno}:",
                 "    {BOLD}{error_annotation}{RESET}",
             ]
+        if self.before:
+            fields["before_output"] = "    ".join(self.before)
+            fields["additional_output"] = "    ".join(self.after[:afterlines])
+            fmtstrs += [
+                "  Context:",
+                "    {BOLD}{before_output}    {RED}{output_line}{RESET} <= does not match '{LIGHTBLUE}{input_line}{RESET}'",
+                "    {BOLD}{additional_output}{RESET}",
+            ]
+        elif self.after:
+            fields["additional_output"] = "    ".join(self.after[:afterlines])
+            fmtstrs += ["  additional output:", "    {BOLD}{additional_output}{RESET}"]
         fmtstrs += ["  when running command:", "    {subbed_command}"]
         return "\n".join(fmtstrs).format(**fields)
 
@@ -194,7 +219,9 @@ def perform_substitution(input_str, subs):
         for key, replacement in subs_ordered:
             if text.startswith(key):
                 return replacement + text[len(key) :]
-        raise CheckerError("Unknown substitution: " + m.group(0))
+        # No substitution found, so we default to running it as-is,
+        # which will end up running it via $PATH.
+        return text
 
     return re.sub(r"%(%|[a-zA-Z0-9_-]+)", subber, input_str)
 
@@ -212,6 +239,8 @@ class TestRun(object):
         # Reverse our lines and checks so we can pop off the end.
         lineq = lines[::-1]
         checkq = checks[::-1]
+        # We keep the last couple of lines in a deque so we can show context.
+        before = deque(maxlen=self.config.before)
         while lineq and checkq:
             line = lineq[-1]
             check = checkq[-1]
@@ -219,12 +248,23 @@ class TestRun(object):
                 # This line matched this checker, continue on.
                 lineq.pop()
                 checkq.pop()
+                before.append(line.text)
             elif line.is_empty_space():
                 # Skip all whitespace input lines.
                 lineq.pop()
             else:
                 # Failed to match.
-                return TestFailure(line, check, self)
+                lineq.pop()
+                # Add context, ignoring empty lines.
+                return TestFailure(
+                    line,
+                    check,
+                    self,
+                    before=before,
+                    after=[
+                        line.text for line in lineq[::-1] if not line.is_empty_space()
+                    ],
+                )
         # Drain empties.
         while lineq and lineq[-1].is_empty_space():
             lineq.pop()
@@ -258,6 +298,13 @@ class TestRun(object):
             close_fds=True,  # For Python 2.6 as shipped on RHEL 6
         )
         stdout, stderr = proc.communicate()
+        # HACK: This is quite cheesy: POSIX specifies that sh should return 127 for a missing command.
+        # Technically it's also possible to return it in other conditions.
+        # Practically, that's *probably* not going to happen.
+        status = proc.returncode
+        if status == 127:
+            raise CheckerError("Command could not be found: " + self.subbed_command)
+
         outlines = [
             Line(text, idx + 1, "stdout")
             for idx, text in enumerate(split_by_newlines(stdout))
@@ -343,7 +390,12 @@ class Checker(object):
         # Find run commands.
         self.runcmds = [RunCmd.parse(sl) for sl in group1s(RUN_RE)]
         if not self.runcmds:
-            raise CheckerError("No runlines ('# RUN') found")
+            # If no RUN command has been given, fall back to the shebang.
+            if lines[0].text.startswith("#!"):
+                # Remove the "#!" at the beginning, and the newline at the end.
+                self.runcmds = [RunCmd(lines[0].text[2:-1] + " %s", lines[0])]
+            else:
+                raise CheckerError("No runlines ('# RUN') found")
 
         # Find check cmds.
         self.outchecks = [
@@ -406,7 +458,31 @@ def get_argparse():
         action="append",
         default=[],
     )
+    parser.add_argument(
+        "-p",
+        "--progress",
+        action="store_true",
+        dest="progress",
+        help="Show the files to be checked",
+        default=False,
+    )
     parser.add_argument("file", nargs="+", help="File to check")
+    parser.add_argument(
+        "-A",
+        "--after",
+        type=int,
+        help="How many non-empty lines of output after a failure to print (default: 5)",
+        action="store",
+        default=5,
+    )
+    parser.add_argument(
+        "-B",
+        "--before",
+        type=int,
+        help="How many non-empty lines of output before a failure to print (default: 5)",
+        action="store",
+        default=5,
+    )
     return parser
 
 
@@ -416,15 +492,37 @@ def main():
     def_subs = {"%": "%"}
     def_subs.update(parse_subs(args.substitute))
 
-    success = True
+    failure_count = 0
     config = Config()
     config.colorize = sys.stdout.isatty()
+    config.progress = args.progress
+    fields = config.colors()
+    config.after = args.after
+    config.before = args.before
+    if config.before < 0:
+        raise ValueError("Before must be at least 0")
+    if config.after < 0:
+        raise ValueError("After must be at least 0")
+
     for path in args.file:
+        fields["path"] = path
+        if config.progress:
+            print("Testing file {path} ... ".format(**fields), end="")
+            sys.stdout.flush()
         subs = def_subs.copy()
         subs["s"] = path
+        starttime = datetime.datetime.now()
         if not check_path(path, subs, config, TestFailure.print_message):
-            success = False
-    sys.exit(0 if success else 1)
+            failure_count += 1
+        elif config.progress:
+            endtime = datetime.datetime.now()
+            duration_ms = round((endtime - starttime).total_seconds() * 1000)
+            print(
+                "{GREEN}ok{RESET} ({duration} ms)".format(
+                    duration=duration_ms, **fields
+                )
+            )
+    sys.exit(failure_count)
 
 
 if __name__ == "__main__":

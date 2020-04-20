@@ -65,8 +65,8 @@ class env_universal_t {
     bool remove_internal(const wcstring &key);
 
     // Functions concerned with saving.
-    bool open_and_acquire_lock(const std::string &path, int *out_fd);
-    bool open_temporary_file(const wcstring &directory, wcstring *out_path, int *out_fd);
+    bool open_and_acquire_lock(const std::string &path, autoclose_fd_t *out_fd);
+    autoclose_fd_t open_temporary_file(const wcstring &directory, wcstring *out_path);
     bool write_to_fd(int fd, const wcstring &path);
     bool move_new_vars_file_into_place(const wcstring &src, const wcstring &dst);
 
@@ -103,7 +103,7 @@ class env_universal_t {
     maybe_t<env_var_t::env_var_flags_t> get_flags(const wcstring &name) const;
 
     // Sets a variable.
-    void set(const wcstring &key, env_var_t var);
+    void set(const wcstring &key, const env_var_t &var);
 
     // Removes a variable. Returns true if it was found, false if not.
     bool remove(const wcstring &key);

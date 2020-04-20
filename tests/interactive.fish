@@ -58,12 +58,12 @@ function test_file
     set -l err_status $status
 
     if test $out_status -eq 0 -a $err_status -eq 0 -a $exit_status -eq 0
-        say green "ok ($test_duration $unit)"
+        printf '%s\n' (set_color green)ok(set_color normal)" ($test_duration $unit)"
         # clean up tmp files
         rm -f $file.tmp.{err,out,log}
         return 0
     else
-        say red "fail"
+        say red fail
         if test $out_status -ne 0
             say yellow "Output differs for file $file. Diff follows:"
             colordiff -u $file.out $file.tmp.out
@@ -99,7 +99,7 @@ end
 
 set failed (count $failed)
 if test $failed -eq 0
-    say green "All tests completed successfully"
+    say green "All interactive tests completed successfully"
     exit 0
 else
     set plural (test $failed -eq 1; or echo s)

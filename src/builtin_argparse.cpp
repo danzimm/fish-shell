@@ -23,6 +23,7 @@
 #include "fallback.h"  // IWYU pragma: keep
 #include "io.h"
 #include "parser.h"
+#include "wcstringutil.h"
 #include "wgetopt.h"  // IWYU pragma: keep
 #include "wutil.h"    // IWYU pragma: keep
 
@@ -39,7 +40,7 @@ struct option_spec_t {
     int num_allowed{0};
     int num_seen{0};
 
-    option_spec_t(wchar_t s) : short_flag(s) {}
+    explicit option_spec_t(wchar_t s) : short_flag(s) {}
 };
 using option_spec_ref_t = std::unique_ptr<option_spec_t>;
 
@@ -50,7 +51,7 @@ struct argparse_cmd_opts_t {
     size_t min_args = 0;
     size_t max_args = SIZE_MAX;
     wchar_t implicit_int_flag = L'\0';
-    wcstring name = L"";
+    wcstring name;
     wcstring_list_t raw_exclusive_flags;
     wcstring_list_t argv;
     std::unordered_map<wchar_t, option_spec_ref_t> options;
@@ -397,7 +398,6 @@ static int parse_cmd_opts(argparse_cmd_opts_t &opts, int *optind,  //!OCLINT(hig
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -456,13 +456,14 @@ static int validate_arg(parser_t &parser, const argparse_cmd_opts_t &opts, optio
     auto &vars = parser.vars();
 
     vars.push(true);
-    vars.set_one(L"_argparse_cmd", ENV_LOCAL, opts.name);
+    vars.set_one(L"_argparse_cmd", ENV_LOCAL | ENV_EXPORT, opts.name);
     if (is_long_flag) {
-        vars.set_one(var_name_prefix + L"name", ENV_LOCAL, opt_spec->long_flag);
+        vars.set_one(var_name_prefix + L"name", ENV_LOCAL | ENV_EXPORT, opt_spec->long_flag);
     } else {
-        vars.set_one(var_name_prefix + L"name", ENV_LOCAL, wcstring(1, opt_spec->short_flag));
+        vars.set_one(var_name_prefix + L"name", ENV_LOCAL | ENV_EXPORT,
+                     wcstring(1, opt_spec->short_flag));
     }
-    vars.set_one(var_name_prefix + L"value", ENV_LOCAL, woptarg);
+    vars.set_one(var_name_prefix + L"value", ENV_LOCAL | ENV_EXPORT, woptarg);
 
     int retval = exec_subshell(opt_spec->validation_command, parser, cmd_output, false);
     for (const auto &output : cmd_output) {
@@ -550,7 +551,8 @@ static int argparse_parse_flags(parser_t &parser, argparse_cmd_opts_t &opts,
     wgetopter_t w;
     while ((opt = w.wgetopt_long(argc, argv, short_options, long_options, &long_idx)) != -1) {
         if (opt == ':') {
-            builtin_missing_argument(parser, streams, cmd, argv[w.woptind - 1]);
+            builtin_missing_argument(parser, streams, cmd, argv[w.woptind - 1],
+                                     false /* print_hints */);
             return STATUS_INVALID_ARGS;
         } else if (opt == '?') {
             // It's not a recognized flag. See if it's an implicit int flag.
@@ -611,7 +613,7 @@ static int argparse_parse_args(argparse_cmd_opts_t &opts, const wcstring_list_t 
 
     // "+" means stop at nonopt, "-" means give nonoptions the option character code `1`, and don't
     // reorder.
-    wcstring short_options = opts.stop_nonopt ? L"+:" : L"-";
+    wcstring short_options = opts.stop_nonopt ? L"+:" : L"-:";
     std::vector<woption> long_options;
     populate_option_strings(opts, &short_options, &long_options);
 
@@ -641,7 +643,7 @@ static int argparse_parse_args(argparse_cmd_opts_t &opts, const wcstring_list_t 
     return STATUS_CMD_OK;
 }
 
-static int check_min_max_args_constraints(const argparse_cmd_opts_t &opts, parser_t &parser,
+static int check_min_max_args_constraints(const argparse_cmd_opts_t &opts, const parser_t &parser,
                                           io_streams_t &streams) {
     UNUSED(parser);
     const wchar_t *cmd = opts.name.c_str();

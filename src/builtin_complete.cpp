@@ -19,6 +19,7 @@
 #include "parse_util.h"
 #include "parser.h"
 #include "reader.h"
+#include "wcstringutil.h"
 #include "wgetopt.h"
 #include "wutil.h"  // IWYU pragma: keep
 
@@ -55,8 +56,8 @@ static void builtin_complete_add2(const wchar_t *cmd, bool cmd_is_path, const wc
 
 /// Silly function.
 static void builtin_complete_add(const wcstring_list_t &cmds, const wcstring_list_t &paths,
-                                 const wchar_t *short_opt, wcstring_list_t &gnu_opt,
-                                 wcstring_list_t &old_opt, completion_mode_t result_mode,
+                                 const wchar_t *short_opt, const wcstring_list_t &gnu_opt,
+                                 const wcstring_list_t &old_opt, completion_mode_t result_mode,
                                  const wchar_t *condition, const wchar_t *comp, const wchar_t *desc,
                                  int flags) {
     for (const wcstring &cmd : cmds) {
@@ -260,7 +261,6 @@ int builtin_complete(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -346,9 +346,8 @@ int builtin_complete(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             if (!have_do_complete_param)
                 parser.libdata().builtin_complete_current_commandline = true;
 
-            std::vector<completion_t> comp;
-            complete(do_complete_param, &comp, completion_request_t::fuzzy_match, parser.vars(),
-                     parser.shared());
+            completion_list_t comp =
+                complete(do_complete_param, completion_request_t::fuzzy_match, parser.context());
 
             for (const auto &next : comp) {
                 // Make a fake commandline, and then apply the completion to it.
@@ -392,7 +391,7 @@ int builtin_complete(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         if (!streams.out_is_redirected && isatty(STDOUT_FILENO)) {
             std::vector<highlight_spec_t> colors;
             size_t len = repr.size();
-            highlight_shell_no_io(repr, colors, len, nullptr, env_stack_t::globals());
+            highlight_shell_no_io(repr, colors, len, operation_context_t::globals());
             streams.out.append(str2wcstring(colorize(repr, colors)));
         } else {
             streams.out.append(repr);

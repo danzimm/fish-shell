@@ -25,6 +25,7 @@
 #include "io.h"
 #include "parser.h"
 #include "proc.h"
+#include "wcstringutil.h"
 #include "wgetopt.h"
 #include "wutil.h"  // IWYU pragma: keep
 
@@ -162,7 +163,6 @@ static int parse_cmd_opts(set_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncs
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
     }
@@ -171,7 +171,8 @@ static int parse_cmd_opts(set_cmd_opts_t &opts, int *optind,  //!OCLINT(high ncs
     return STATUS_CMD_OK;
 }
 
-static int validate_cmd_opts(const wchar_t *cmd, set_cmd_opts_t &opts,  //!OCLINT(npath complexity)
+static int validate_cmd_opts(const wchar_t *cmd,
+                             const set_cmd_opts_t &opts,  //!OCLINT(npath complexity)
                              int argc, parser_t &parser, io_streams_t &streams) {
     // Can't query and erase or list.
     if (opts.query && (opts.erase || opts.list)) {
@@ -234,8 +235,9 @@ static int validate_cmd_opts(const wchar_t *cmd, set_cmd_opts_t &opts,  //!OCLIN
 
 // Check if we are setting a uvar and a global of the same name exists. See
 // https://github.com/fish-shell/fish-shell/issues/806
-static int check_global_scope_exists(const wchar_t *cmd, set_cmd_opts_t &opts, const wchar_t *dest,
-                                     io_streams_t &streams, const parser_t &parser) {
+static int check_global_scope_exists(const wchar_t *cmd, const set_cmd_opts_t &opts,
+                                     const wchar_t *dest, io_streams_t &streams,
+                                     const parser_t &parser) {
     if (opts.universal) {
         auto global_dest = parser.vars().get(dest, ENV_GLOBAL);
         if (global_dest && parser.is_interactive()) {
@@ -333,7 +335,6 @@ static void handle_env_return(int retval, const wchar_t *cmd, const wchar_t *key
         }
         default: {
             DIE("unexpected vars.set() ret val");
-            break;
         }
     }
 }
@@ -413,7 +414,7 @@ static int parse_index(std::vector<long> &indexes, wchar_t *src, int scope, io_s
 }
 
 static int update_values(wcstring_list_t &list, std::vector<long> &indexes,
-                         wcstring_list_t &values) {
+                         const wcstring_list_t &values) {
     // Replace values where needed.
     for (size_t i = 0; i < indexes.size(); i++) {
         // The '- 1' below is because the indices in fish are one-based, but the vector uses
@@ -451,7 +452,7 @@ static void erase_values(wcstring_list_t &list, const std::vector<long> &indexes
     }
 }
 
-static env_mode_flags_t compute_scope(set_cmd_opts_t &opts) {
+static env_mode_flags_t compute_scope(const set_cmd_opts_t &opts) {
     int scope = ENV_USER;
     if (opts.local) scope |= ENV_LOCAL;
     if (opts.global) scope |= ENV_GLOBAL;
@@ -482,8 +483,13 @@ static int builtin_set_list(const wchar_t *cmd, set_cmd_opts_t &opts, int argc, 
 
         if (!names_only) {
             wcstring val;
-            if (key == L"history") {
-                val = history_variable_description;
+            if (opts.shorten_ok && key == L"history") {
+                history_t *history =
+                    &history_t::history_with_name(history_session_id(parser.vars()));
+                for (size_t i = 1; i < history->size() && val.size() < 64; i++) {
+                    if (i > 1) val += L' ';
+                    val += expand_escape_string(history->item_at_index(i).str());
+                }
             } else {
                 auto var = parser.vars().get(key, compute_scope(opts));
                 if (!var.missing_or_empty()) {
@@ -564,7 +570,6 @@ static void show_scope(const wchar_t *var_name, int scope, io_streams_t &streams
         }
         default: {
             DIE("invalid scope");
-            break;
         }
     }
 
@@ -596,10 +601,10 @@ static void show_scope(const wchar_t *var_name, int scope, io_streams_t &streams
 }
 
 /// Show mode. Show information about the named variable(s).
-static int builtin_set_show(const wchar_t *cmd, set_cmd_opts_t &opts, int argc, wchar_t **argv,
-                            parser_t &parser, io_streams_t &streams) {
+static int builtin_set_show(const wchar_t *cmd, const set_cmd_opts_t &opts, int argc,
+                            wchar_t **argv, parser_t &parser, io_streams_t &streams) {
     UNUSED(opts);
-    auto &vars = parser.vars();
+    const auto &vars = parser.vars();
     if (argc == 0) {  // show all vars
         wcstring_list_t names = parser.vars().get_names(ENV_USER);
         sort(names.begin(), names.end());
@@ -690,9 +695,9 @@ static int builtin_set_erase(const wchar_t *cmd, set_cmd_opts_t &opts, int argc,
 }
 
 /// This handles the common case of setting the entire var to a set of values.
-static int set_var_array(const wchar_t *cmd, set_cmd_opts_t &opts, const wchar_t *varname,
+static int set_var_array(const wchar_t *cmd, const set_cmd_opts_t &opts, const wchar_t *varname,
                          wcstring_list_t &new_values, int argc, wchar_t **argv, parser_t &parser,
-                         io_streams_t &streams) {
+                         const io_streams_t &streams) {
     UNUSED(cmd);
     UNUSED(streams);
 

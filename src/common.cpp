@@ -42,13 +42,12 @@
 
 #ifdef __FreeBSD__
 #include <sys/sysctl.h>
-#elif __APPLE__
+#elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
 
 #include <algorithm>
 #include <atomic>
-#include <locale>
 #include <memory>  // IWYU pragma: keep
 #include <type_traits>
 
@@ -63,6 +62,7 @@
 #include "parser.h"
 #include "proc.h"
 #include "signal.h"
+#include "wcstringutil.h"
 #include "wildcard.h"
 #include "wutil.h"  // IWYU pragma: keep
 
@@ -108,7 +108,7 @@ static owning_lock<struct winsize> s_termsize{k_invalid_termsize};
 static relaxed_atomic_bool_t s_termsize_valid{false};
 
 static char *wcs2str_internal(const wchar_t *in, char *out);
-static void debug_shared(const wchar_t msg_level, const wcstring &msg);
+static void debug_shared(wchar_t msg_level, const wcstring &msg);
 
 #if defined(OS_IS_CYGWIN) || defined(WSL)
 // MS Windows tty devices do not currently have either a read or write timestamp. Those
@@ -184,7 +184,7 @@ bool is_windows_subsystem_for_linux() {
                 // is bypassed. We intentionally do not include this in the error message because
                 // it'll only allow fish to run but not to actually work. Here be dragons!
                 if (getenv("FISH_NO_WSL_CHECK") == nullptr) {
-                    debug(0,
+                    FLOGF(error,
                           "This version of WSL has known bugs that prevent fish from working."
                           "Please upgrade to Windows 10 1809 (17763) or higher to use fish!");
                 }
@@ -205,8 +205,7 @@ bool is_windows_subsystem_for_linux() {
 #ifdef HAVE_BACKTRACE_SYMBOLS
 // This function produces a stack backtrace with demangled function & method names. It is based on
 // https://gist.github.com/fmela/591333 but adapted to the style of the fish project.
-[[gnu::noinline]] static const wcstring_list_t demangled_backtrace(int max_frames,
-                                                                   int skip_levels) {
+[[gnu::noinline]] static wcstring_list_t demangled_backtrace(int max_frames, int skip_levels) {
     void *callstack[128];
     const int n_max_frames = sizeof(callstack) / sizeof(callstack[0]);
     int n_frames = backtrace(callstack, n_max_frames);
@@ -250,38 +249,6 @@ bool is_windows_subsystem_for_linux() {
     debug_shared(msg_level, L"Sorry, but your system does not support backtraces");
 }
 #endif  // HAVE_BACKTRACE_SYMBOLS
-
-int fgetws2(wcstring *s, FILE *f) {
-    int i = 0;
-    wint_t c;
-
-    while (true) {
-        errno = 0;
-
-        c = std::fgetwc(f);
-        if (errno == EILSEQ || errno == EINTR) {
-            continue;
-        }
-
-        switch (c) {
-            // End of line.
-            case WEOF:
-            case L'\n':
-            case L'\0': {
-                return i;
-            }
-            // Ignore carriage returns.
-            case L'\r': {
-                break;
-            }
-            default: {
-                i++;
-                s->push_back(static_cast<wchar_t>(c));
-                break;
-            }
-        }
-    }
-}
 
 /// Converts the narrow character string \c in into its wide equivalent, and return it.
 ///
@@ -394,7 +361,7 @@ char *wcs2str(const wchar_t *in, size_t len) {
     }
 
     // Here we probably allocate a buffer probably much larger than necessary.
-    char *out = static_cast<char *>(malloc(MAX_UTF8_BYTES * len + 1));
+    auto out = static_cast<char *>(malloc(MAX_UTF8_BYTES * len + 1));
     assert(out);
     // Instead of returning the return value of wcs2str_internal, return `out` directly.
     // This eliminates false warnings in coverity about resource leaks.
@@ -1243,7 +1210,7 @@ wcstring debug_escape(const wcstring &in) {
     wcstring result;
     result.reserve(in.size());
     for (wchar_t wc : in) {
-        uint32_t c = static_cast<uint32_t>(wc);
+        auto c = static_cast<uint32_t>(wc);
         if (c <= 127 && isprint(c)) {
             result.push_back(wc);
             continue;
@@ -1263,11 +1230,11 @@ wcstring debug_escape(const wcstring &in) {
             TEST(BRACE_SPACE)
             TEST(INTERNAL_SEPARATOR)
             TEST(VARIABLE_EXPAND_EMPTY)
-            TEST(EXPAND_SENTINAL)
+            TEST(EXPAND_SENTINEL)
             TEST(ANY_CHAR)
             TEST(ANY_STRING)
             TEST(ANY_STRING_RECURSIVE)
-            TEST(ANY_SENTINAL)
+            TEST(ANY_SENTINEL)
             default:
                 append_format(result, L"<\\x%02x>", c);
                 break;
@@ -1462,13 +1429,13 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
 
     const bool unescape_special = static_cast<bool>(flags & UNESCAPE_SPECIAL);
     const bool allow_incomplete = static_cast<bool>(flags & UNESCAPE_INCOMPLETE);
+    const bool ignore_backslashes = static_cast<bool>(flags & UNESCAPE_NO_BACKSLASHES);
 
     // The positions of open braces.
     std::vector<size_t> braces;
     // The positions of variable expansions or brace ","s.
     // We only read braces as expanders if there's a variable expansion or "," in them.
     std::vector<size_t> vars_or_seps;
-    bool brace_text_start = false;
     int brace_count = 0;
 
     bool errored = false;
@@ -1485,21 +1452,23 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
         if (mode == mode_unquoted) {
             switch (c) {
                 case L'\\': {
-                    // Backslashes (escapes) are complicated and may result in errors, or appending
-                    // INTERNAL_SEPARATORs, so we have to handle them specially.
-                    auto escape_chars = read_unquoted_escape(input + input_position, &result,
-                                                             allow_incomplete, unescape_special);
-                    if (!escape_chars) {
-                        // A none() return indicates an error.
-                        errored = true;
-                    } else {
-                        // Skip over the characters we read, minus one because the outer loop will
-                        // increment it.
-                        assert(*escape_chars > 0);
-                        input_position += *escape_chars - 1;
+                    if (!ignore_backslashes) {
+                        // Backslashes (escapes) are complicated and may result in errors, or
+                        // appending INTERNAL_SEPARATORs, so we have to handle them specially.
+                        auto escape_chars = read_unquoted_escape(
+                            input + input_position, &result, allow_incomplete, unescape_special);
+                        if (!escape_chars) {
+                            // A none() return indicates an error.
+                            errored = true;
+                        } else {
+                            // Skip over the characters we read, minus one because the outer loop
+                            // will increment it.
+                            assert(*escape_chars > 0);
+                            input_position += *escape_chars - 1;
+                        }
+                        // We've already appended, don't append anything else.
+                        to_append_or_none = none();
                     }
-                    // We've already appended, don't append anything else.
-                    to_append_or_none = none();
                     break;
                 }
                 case L'~': {
@@ -1564,7 +1533,6 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
                         // assert(brace_count > 0 && "imbalanced brackets are a tokenizer error, we
                         // shouldn't be able to get here");
                         brace_count--;
-                        brace_text_start = brace_text_start && brace_count > 0;
                         to_append_or_none = BRACE_END;
                         if (!braces.empty()) {
                             // If we didn't have a var or separator since the last '{',
@@ -1592,17 +1560,13 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
                 case L',': {
                     if (unescape_special && brace_count > 0) {
                         to_append_or_none = BRACE_SEP;
-                        brace_text_start = false;
                         vars_or_seps.push_back(input_position);
                     }
                     break;
                 }
-                case L'\n':
-                case L'\t':
                 case L' ': {
                     if (unescape_special && brace_count > 0) {
-                        to_append_or_none =
-                            brace_text_start ? maybe_t<wchar_t>(BRACE_SPACE) : none();
+                        to_append_or_none = BRACE_SPACE;
                     }
                     break;
                 }
@@ -1619,9 +1583,6 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
                     break;
                 }
                 default: {
-                    if (unescape_special && brace_count > 0) {
-                        brace_text_start = true;
-                    }
                     break;
                 }
             }
@@ -1810,9 +1771,9 @@ static void validate_new_termsize(struct winsize *new_termsize, const environmen
 #ifdef HAVE_WINSIZE
         // Highly hackish. This seems like it should be moved.
         if (is_main_thread() && parser_t::principal_parser().is_interactive()) {
-            debug(1, _(L"Current terminal parameters have rows and/or columns set to zero."));
-            debug(1, _(L"The stty command can be used to correct this "
-                       L"(e.g., stty rows 80 columns 24)."));
+            FLOGF(warning, _(L"Current terminal parameters have rows and/or columns set to zero."));
+            FLOGF(warning, _(L"The stty command can be used to correct this "
+                             L"(e.g., stty rows 80 columns 24)."));
         }
 #endif
         // Fallback to the environment vars.
@@ -1834,8 +1795,9 @@ static void validate_new_termsize(struct winsize *new_termsize, const environmen
     if (new_termsize->ws_col < MIN_TERM_COL || new_termsize->ws_row < MIN_TERM_ROW) {
         // Also highly hackisk.
         if (is_main_thread() && parser_t::principal_parser().is_interactive()) {
-            debug(1, _(L"Current terminal parameters set terminal size to unreasonable value."));
-            debug(1, _(L"Defaulting terminal size to 80x24."));
+            FLOGF(warning,
+                  _(L"Current terminal parameters set terminal size to unreasonable value."));
+            FLOGF(warning, _(L"Defaulting terminal size to 80x24."));
         }
         new_termsize->ws_col = DFLT_TERM_COL;
         new_termsize->ws_row = DFLT_TERM_ROW;
@@ -1902,62 +1864,6 @@ struct winsize get_current_winsize() {
 int common_get_width() { return get_current_winsize().ws_col; }
 
 int common_get_height() { return get_current_winsize().ws_row; }
-
-bool string_prefixes_string(const wchar_t *proposed_prefix, const wcstring &value) {
-    return string_prefixes_string(proposed_prefix, value.c_str());
-}
-
-bool string_prefixes_string(const wcstring &proposed_prefix, const wcstring &value) {
-    size_t prefix_size = proposed_prefix.size();
-    return prefix_size <= value.size() && value.compare(0, prefix_size, proposed_prefix) == 0;
-}
-
-bool string_prefixes_string(const wchar_t *proposed_prefix, const wchar_t *value) {
-    for (size_t idx = 0; proposed_prefix[idx] != L'\0'; idx++) {
-        // Note if the prefix is longer than value, then we will compare a nonzero prefix character
-        // against a zero value character, and so we'll return false;
-        if (proposed_prefix[idx] != value[idx]) return false;
-    }
-    // We must have that proposed_prefix[idx] == L'\0', so we have a prefix match.
-    return true;
-}
-
-bool string_prefixes_string(const char *proposed_prefix, const std::string &value) {
-    return string_prefixes_string(proposed_prefix, value.c_str());
-}
-
-bool string_prefixes_string(const char *proposed_prefix, const char *value) {
-    for (size_t idx = 0; proposed_prefix[idx] != L'\0'; idx++) {
-        if (proposed_prefix[idx] != value[idx]) return false;
-    }
-    return true;
-}
-
-bool string_prefixes_string_case_insensitive(const wcstring &proposed_prefix,
-                                             const wcstring &value) {
-    size_t prefix_size = proposed_prefix.size();
-    return prefix_size <= value.size() &&
-           wcsncasecmp(proposed_prefix.c_str(), value.c_str(), prefix_size) == 0;
-}
-
-bool string_suffixes_string(const wcstring &proposed_suffix, const wcstring &value) {
-    size_t suffix_size = proposed_suffix.size();
-    return suffix_size <= value.size() &&
-           value.compare(value.size() - suffix_size, suffix_size, proposed_suffix) == 0;
-}
-
-bool string_suffixes_string(const wchar_t *proposed_suffix, const wcstring &value) {
-    size_t suffix_size = std::wcslen(proposed_suffix);
-    return suffix_size <= value.size() &&
-           value.compare(value.size() - suffix_size, suffix_size, proposed_suffix) == 0;
-}
-
-bool string_suffixes_string_case_insensitive(const wcstring &proposed_suffix,
-                                             const wcstring &value) {
-    size_t suffix_size = proposed_suffix.size();
-    return suffix_size <= value.size() && wcsncasecmp(value.c_str() + (value.size() - suffix_size),
-                                                      proposed_suffix.c_str(), suffix_size) == 0;
-}
 
 /// Returns true if seq, represented as a subsequence, is contained within string.
 static bool subsequence_in_string(const wcstring &seq, const wcstring &str) {
@@ -2052,93 +1958,6 @@ int string_fuzzy_match_t::compare(const string_fuzzy_match_t &rhs) const {
         return compare_ints(this->match_distance_second, rhs.match_distance_second);
     }
     return 0;  // equal
-}
-
-template <bool Fuzzy, typename T>
-size_t ifind_impl(const T &haystack, const T &needle) {
-    using char_t = typename T::value_type;
-    std::locale locale;
-
-    auto ieq = [&locale](char_t c1, char_t c2) {
-        if (c1 == c2 || std::toupper(c1, locale) == std::toupper(c2, locale)) return true;
-
-        // In fuzzy matching treat treat `-` and `_` as equal (#3584).
-        if (Fuzzy) {
-            if ((c1 == '-' || c1 == '_') && (c2 == '-' || c2 == '_')) return true;
-        }
-        return false;
-    };
-
-    auto result = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(), ieq);
-    if (result != haystack.end()) {
-        return result - haystack.begin();
-    }
-    return T::npos;
-}
-
-size_t ifind(const wcstring &haystack, const wcstring &needle, bool fuzzy) {
-    return fuzzy ? ifind_impl<true>(haystack, needle) : ifind_impl<false>(haystack, needle);
-}
-
-size_t ifind(const std::string &haystack, const std::string &needle, bool fuzzy) {
-    return fuzzy ? ifind_impl<true>(haystack, needle) : ifind_impl<false>(haystack, needle);
-}
-
-wcstring_list_t split_string(const wcstring &val, wchar_t sep) {
-    wcstring_list_t out;
-    size_t pos = 0, end = val.size();
-    while (pos <= end) {
-        size_t next_pos = val.find(sep, pos);
-        if (next_pos == wcstring::npos) {
-            next_pos = end;
-        }
-        out.emplace_back(val, pos, next_pos - pos);
-        pos = next_pos + 1;  // skip the separator, or skip past the end
-    }
-    return out;
-}
-
-wcstring join_strings(const wcstring_list_t &vals, wchar_t sep) {
-    if (vals.empty()) return wcstring{};
-
-    // Reserve the size we will need.
-    // count-1 separators, plus the length of all strings.
-    size_t size = vals.size() - 1;
-    for (const wcstring &s : vals) {
-        size += s.size();
-    }
-
-    // Construct the string.
-    wcstring result;
-    result.reserve(size);
-    bool first = true;
-    for (const wcstring &s : vals) {
-        if (!first) {
-            result.push_back(sep);
-        }
-        result.append(s);
-        first = false;
-    }
-    return result;
-}
-
-int create_directory(const wcstring &d) {
-    bool ok = false;
-    struct stat buf;
-    int stat_res = 0;
-
-    while ((stat_res = wstat(d, &buf)) != 0) {
-        if (errno != EAGAIN) break;
-    }
-
-    if (stat_res == 0) {
-        if (S_ISDIR(buf.st_mode)) ok = true;
-    } else if (errno == ENOENT) {
-        wcstring dir = wdirname(d);
-        if (!create_directory(dir) && !wmkdir(d, 0700)) ok = true;
-    }
-
-    return ok ? 0 : -1;
 }
 
 [[gnu::noinline]] void bugreport() {
@@ -2245,46 +2064,19 @@ double timef() {
 
 void exit_without_destructors(int code) { _exit(code); }
 
-/// Helper function to convert from a null_terminated_array_t<wchar_t> to a
-/// null_terminated_array_t<char_t>.
-void convert_wide_array_to_narrow(const null_terminated_array_t<wchar_t> &wide_arr,
-                                  null_terminated_array_t<char> *output) {
-    const wchar_t *const *arr = wide_arr.get();
-    if (!arr) {
-        output->clear();
-        return;
-    }
-
-    std::vector<std::string> list;
-    for (size_t i = 0; arr[i]; i++) {
-        list.push_back(wcs2string(arr[i]));
-    }
-    output->set(list);
-}
-
 void autoclose_fd_t::close() {
     if (fd_ < 0) return;
-    if (::close(fd_) == -1) {
-        wperror(L"close");
-    }
+    exec_close(fd_);
     fd_ = -1;
 }
 
-void append_path_component(wcstring &path, const wcstring &component) {
-    if (path.empty() || component.empty()) {
-        path.append(component);
-    } else {
-        size_t path_len = path.size();
-        bool path_slash = path.at(path_len - 1) == L'/';
-        bool comp_slash = component.at(0) == L'/';
-        if (!path_slash && !comp_slash) {
-            // Need a slash
-            path.push_back(L'/');
-        } else if (path_slash && comp_slash) {
-            // Too many slashes.
-            path.erase(path_len - 1, 1);
+void exec_close(int fd) {
+    assert(fd >= 0 && "Invalid fd");
+    while (close(fd) == -1) {
+        if (errno != EINTR) {
+            wperror(L"close");
+            break;
         }
-        path.append(component);
     }
 }
 
@@ -2356,7 +2148,7 @@ void assert_is_background_thread(const char *who) {
 }
 
 void assert_is_locked(void *vmutex, const char *who, const char *caller) {
-    std::mutex *mutex = static_cast<std::mutex *>(vmutex);
+    auto mutex = static_cast<std::mutex *>(vmutex);
 
     // Note that std::mutex.try_lock() is allowed to return false when the mutex isn't
     // actually locked; fortunately we are checking the opposite so we're safe.
@@ -2366,63 +2158,6 @@ void assert_is_locked(void *vmutex, const char *who, const char *caller) {
         debug_thread_error();
         mutex->unlock();
     }
-}
-
-template <typename CharType_t>
-static CharType_t **make_null_terminated_array_helper(
-    const std::vector<std::basic_string<CharType_t> > &argv) {
-    size_t count = argv.size();
-
-    // We allocate everything in one giant block. First compute how much space we need.
-    // N + 1 pointers.
-    size_t pointers_allocation_len = (count + 1) * sizeof(CharType_t *);
-
-    // In the very unlikely event that CharType_t has stricter alignment requirements than does a
-    // pointer, round us up to the size of a CharType_t.
-    pointers_allocation_len += sizeof(CharType_t) - 1;
-    pointers_allocation_len -= pointers_allocation_len % sizeof(CharType_t);
-
-    // N null terminated strings.
-    size_t strings_allocation_len = 0;
-    for (size_t i = 0; i < count; i++) {
-        // The size of the string, plus a null terminator.
-        strings_allocation_len += (argv.at(i).size() + 1) * sizeof(CharType_t);
-    }
-
-    // Now allocate their sum.
-    unsigned char *base =
-        static_cast<unsigned char *>(malloc(pointers_allocation_len + strings_allocation_len));
-    if (!base) return nullptr;
-
-    // Divvy it up into the pointers and strings.
-    CharType_t **pointers = reinterpret_cast<CharType_t **>(base);
-    CharType_t *strings = reinterpret_cast<CharType_t *>(base + pointers_allocation_len);
-
-    // Start copying.
-    for (size_t i = 0; i < count; i++) {
-        const std::basic_string<CharType_t> &str = argv.at(i);
-        *pointers++ = strings;  // store the current string pointer into self
-        strings = std::copy(str.begin(), str.end(), strings);  // copy the string into strings
-        *strings++ = (CharType_t)(0);  // each string needs a null terminator
-    }
-    *pointers++ = nullptr;  // array of pointers needs a null terminator
-
-    // Make sure we know what we're doing.
-    assert((unsigned char *)pointers - base == (std::ptrdiff_t)pointers_allocation_len);
-    assert((unsigned char *)strings - (unsigned char *)pointers ==
-           (std::ptrdiff_t)strings_allocation_len);
-    assert((unsigned char *)strings - base ==
-           (std::ptrdiff_t)(pointers_allocation_len + strings_allocation_len));
-
-    return reinterpret_cast<CharType_t **>(base);
-}
-
-wchar_t **make_null_terminated_array(const wcstring_list_t &lst) {
-    return make_null_terminated_array_helper(lst);
-}
-
-char **make_null_terminated_array(const std::vector<std::string> &lst) {
-    return make_null_terminated_array_helper(lst);
 }
 
 /// Test if the specified character is in a range that fish uses interally to store special tokens.
@@ -2484,13 +2219,13 @@ bool valid_func_name(const wcstring &str) {
 std::string get_executable_path(const char *argv0) {
     char buff[PATH_MAX];
 
-#if __APPLE__
+#ifdef __APPLE__
     // On OS X use it's proprietary API to get the path to the executable.
     // This is basically grabbing exec_path after argc, argv, envp, ...: for us
     // https://opensource.apple.com/source/adv_cmds/adv_cmds-163/ps/print.c
     uint32_t buffSize = sizeof buff;
     if (_NSGetExecutablePath(buff, &buffSize) == 0) return std::string(buff);
-#elif __FreeBSD__
+#elif defined(__FreeBSD__)
     // FreeBSD does not have /proc by default, but it can be mounted as procfs via the
     // Linux compatibility layer. Per sysctl(3), passing in a process ID of -1 returns
     // the value for the current process.

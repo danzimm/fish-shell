@@ -22,6 +22,7 @@
 #include "wutil.h"  // IWYU pragma: keep
 
 struct io_streams_t;
+class env_stack_t;
 class environment_t;
 
 // Fish supports multiple shells writing to history at once. Here is its strategy:
@@ -172,7 +173,8 @@ class history_t {
     // Searches history.
     bool search(history_search_type_t search_type, const wcstring_list_t &search_args,
                 const wchar_t *show_time_format, size_t max_items, bool case_sensitive,
-                bool null_terminate, bool reverse, io_streams_t &streams);
+                bool null_terminate, bool reverse, const cancel_checker_t &cancel_check,
+                io_streams_t &streams);
 
     // Irreversibly clears history.
     void clear();
@@ -290,12 +292,8 @@ path_list_t valid_paths(const path_list_t &paths, const wcstring &working_direct
 bool all_paths_are_valid(const path_list_t &paths, const wcstring &working_directory);
 
 /// Sets private mode on. Once in private mode, it cannot be turned off.
-void start_private_mode();
+void start_private_mode(env_stack_t &vars);
 /// Queries private mode status.
 bool in_private_mode();
-
-/// The description of the $history environment variable, as offered in completions and
-/// the output of builtin set.
-constexpr const wchar_t *history_variable_description = L"Full history of interactive commands";
 
 #endif

@@ -20,12 +20,12 @@
 static job_id_t get_job_id_from_pid(pid_t pid, const parser_t &parser) {
     for (const auto &j : parser.jobs()) {
         if (j->pgid == pid) {
-            return j->job_id;
+            return j->job_id();
         }
         // Check if the specified pid is a child process of the job.
         for (const process_ptr_t &p : j->processes) {
             if (p->pid == pid) {
-                return j->job_id;
+                return j->job_id();
             }
         }
     }
@@ -76,9 +76,9 @@ static int wait_for_backgrounds(parser_t &parser, bool any_flag) {
     return 0;
 }
 
-static bool all_specified_jobs_finished(const std::vector<job_id_t> &ids) {
+static bool all_specified_jobs_finished(const parser_t &parser, const std::vector<job_id_t> &ids) {
     for (auto id : ids) {
-        if (job_t *j = job_t::from_job_id(id)) {
+        if (const job_t *j = parser.job_get(id)) {
             // If any specified job is not completed, return false.
             // If there are stopped jobs, they are ignored.
             if (j->is_constructed() && !j->is_completed() && !j->is_stopped()) {
@@ -89,9 +89,9 @@ static bool all_specified_jobs_finished(const std::vector<job_id_t> &ids) {
     return true;
 }
 
-static bool any_specified_jobs_finished(const std::vector<job_id_t> &ids) {
+static bool any_specified_jobs_finished(const parser_t &parser, const std::vector<job_id_t> &ids) {
     for (auto id : ids) {
-        if (job_t *j = job_t::from_job_id(id)) {
+        if (const job_t *j = parser.job_get(id)) {
             // If any specified job is completed, return true.
             if (j->is_constructed() && (j->is_completed() || j->is_stopped())) {
                 return true;
@@ -107,8 +107,8 @@ static bool any_specified_jobs_finished(const std::vector<job_id_t> &ids) {
 static int wait_for_backgrounds_specified(parser_t &parser, const std::vector<job_id_t> &ids,
                                           bool any_flag) {
     sigint_checker_t sigint;
-    while ((!any_flag && !all_specified_jobs_finished(ids)) ||
-           (any_flag && !any_specified_jobs_finished(ids))) {
+    while ((!any_flag && !all_specified_jobs_finished(parser, ids)) ||
+           (any_flag && !any_specified_jobs_finished(parser, ids))) {
         if (sigint.check()) {
             return 128 + SIGINT;
         }
@@ -146,9 +146,9 @@ static bool find_job_by_name(const wchar_t *proc, std::vector<job_id_t> &ids,
         if (j->command().empty()) continue;
 
         if (match_pid(j->command(), proc)) {
-            if (!contains(ids, j->job_id)) {
+            if (!contains(ids, j->job_id())) {
                 // If pids doesn't already have the pgid, add it.
-                ids.push_back(j->job_id);
+                ids.push_back(j->job_id());
             }
             found = true;
         }
@@ -158,9 +158,9 @@ static bool find_job_by_name(const wchar_t *proc, std::vector<job_id_t> &ids,
             if (p->actual_cmd.empty()) continue;
 
             if (match_pid(p->actual_cmd, proc)) {
-                if (!contains(ids, j->job_id)) {
+                if (!contains(ids, j->job_id())) {
                     // If pids doesn't already have the pgid, add it.
-                    ids.push_back(j->job_id);
+                    ids.push_back(j->job_id());
                 }
                 found = true;
             }
@@ -178,9 +178,11 @@ int builtin_wait(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
     const wchar_t *cmd = argv[0];
     int argc = builtin_count_args(argv);
     bool any_flag = false;  // flag for -n option
+    bool print_help = false;
 
-    static const wchar_t *const short_options = L":n";
+    static const wchar_t *const short_options = L":nh";
     static const struct woption long_options[] = {{L"any", no_argument, nullptr, 'n'},
+                                                  {L"help", no_argument, nullptr, 'h'},
                                                   {nullptr, 0, nullptr, 0}};
 
     int opt;
@@ -189,6 +191,9 @@ int builtin_wait(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
         switch (opt) {
             case 'n':
                 any_flag = true;
+                break;
+            case 'h':
+                print_help = true;
                 break;
             case ':': {
                 builtin_missing_argument(parser, streams, cmd, argv[w.woptind - 1]);
@@ -200,9 +205,13 @@ int builtin_wait(parser_t &parser, io_streams_t &streams, wchar_t **argv) {
             }
             default: {
                 DIE("unexpected retval from wgetopt_long");
-                break;
             }
         }
+    }
+
+    if (print_help) {
+        builtin_print_help(parser, streams, cmd);
+        return STATUS_CMD_OK;
     }
 
     if (w.woptind == argc) {

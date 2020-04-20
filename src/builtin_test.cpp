@@ -217,7 +217,7 @@ struct range_t {
 /// Base class for expressions.
 class expression {
    protected:
-    expression(token_t what, range_t where) : token(what), range(std::move(where)) {}
+    expression(token_t what, range_t where) : token(what), range(where) {}
 
    public:
     const token_t token;
@@ -266,7 +266,7 @@ class combining_expression : public expression {
     const std::vector<token_t> combiners;
 
     combining_expression(token_t tok, range_t where, std::vector<unique_ptr<expression>> exprs,
-                         const std::vector<token_t> &combs)
+                         std::vector<token_t> combs)
         : expression(tok, where), subjects(std::move(exprs)), combiners(std::move(combs)) {
         // We should have one more subject than combiner.
         assert(subjects.size() == combiners.size() + 1);
@@ -311,7 +311,7 @@ unique_ptr<expression> test_parser::parse_unary_expression(unsigned int start, u
     token_t tok = token_for_string(arg(start))->tok;
     if (tok == test_bang) {
         unique_ptr<expression> subject(parse_unary_expression(start + 1, end));
-        if (subject.get()) {
+        if (subject) {
             return make_unique<unary_operator>(tok, range_t(start, subject->range.end),
                                                move(subject));
         }
@@ -496,7 +496,7 @@ unique_ptr<expression> test_parser::parse_4_arg_expression(unsigned int start, u
     token_t first_token = token_for_string(arg(start))->tok;
     if (first_token == test_bang) {
         unique_ptr<expression> subject(parse_3_arg_expression(start + 1, end));
-        if (subject.get()) {
+        if (subject) {
             result = make_unique<unary_operator>(first_token, range_t(start, subject->range.end),
                                                  move(subject));
         }
@@ -517,7 +517,6 @@ unique_ptr<expression> test_parser::parse_expression(unsigned int start, unsigne
     switch (argc) {
         case 0: {
             DIE("argc should not be zero");  // should have been caught by the above test
-            break;
         }
         case 1: {
             return error(L"Missing argument at index %u", start + 1);
@@ -665,10 +664,13 @@ static bool parse_number(const wcstring &arg, number_t *number, wcstring_list_t 
         *number = number_t{integral, 0.0};
 
         return true;
-    } else if (got_float && errno != ERANGE) {
+    } else if (got_float && errno != ERANGE && std::isfinite(floating)) {
         // Here we parsed an (in range) floating point value that could not be parsed as an integer.
         // Break the floating point value into base and delta. Ensure that base is <= the floating
         // point value.
+        //
+        // Note that a non-finite number like infinity or NaN doesn't work for us, so we checked
+        // above.
         double intpart = std::floor(floating);
         double delta = floating - intpart;
         *number = number_t{static_cast<long long>(intpart), delta};
@@ -680,6 +682,11 @@ static bool parse_number(const wcstring &arg, number_t *number, wcstring_list_t 
         if (errno == -1) {
             errors.push_back(
                 format_string(_(L"Integer %lld in '%ls' followed by non-digit"), integral, argcs));
+        } else if (std::isnan(floating)) {
+            // NaN is an error as far as we're concerned.
+            errors.push_back(_(L"Not a number"));
+        } else if (std::isinf(floating)) {
+            errors.push_back(_(L"Number is infinite"));
         } else {
             errors.push_back(format_string(L"%s: '%ls'", std::strerror(errno), argcs));
         }

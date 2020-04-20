@@ -34,11 +34,15 @@ math -- '-4 * 2'
 # CHECK: -8
 
 # Validate some rounding functions
-math 'round(3/2)' ; math 'floor(3/2)' ; math 'ceil(3/2)'
+math 'round(3/2)'
+math 'floor(3/2)'
+math 'ceil(3/2)'
 # CHECK: 2
 # CHECK: 1
 # CHECK: 2
-math 'round(-3/2)' ; math 'floor(-3/2)' ; math 'ceil(-3/2)'
+math 'round(-3/2)'
+math 'floor(-3/2)'
+math 'ceil(-3/2)'
 # CHECK: -2
 # CHECK: -2
 # CHECK: -1
@@ -123,7 +127,7 @@ math 0x2 # Hex
 math 5 x 4
 math 2x 4
 math 2 x4 # ERROR
-# CHECKERR: math: Error: Unknown variable
+# CHECKERR: math: Error: Unknown function
 # CHECKERR: '2 x4'
 # CHECKERR:     ^
 math 0x 3

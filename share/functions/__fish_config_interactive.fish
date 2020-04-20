@@ -4,13 +4,11 @@
 # This function is called by the __fish_on_interactive function, which is defined in config.fish.
 #
 function __fish_config_interactive -d "Initializations that should be performed when entering interactive mode"
-    if not set -q __fish_init_3_x
+    if test $__fish_initialized -lt 3000
         # Perform transitions relevant to going from fish 2.x to 3.x.
 
         # Migrate old universal abbreviations to the new scheme.
         __fish_abbr_old | source
-
-        set -U __fish_init_3_x
     end
 
     # Make sure this function is only run once.
@@ -24,7 +22,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
     if not set -q fish_greeting
         set -l line1 (_ 'Welcome to fish, the friendly interactive shell')
         set -l line2 ''
-        if not set -q __fish_init_2_3_0
+        if test $__fish_initialized -lt 2300
             set line2 \n(_ 'Type `help` for instructions on how to use fish')
         end
         set -U fish_greeting "$line1$line2"
@@ -44,7 +42,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
 
     #
     # If we are starting up for the first time, set various defaults.
-    if not set -q __fish_init_3_1_0
+    if test $__fish_initialized -lt 3100
 
         # Regular syntax highlighting colors
         __init_uvar fish_color_normal normal
@@ -60,6 +58,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
         __init_uvar fish_color_autosuggestion 555 brblack
         __init_uvar fish_color_user brgreen
         __init_uvar fish_color_host normal
+        __init_uvar fish_color_host_remote yellow
         __init_uvar fish_color_valid_path --underline
         __init_uvar fish_color_status red
 
@@ -89,9 +88,6 @@ function __fish_config_interactive -d "Initializations that should be performed 
         # Directory history colors
         #
         __init_uvar fish_color_history_current --bold
-
-        set -e __fish_init_2_39_8
-        set -U __fish_init_3_1_0
     end
 
     #
@@ -110,11 +106,10 @@ function __fish_config_interactive -d "Initializations that should be performed 
             set -l update_args -B $__fish_data_dir/tools/create_manpage_completions.py --manpath --cleanup-in '~/.config/fish/completions' --cleanup-in '~/.config/fish/generated_completions'
             for py in python{3,2,}
                 if command -sq $py
-                    set -l c $py $update_args
                     # Run python directly in the background and swallow all output
-                    $c (: fish_update_completions: generating completions from man pages) >/dev/null 2>&1 &
+                    $py $update_args >/dev/null 2>&1 &
                     # Then disown the job so that it continues to run in case of an early exit (#6269)
-                    disown 2>&1 >/dev/null
+                    disown >/dev/null 2>&1
                     break
                 end
             end
@@ -125,15 +120,13 @@ function __fish_config_interactive -d "Initializations that should be performed 
     # Print a greeting.
     # fish_greeting can be a function (preferred) or a variable.
     #
-    if status --is-interactive
-        if functions -q fish_greeting
-            fish_greeting
-        else
-            # The greeting used to be skipped when fish_greeting was empty (not just undefined)
-            # Keep it that way to not print superfluous newlines on old configuration
-            test -n "$fish_greeting"
-            and echo $fish_greeting
-        end
+    if functions -q fish_greeting
+        fish_greeting
+    else
+        # The greeting used to be skipped when fish_greeting was empty (not just undefined)
+        # Keep it that way to not print superfluous newlines on old configuration
+        test -n "$fish_greeting"
+        and echo $fish_greeting
     end
 
     #
@@ -175,7 +168,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
     #
     # Only a few builtins take filenames; initialize the rest with no file completions
     #
-    complete -c(builtin -n | string match -rv '(source|cd|exec|realpath|set|\\[|test|for)') --no-files
+    complete -c(builtin -n | string match -rv '(\.|:|source|cd|contains|count|echo|exec|printf|random|realpath|set|\\[|test|for)') --no-files
 
     # Reload key bindings when binding variable change
     function __fish_reload_key_bindings -d "Reload key bindings when binding variable change" --on-variable fish_key_bindings
@@ -273,7 +266,7 @@ function __fish_config_interactive -d "Initializations that should be performed 
 
     # Notify terminals when $PWD changes (issue #906).
     # VTE based terminals, Terminal.app, and iTerm.app (TODO) support this.
-    if test 0"$VTE_VERSION" -ge 3405 -o "$TERM_PROGRAM" = "Apple_Terminal" -a (string match -r '\d+' 0"$TERM_PROGRAM_VERSION") -ge 309
+    if test 0"$VTE_VERSION" -ge 3405 -o "$TERM_PROGRAM" = Apple_Terminal -a (string match -r '\d+' 0"$TERM_PROGRAM_VERSION") -ge 309
         function __update_cwd_osc --on-variable PWD --description 'Notify capable terminals when $PWD changes'
             if status --is-command-substitution || set -q INSIDE_EMACS
                 return
@@ -341,4 +334,8 @@ function __fish_config_interactive -d "Initializations that should be performed 
             end
         end
     end
+
+    # Bump this whenever some code below needs to run once when upgrading to a new version.
+    # The universal variable __fish_initialized is initialized in share/config.fish.
+    set __fish_initialized 3100
 end

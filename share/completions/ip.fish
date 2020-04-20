@@ -151,7 +151,7 @@ function __fish_ip_commandwords
                 else
                     echo $word
                 end
-            case '-n' '-netns' '--netns'
+            case -n -netns --netns
                 if test $have_command = 0
                     set skip 1
                 else
@@ -177,7 +177,7 @@ end
 
 function __fish_ip_device
     ip -o link show | while read a b c
-        printf '%s\t%s\n' (string replace ':' '' -- $b) "Device"
+        printf '%s\t%s\n' (string replace ':' '' -- $b) Device
     end
 end
 
@@ -192,6 +192,12 @@ function __fish_ip_scope
     printf '%s\t%s\n' global "Address is globally valid" \
         link "Address is link-local, only valid on this device" \
         host "Address is only valid on this host"
+end
+
+function __fish_ip_netns_list
+    ip netns list | while read a b c
+        echo -- $a
+    end
 end
 
 function __fish_ip_types
@@ -377,6 +383,25 @@ function __fish_complete_ip
                         end
                     case show
                     case help
+                end
+            end
+        case netns
+            if not set -q cmd[3]
+                printf '%s\t%s\n' add "Add network namespace" \
+                    delete "Delete network namespace" \
+                    set "Change network namespace attributes" \
+                    identify "Display network namespace for a process id" \
+                    pids "Display process ids of processes running in network namespace" \
+                    monitor "Report as network namespace names are added and deleted" \
+                    exec "Execute command in network namespace" \
+                    help "Display help" \
+                    list "List network namespaces"
+            else
+                switch $cmd[2]
+                    case delete
+                        __fish_ip_netns_list
+                    case exec
+                        __fish_ip_netns_list
                 end
             end
     end

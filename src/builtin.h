@@ -13,6 +13,7 @@ class parser_t;
 class proc_status_t;
 class output_stream_t;
 struct io_streams_t;
+using completion_list_t = std::vector<completion_t>;
 
 /// Data structure to describe a builtin.
 struct builtin_data_t {
@@ -80,15 +81,15 @@ enum { COMMAND_NOT_BUILTIN, BUILTIN_REGULAR, BUILTIN_FUNCTION };
 void builtin_init();
 bool builtin_exists(const wcstring &cmd);
 
-proc_status_t builtin_run(parser_t &parser, int job_pgid, wchar_t **argv, io_streams_t &streams);
+proc_status_t builtin_run(parser_t &parser, wchar_t **argv, io_streams_t &streams);
 
 wcstring_list_t builtin_get_names();
-void builtin_get_names(std::vector<completion_t> *list);
+void builtin_get_names(completion_list_t *list);
 const wchar_t *builtin_get_desc(const wcstring &name);
 
 wcstring builtin_help_get(parser_t &parser, const wchar_t *cmd);
 
-void builtin_print_help(parser_t &parser, io_streams_t &streams, const wchar_t *name,
+void builtin_print_help(parser_t &parser, const io_streams_t &streams, const wchar_t *name,
                         wcstring *error_message = nullptr);
 int builtin_count_args(const wchar_t *const *argv);
 
@@ -96,7 +97,7 @@ void builtin_unknown_option(parser_t &parser, io_streams_t &streams, const wchar
                             const wchar_t *opt);
 
 void builtin_missing_argument(parser_t &parser, io_streams_t &streams, const wchar_t *cmd,
-                              const wchar_t *opt);
+                              const wchar_t *opt, bool print_hints = true);
 
 void builtin_print_error_trailer(parser_t &parser, output_stream_t &b, const wchar_t *cmd);
 

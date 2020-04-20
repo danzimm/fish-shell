@@ -82,10 +82,6 @@ RESOLVE(job_decorator) {
             *out_tag = parse_job_decoration_or;
             return production_for<ors>();
         }
-        case parse_keyword_time: {
-            *out_tag = parse_job_decoration_time;
-            return production_for<times>();
-        }
         default: {
             *out_tag = parse_job_decoration_none;
             return production_for<empty>();
@@ -182,7 +178,6 @@ RESOLVE(statement) {
                     return production_for<decorated>();
                 }
             }
-            break;
         }
         case parse_token_type_pipe:
         case parse_token_type_redirection:
@@ -400,12 +395,21 @@ RESOLVE(optional_background) {
     }
 }
 
+RESOLVE(optional_time) {
+    if (token1.keyword == parse_keyword_time && !token2.is_help_argument) {
+        *out_tag = parse_optional_time_time;
+        return production_for<time>();
+    }
+    *out_tag = parse_optional_time_no_time;
+    return production_for<empty>();
+}
+
 const production_element_t *parse_productions::production_for_token(parse_token_type_t node_type,
                                                                     const parse_token_t &input1,
                                                                     const parse_token_t &input2,
                                                                     parse_node_tag_t *out_tag) {
     // this is **extremely** chatty
-    debug(6, L"Resolving production for %ls with input token <%ls>",
+    FLOGF(parse_productions_chatty, L"Resolving production for %ls with input token <%ls>",
           token_type_description(node_type), input1.describe().c_str());
 
     // Fetch the function to resolve the list of productions.
@@ -453,7 +457,7 @@ const production_element_t *parse_productions::production_for_token(parse_token_
 
     const production_element_t *result = resolver(input1, input2, out_tag);
     if (result == nullptr) {
-        debug(5, L"Node type '%ls' has no production for input '%ls' (in %s)",
+        FLOGF(parse_productions, L"Node type '%ls' has no production for input '%ls' (in %s)",
               token_type_description(node_type), input1.describe().c_str(), __FUNCTION__);
     }
 

@@ -12,6 +12,7 @@
 
 #include "common.h"
 #include "maybe.h"
+#include "null_terminated_array.h"
 
 extern size_t read_byte_limit;
 extern bool curses_initialized;
@@ -61,6 +62,10 @@ struct config_paths_t {
 struct statuses_t {
     /// Status of the last job to exit.
     int status{0};
+
+    /// Signal from the most recent process in the last job that was terminated by a signal.
+    /// 0 if all processes exited normally.
+    int kill_signal{0};
 
     /// Pipestatus value.
     std::vector<int> pipestatus{};
